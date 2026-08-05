@@ -1,5 +1,4 @@
 import { chmod, cp, mkdir, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { build } from "esbuild";
 
@@ -74,11 +73,6 @@ for (const name of ["chat", "overview", "browser", "newtab"]) {
   await cp(`src/renderer/${name}.html`, `dist/renderer/${name}.html`);
 }
 await cp("src/renderer/styles.css", "dist/renderer/styles.css");
-
-const harness = join(root, "ego-lite/package/ego-browser/dist/out/index.js");
-if (existsSync(harness)) {
-  await cp(harness, join(dist, "agent/ego-browser.js"));
-}
 
 await mkdir(join(dist, "bin"), { recursive: true });
 await cp("scripts/x-browser-launcher.sh", join(dist, "bin/x-browser"));

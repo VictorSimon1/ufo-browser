@@ -36,7 +36,7 @@ One connection holds at most one Space lease. A Space lease contains a generatio
 
 ## Host bindings
 
-The bundled harness talks to these App host methods over newline-delimited JSON on a current-user-only Unix socket:
+The X-Browser-owned runtime talks to these App host methods over newline-delimited JSON on a current-user-only Unix socket:
 
 ```text
 createTab                   listTabs

@@ -6,8 +6,7 @@
   "description": "A local-first browser where people and AI agents work in isolated task spaces.",
   "main": "dist/main/electron.js",
   "scripts": {
-    "build:harness": "npm --prefix ego-lite/package/ego-browser install --ignore-scripts && npm --prefix ego-lite/package/ego-browser run build",
-    "build": "npm run build:harness && node scripts/build.mjs",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "test:app": "npm run build && X_BROWSER_TEST_APP=1 electron .",

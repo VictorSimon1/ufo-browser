@@ -6,6 +6,7 @@ import {
   createEgoCompatibilityContext,
   formatCliLogValue,
 } from "./compat.js";
+import * as runtime from "./runtime/helpers.js";
 
 type Pending = {
   resolve(value: unknown): void;
@@ -103,12 +104,7 @@ const host = new AgentHost(socket);
 (globalThis as any).ego = host;
 
 try {
-  const harnessUrl = new URL("./ego-browser.js", import.meta.url);
-  if (!existsSync(harnessUrl)) {
-    throw new Error("agent harness is missing; run npm run build:harness");
-  }
-  const harness = await import(harnessUrl.href);
-  process.exitCode = await runCompatibleMain(harness);
+  process.exitCode = await runCompatibleMain(runtime);
 } catch (error: any) {
   console.error(error?.stack || error?.message || String(error));
   process.exitCode = 1;

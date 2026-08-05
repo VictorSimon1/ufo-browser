@@ -334,7 +334,7 @@ try {
 
   const evidence = {
     ok: unexpectedDifferences.length === 0,
-    egoBaselineVersion: "0.4.5.8",
+    egoBaselineVersion: "0.4.5.9",
     deliberateDifferences: {
       chromiumPatch:
         "X-Browser keeps its embedded Chromium patch version instead of overriding UAData, because a page-level override regressed JanitorAI Turnstile.",
@@ -342,6 +342,8 @@ try {
         "X-Browser keeps outerHeight greater than innerHeight to model ordinary browser chrome, while the audited Ego background surface reported equal values.",
       connection:
         "NetworkInformation downlink and RTT are live connection estimates and are expected to vary between processes and sampling moments.",
+      windowLifecycle:
+        "outerWidth, screenY, and visibilityState reflect whether each native app window is shown, hidden, or positioned on screen during the audit; they are not stable browser fingerprint properties.",
     },
     unexpectedDifferences,
     parity,
@@ -577,6 +579,9 @@ function isAllowedFingerprintDifference(path) {
     /^navigator\.uaData\.high\.fullVersionList\.\d+\.version$/.test(path) ||
     path === "window.innerHeight" ||
     path === "window.outerHeight" ||
+    path === "window.outerWidth" ||
+    path === "window.screenY" ||
+    path === "window.visibilityState" ||
     path === "window.visualViewport.height"
   );
 }
