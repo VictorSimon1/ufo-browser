@@ -1276,6 +1276,8 @@ async function runControlUiAudit(context: {
           background: style.background,
           boxShadow: style.boxShadow,
           backdropFilter: style.backdropFilter || style.webkitBackdropFilter,
+          design: host.dataset.overlayDesign,
+          motion: host.dataset.overlayMotion,
         };
       })()`,
       true,
@@ -1305,8 +1307,11 @@ async function runControlUiAudit(context: {
       /共 2 个/.test(chrome.spacesLabel || "") &&
       overlay.present === true &&
       overlay.pointerEvents === "auto" &&
-      /rgba\(20, 25, 27/.test(overlay.background || "") &&
-      /rgba\(100, 145, 247/.test(overlay.boxShadow || "") &&
+      /rgba\(7, 11, 10/.test(overlay.background || "") &&
+      /rgba\(205, 226, 219/.test(overlay.boxShadow || "") &&
+      overlay.backdropFilter === "none" &&
+      overlay.design === "openai-neutral-v1" &&
+      overlay.motion === "edge-wave" &&
       returned.overview === true &&
       returned.rootChildCount === 1 &&
       returned.runtimePreserved === true;

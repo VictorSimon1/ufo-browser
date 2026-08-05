@@ -77,37 +77,51 @@ function syncOverlay() {
   const style = document.createElement("style");
   style.textContent = `
     :host { all: initial; }
+    .veil {
+      position: fixed; inset: 0; pointer-events: none;
+      border: 1px solid rgba(199, 220, 213, .42);
+      box-shadow: inset 0 0 0 1px rgba(18, 24, 22, .08);
+    }
+    .veil::before {
+      content: ''; position: absolute; left: 0; top: -1px; width: min(42vw, 620px); height: 2px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, transparent 0%, rgba(164, 222, 205, .08) 18%, rgba(192, 242, 226, .86) 50%, rgba(164, 222, 205, .08) 82%, transparent 100%);
+      opacity: .72; transform: translate3d(-120%, 0, 0);
+      will-change: transform, opacity;
+      animation: edge-wave 8.4s cubic-bezier(.45,0,.25,1) infinite;
+    }
     .bar {
       position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
-      display: flex; align-items: center; gap: 9px; min-width: 350px; max-width: min(560px, calc(100vw - 28px));
-      padding: 7px 8px 7px 11px; border: 1px solid rgba(255,255,255,.14);
-      border-radius: 16px; background: rgba(50, 52, 53, .91);
-      box-shadow: 0 18px 42px rgba(7, 11, 13, .3), 0 1px 0 rgba(255,255,255,.1) inset;
-      -webkit-backdrop-filter: blur(26px) saturate(1.04); backdrop-filter: blur(26px) saturate(1.04);
-      color: rgba(255,255,255,.95); font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      display: flex; align-items: center; gap: 10px; min-width: 368px; max-width: min(590px, calc(100vw - 28px));
+      padding: 8px 8px 8px 12px; border: 1px solid rgba(13, 18, 16, .13);
+      border-radius: 17px; background: rgba(247, 249, 248, .965);
+      box-shadow: 0 20px 52px rgba(4, 8, 7, .28), 0 1px 0 rgba(255,255,255,.8) inset;
+      color: #171b19; font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
       pointer-events: auto;
       animation: bar-in .22s cubic-bezier(.2,.8,.2,1) both;
     }
-    .agent-mark { position: relative; width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; }
-    .agent-mark::before { content: ''; position: absolute; inset: 2px; border: 1.5px dashed rgba(255,255,255,.72); border-radius: 50%; animation: agent-spin 3.2s linear infinite; }
-    .agent-mark i { width: 7px; height: 7px; border-radius: 50%; background: #a9c7ff; box-shadow: 0 0 0 4px rgba(125,170,255,.13); }
+    .agent-mark { position: relative; width: 27px; height: 27px; flex: 0 0 auto; display: grid; place-items: center; }
+    .agent-mark::before { content: ''; position: absolute; inset: 2px; border: 1px solid rgba(17,25,22,.2); border-radius: 50%; animation: agent-breathe 2.8s ease-in-out infinite; }
+    .agent-mark::after { content: ''; position: absolute; inset: 6px; border: 1px solid rgba(17,25,22,.12); border-radius: 50%; }
+    .agent-mark i { width: 6px; height: 6px; border-radius: 50%; background: #2b6758; box-shadow: 0 0 0 4px rgba(69,130,113,.1); }
     .copy { flex: 1; min-width: 0; }
-    .name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .meta { color: #b8d4ff; font-size: 9.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .name { color: #141816; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta { color: #65706c; font-size: 9.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     button { border: 1px solid transparent; border-radius: 8px; padding: 6px 9px; color: inherit; font: inherit; cursor: pointer; transition: transform .14s ease, background .14s ease, border-color .14s ease; }
     button:active { transform: scale(.96); }
-    .take { border-color: rgba(255,255,255,.08); background: rgba(255,255,255,.09); color: rgba(255,255,255,.88); }
-    .take:hover { background: rgba(255,255,255,.15); }
-    .stop { border-color: rgba(255,105,99,.14); background: rgba(255,82,76,.1); color: #ff8f89; }
-    .stop:hover { background: rgba(255,82,76,.17); color: #ffaaa5; }
+    .take { border-color: #171b19; background: #171b19; color: #fff; }
+    .take:hover { background: #2b302e; border-color: #2b302e; }
+    .stop { border-color: rgba(157,51,47,.15); background: rgba(157,51,47,.07); color: #983d39; }
+    .stop:hover { background: rgba(157,51,47,.12); color: #7f302d; }
     .agent-pointer { position: fixed; left: 0; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; opacity: 0; transform: translate3d(var(--x, 0px), var(--y, 0px), 0); transition: transform .18s cubic-bezier(.2,.8,.2,1), opacity .14s ease; pointer-events: none; }
     .agent-pointer.visible { opacity: 1; }
     .agent-pointer svg { width: 18px; height: 22px; overflow: visible; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
     .agent-pointer path { fill: rgba(255,255,255,.96); stroke: rgba(31,38,40,.9); stroke-width: 1.2; stroke-linejoin: round; }
     .pointer-label { max-width: 190px; padding: 6px 9px; border: 1px solid rgba(64,75,78,.12); border-radius: 11px; background: rgba(255,255,255,.94); box-shadow: 0 10px 25px rgba(21,28,30,.22); color: #30383a; font: 600 10.5px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
-    @keyframes agent-spin { to { transform: rotate(360deg); } }
+    @keyframes edge-wave { 0% { transform: translate3d(-120%,0,0); opacity: .18; } 45%,55% { opacity: .82; } 100% { transform: translate3d(calc(100vw + 120%),0,0); opacity: .18; } }
+    @keyframes agent-breathe { 0%,100% { transform: scale(.92); opacity: .42; } 50% { transform: scale(1.08); opacity: .9; } }
     @keyframes bar-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); } }
-    @media (prefers-reduced-motion: reduce) { .bar, .agent-mark::before, .agent-pointer { animation: none; transition-duration: .001ms; } }
+    @media (prefers-reduced-motion: reduce) { .veil::before, .bar, .agent-mark::before, .agent-pointer { animation: none; transition-duration: .001ms; } .veil::before { left: 29%; transform: none; opacity: .5; } }
   `;
   const bar = document.createElement("div");
   bar.className = "bar";
@@ -152,7 +166,9 @@ function syncOverlay() {
   pointer.append(pointerLabel);
   overlayPointer = pointer;
   overlayPointerLabel = pointerLabel;
-  shadow.append(style, pointer, bar);
+  const veil = document.createElement("div");
+  veil.className = "veil";
+  shadow.append(style, veil, pointer, bar);
   document.documentElement.append(host);
   syncOverlayContent();
 
@@ -216,6 +232,8 @@ function scheduleOverlayRepair() {
 
 function protectOverlayHost(host: HTMLElement) {
   if (host.id !== HOST_ID) host.id = HOST_ID;
+  host.dataset.overlayDesign = "openai-neutral-v1";
+  host.dataset.overlayMotion = "edge-wave";
   host.removeAttribute("hidden");
   const pointerEvents =
     agentInputActive || host.dataset.agentInput === "1" ? "none" : "auto";
@@ -229,12 +247,11 @@ function protectOverlayHost(host: HTMLElement) {
     filter: "none",
     "z-index": "2147483647",
     "pointer-events": pointerEvents,
-    background:
-      "rgba(20, 25, 27, .105)",
+    background: "rgba(7, 11, 10, .16)",
     "box-shadow":
-      "inset 0 0 40px rgba(76, 124, 233, .18), inset 0 0 0 3px rgba(100, 145, 247, .3)",
-    "-webkit-backdrop-filter": "saturate(.82) brightness(.975)",
-    "backdrop-filter": "saturate(.82) brightness(.975)",
+      "inset 0 0 0 1px rgba(205, 226, 219, .28)",
+    "-webkit-backdrop-filter": "none",
+    "backdrop-filter": "none",
   };
   for (const [property, value] of Object.entries(criticalStyles)) {
     if (
