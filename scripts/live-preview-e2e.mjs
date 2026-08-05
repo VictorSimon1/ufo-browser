@@ -28,7 +28,7 @@ try {
   const created = JSON.parse(
     await runCli(`
 const task = await useOrCreateTaskSpace('x-browser live preview e2e ' + Date.now())
-const html = \`<!doctype html><meta charset="utf-8"><title>Live Preview E2E</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(205 72% 90%);transition:background .1s linear}.value{font:800 96px/1 -apple-system;color:#173a32}</style><div class="value">0</div><script>let n=0;setInterval(()=>{n++;document.querySelector('.value').textContent=String(n);document.body.style.background='hsl('+((205+n*13)%360)+' 72% 90%)'},180)</script>\`
+const html = \`<!doctype html><meta charset="utf-8"><title>Live Preview E2E</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(205 72% 90%);transition:background .1s linear}.value{font:800 96px/1 -apple-system;color:#173a32}</style><div class="value">0</div><script>let n=0;globalThis.previewTimer=setInterval(()=>{n++;document.querySelector('.value').textContent=String(n);document.body.style.background='hsl('+((205+n*13)%360)+' 72% 90%)'},180)</script>\`
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 })
 cliLog(JSON.stringify({ taskId: task.id }))
 `),
@@ -115,10 +115,22 @@ cliLog(JSON.stringify({ taskId: task.id }))
   const page = JSON.parse(
     await runCli(`
 const task = await useOrCreateTaskSpace(${taskId})
-cliLog(JSON.stringify({ value: Number(await js("document.querySelector('.value').textContent")), page: await pageInfo() }))
+cliLog(JSON.stringify({
+  value: Number(await js("document.querySelector('.value').textContent")),
+  stopped: await js("clearInterval(globalThis.previewTimer); true"),
+  page: await pageInfo(),
+}))
 `),
   );
   if (!(page.value > 0)) throw new Error("dynamic page did not advance");
+  const settledCadence = await waitForDiagnostics(
+    launchedAt,
+    (state) =>
+      state.screencast?.spaceId === taskId &&
+      state.screencast.unchangedFrames >= 7 &&
+      state.screencast.nextFrameDelayMs === 2_800,
+    12_000,
+  );
 
   await runCli(`
 cliLog(JSON.stringify(await completeTaskSpace(${taskId}, { keep: false })))
@@ -150,6 +162,8 @@ cliLog(JSON.stringify(await completeTaskSpace(${taskId}, { keep: false })))
         canvasPixelsChanged: firstCanvas.signature !== finalCanvas.signature,
         previewRatio,
         pageValue: page.value,
+        settledUnchangedFrames: settledCadence.screencast.unchangedFrames,
+        settledNextFrameDelayMs: settledCadence.screencast.nextFrameDelayMs,
         openedBeforeOverview: Boolean(presentedRuntime?.presented),
         roundTripWebContentsStable:
           Number(presentedRuntime?.webContentsId) > 0 &&

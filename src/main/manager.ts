@@ -36,6 +36,11 @@ import {
 } from "./shell-page-bounds.js";
 import { selectPreviewCaptureIds } from "./preview-visibility.js";
 import { bitmapHasVisualDetail } from "./preview-quality.js";
+import {
+  overviewPreviewDelay,
+  previewVisualChanged,
+  quantizedPreviewSignature,
+} from "./preview-cadence.js";
 
 type TabRuntime = {
   view: WebContentsView;
@@ -76,6 +81,10 @@ type OverviewScreencastState = {
   lastPublishedAt: number;
   receivedFrames: number;
   publishedFrames: number;
+  unchangedFrames: number;
+  lastActivityAt: number;
+  nextFrameDelayMs: number;
+  lastVisualSignature?: Uint8Array;
 };
 
 type ManagerOptions = {
@@ -680,6 +689,9 @@ export class TaskSpaceManager {
             lastPublishedAt: this.overviewScreencast.lastPublishedAt,
             receivedFrames: this.overviewScreencast.receivedFrames,
             publishedFrames: this.overviewScreencast.publishedFrames,
+            unchangedFrames: this.overviewScreencast.unchangedFrames,
+            lastActivityAt: this.overviewScreencast.lastActivityAt,
+            nextFrameDelayMs: this.overviewScreencast.nextFrameDelayMs,
           }
         : null,
       screencastSuspendedTargets: [
@@ -954,6 +966,7 @@ export class TaskSpaceManager {
         updatedAt: Date.now(),
       };
     });
+    this.noteOverviewActivity(this.getSpaceOrThrow(spaceId).activeTabId);
   }
 
   showAgentPointer(spaceId: number, x: number, y: number) {
@@ -973,6 +986,17 @@ export class TaskSpaceManager {
       y: Math.max(0, y),
       label: "正在浏览网页",
     });
+    this.noteOverviewActivity(space.activeTabId);
+  }
+
+  noteOverviewActivity(targetId: string) {
+    const state = this.overviewScreencast;
+    if (!state || state.targetId !== targetId) return;
+    state.lastActivityAt = Date.now();
+    state.unchangedFrames = 0;
+    if (state.resubscribeTimer) clearTimeout(state.resubscribeTimer);
+    state.resubscribeTimer = undefined;
+    if (!state.subscriptionActive) this.scheduleNextOverviewFrame(state, 0);
   }
 
   controlStateForWebContents(webContentsId: number) {
@@ -1864,6 +1888,9 @@ export class TaskSpaceManager {
       lastPublishedAt: 0,
       receivedFrames: 0,
       publishedFrames: 0,
+      unchangedFrames: 0,
+      lastActivityAt: Date.now(),
+      nextFrameDelayMs: 0,
     };
     state.listener = (image) => {
       if (this.overviewScreencast !== state || image.isEmpty()) return;
@@ -1871,12 +1898,19 @@ export class TaskSpaceManager {
       state.receivedFrames += 1;
       state.lastFrameAt = Date.now();
       try {
-        this.publishOverviewScreencastFrame(state, image);
+        const changed = this.publishOverviewScreencastFrame(state, image);
+        state.unchangedFrames = changed ? 0 : state.unchangedFrames + 1;
         this.previewErrors.delete(state.spaceId);
       } catch (error) {
         this.previewErrors.set(state.spaceId, String(error));
       } finally {
-        this.scheduleNextOverviewFrame(state, 450);
+        this.scheduleNextOverviewFrame(
+          state,
+          overviewPreviewDelay({
+            unchangedFrames: state.unchangedFrames,
+            millisecondsSinceActivity: Date.now() - state.lastActivityAt,
+          }),
+        );
       }
     };
     this.overviewScreencast = state;
@@ -1929,8 +1963,10 @@ export class TaskSpaceManager {
     delayMs: number,
   ) {
     if (this.overviewScreencast !== state || state.resubscribeTimer) return;
+    state.nextFrameDelayMs = delayMs;
     state.resubscribeTimer = setTimeout(() => {
       state.resubscribeTimer = undefined;
+      state.nextFrameDelayMs = 0;
       this.subscribeOverviewFrame(state);
     }, delayMs);
   }
@@ -1983,18 +2019,34 @@ export class TaskSpaceManager {
       !this.previewActive ||
       !this.visiblePreviewSpaceIds.has(state.spaceId)
     ) {
-      return;
+      return false;
     }
     const size = image.getSize();
+    const signatureImage = image.resize({
+      width: 24,
+      height: 16,
+      quality: "good",
+    });
+    const signature = quantizedPreviewSignature(
+      signatureImage.toBitmap(),
+      24,
+      16,
+    );
+    const visualChanged = previewVisualChanged(
+      state.lastVisualSignature,
+      signature,
+    );
+    state.lastVisualSignature = signature;
+    if (!visualChanged) return false;
     const resized =
       size.width > 588
         ? image.resize({ width: 588, quality: "good" })
         : image;
     const data = resized.toJPEG(64);
-    if (data.byteLength === 0) return;
+    if (data.byteLength === 0) return false;
     const cached = this.previewCache.get(state.targetId);
+    if (cached?.data?.equals(data)) return false;
     state.lastPublishedAt = Date.now();
-    if (cached?.data?.equals(data)) return;
     const revision = ++this.previewRevision;
     this.setPreviewCacheEntry(state.targetId, {
       data,
@@ -2008,6 +2060,7 @@ export class TaskSpaceManager {
     });
     this.publishedPreviewRevision.set(state.spaceId, revision);
     state.publishedFrames += 1;
+    return true;
   }
 
   private setPreviewCacheEntry(targetId: string, entry: PreviewCacheEntry) {

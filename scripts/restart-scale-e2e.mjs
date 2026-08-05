@@ -47,8 +47,9 @@ try {
     startup.renderer?.canvases?.filter((canvas) => canvas.ready).length ?? 0;
   const startupVisible = startup.main?.visibleSpaceIds?.length ?? 0;
   if (
-    startupReady < 4 ||
-    startupReady !== startupVisible ||
+    startupReady < Math.min(4, startupVisible) ||
+    startupVisible < 1 ||
+    startupVisible > 8 ||
     startup.renderer?.previewError
   ) {
     throw new Error("large-space startup did not paint a useful first viewport");

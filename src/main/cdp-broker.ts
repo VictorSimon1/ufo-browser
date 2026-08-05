@@ -244,6 +244,14 @@ export class CdpBroker {
         params,
         route.upstreamSessionId,
       );
+      if (
+        isInput ||
+        method === "Runtime.evaluate" ||
+        method.startsWith("DOM.") ||
+        method.startsWith("Page.navigate")
+      ) {
+        this.manager.noteOverviewActivity(route.ownerTargetId);
+      }
       if (startsScreencast) {
         this.agentScreencasts.set(sessionId, route.ownerTargetId);
       } else if (stopsScreencast) {
