@@ -1,0 +1,4 @@
+interface:
+  display_name: "X-Browser"
+  short_description: "Drive isolated X-Browser spaces with JavaScript"
+  default_prompt: "Use $x-browser to open a site in an isolated Space and complete the browser task."

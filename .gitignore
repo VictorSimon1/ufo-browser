@@ -1,0 +1,9 @@
+node_modules/
+dist/
+release/
+.x-browser-test/
+*.log
+.DS_Store
+.idea/
+ego-lite/package/ego-browser/dist/
+ego-lite/package/ego-browser/node_modules/

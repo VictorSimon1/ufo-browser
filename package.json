@@ -1,0 +1,71 @@
+{
+  "name": "x-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first browser where people and AI agents work in isolated task spaces.",
+  "main": "dist/main/electron.js",
+  "scripts": {
+    "build:harness": "npm --prefix ego-lite/package/ego-browser install --ignore-scripts && npm --prefix ego-lite/package/ego-browser run build",
+    "build": "npm run build:harness && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test:app": "npm run build && X_BROWSER_TEST_APP=1 electron .",
+    "test:app:reuse": "X_BROWSER_TEST_APP=1 electron .",
+    "test:app:stop": "node scripts/stop-test-app.mjs",
+    "verify:page-layout": "npm run build && node --test dist/tests/layout.test.js",
+    "verify:multi-agent": "npm run build && node --test dist/tests/space-lease.test.js",
+    "verify:preview": "npm run build && node --test dist/tests/preview-visibility.test.js",
+    "verify:preview-startup": "npm run build && node scripts/preview-startup-e2e.mjs",
+    "verify:restart-scale": "npm run build && node scripts/restart-scale-e2e.mjs",
+    "verify:live-preview": "npm run build && node scripts/live-preview-e2e.mjs",
+    "verify:space-ui": "npm run build && node scripts/space-ui-e2e.mjs",
+    "verify:browser-interaction": "npm run build && node scripts/browser-interaction-e2e.mjs",
+    "verify:control-ui": "npm run build && node scripts/control-ui-e2e.mjs",
+    "verify:agent-initial-tab": "npm run build && node scripts/agent-initial-tab-e2e.mjs",
+    "verify:helper-parity": "npm run build && node scripts/helper-parity-e2e.mjs",
+    "verify:window-lifecycle": "npm run build && node scripts/window-lifecycle-e2e.mjs",
+    "verify:popup-download": "npm run build && node scripts/popup-download-e2e.mjs",
+    "verify:fingerprint": "npm run build && node scripts/fingerprint-parity-e2e.mjs",
+    "verify:janitor": "npm run build && node scripts/janitor-turnstile-e2e.mjs",
+    "dist:mac": "npm run build && electron-builder --mac dir",
+    "package:mac": "npm run build && electron-builder --mac dmg zip",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.8",
+    "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "com.xbrowser.app",
+    "productName": "X-Browser",
+    "asar": true,
+    "asarUnpack": [
+      "dist/bin/**/*",
+      "dist/agent/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "skills/x-browser",
+        "to": "skills/x-browser"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dir"
+      ],
+      "identity": null
+    }
+  }
+}
