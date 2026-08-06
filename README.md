@@ -1,5 +1,9 @@
 # UFO-Browser
 
+<p align="center">
+  <img src="resources/icon.png" alt="UFO-Browser app icon" width="144">
+</p>
+
 **A high-performance Chromium browser built for AI Agents and people.**
 
 UFO-Browser is a local-first macOS browser where humans and AI Agents work in persistent, isolated Task Spaces. Agents can reuse the user's browser session, operate real Chromium pages through CDP, and continue working in the background without moving the system pointer, opening a remote-debugging port, or fighting the user for control.

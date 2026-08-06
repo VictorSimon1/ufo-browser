@@ -57,10 +57,15 @@
       {
         "from": "skills/ufo-browser",
         "to": "skills/ufo-browser"
+      },
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
       }
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "icon": "resources/icon.icns",
       "target": [
         "dir"
       ],

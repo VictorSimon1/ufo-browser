@@ -71,6 +71,10 @@ async function start() {
     if (isTestApp) console.error(`[UFO-Browser start] ${stage}`);
   };
   traceStart("begin");
+  const appIconPath = app.isPackaged
+    ? join(process.resourcesPath, "icon.png")
+    : join(projectRoot, "resources/icon.png");
+  if (process.platform === "darwin") app.dock?.setIcon(appIconPath);
   const renderer = (name: string) => join(projectRoot, "dist/renderer", name);
   const shellPreload = join(projectRoot, "dist/preload/shell.cjs");
   const pagePreload = join(projectRoot, "dist/preload/page.cjs");
@@ -90,6 +94,7 @@ async function start() {
     minHeight: 700,
     show: false,
     title: "UFO-Browser",
+    icon: appIconPath,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
     backgroundColor: "#f6f9f8",
