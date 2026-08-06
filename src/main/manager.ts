@@ -482,6 +482,16 @@ export class TaskSpaceManager {
     if (previousTargetId && previousTargetId !== targetId) {
       this.bumpSurfaceGeneration(previousTargetId);
     }
+    const affectedSpaceIds = new Set<number>();
+    if (previousTargetId) {
+      const previousSpace = this.findSpaceByTargetId(previousTargetId);
+      if (previousSpace) affectedSpaceIds.add(previousSpace.id);
+    }
+    if (targetId) {
+      const nextSpace = this.findSpaceByTargetId(targetId);
+      if (nextSpace) affectedSpaceIds.add(nextSpace.id);
+    }
+    for (const spaceId of affectedSpaceIds) this.broadcastControl(spaceId);
   }
 
   setPageViewport(width: number, height: number) {
@@ -1031,6 +1041,7 @@ export class TaskSpaceManager {
     return {
       controlled:
         match.space.lifecycle === "active" && match.space.ownership === "agent",
+      presented: this.presentedTargetId === match.tab.targetId,
       spaceId: match.space.id,
       name: match.space.name,
       lifecycle: match.space.lifecycle,

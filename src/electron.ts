@@ -1246,16 +1246,33 @@ async function runControlUiAudit(context: {
         <main class="card"><h1>Agent is browsing</h1><p>The page remains visible while X-Browser protects user input.</p><button>Continue</button></main>
       `)}`,
     );
+    const view = manager.getView(manager.getActiveTab(space.id).targetId)!;
+    const backgroundBeforePresentation = await view.webContents.executeJavaScript(
+      `({ present: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
+      true,
+    );
     await presentation.showSpace(space.id);
     browserView.webContents.send(
       "x-browser:browser-state",
       manager.navigationState(space.id),
     );
-    await wait(180);
+    await wait(420);
+    const motionPreference = await view.webContents.executeJavaScript(
+      `({ reduced: matchMedia('(prefers-reduced-motion: reduce)').matches })`,
+      true,
+    );
+    const motionFrameA = await captureWebContentsPng(view);
+    await wait(420);
+    const motionFrameB = await captureWebContentsPng(view);
+    const animationAdvanced =
+      motionPreference.reduced === true || !motionFrameA.equals(motionFrameB);
+    await Promise.all([
+      writeFile(join(testRoot, "control-ui-motion-a.png"), motionFrameA),
+      writeFile(join(testRoot, "control-ui-motion-b.png"), motionFrameB),
+    ]);
     manager.showAgentPointer(space.id, 720, 390);
     await wait(120);
 
-    const view = manager.getView(manager.getActiveTab(space.id).targetId)!;
     const chrome = await browserView.webContents.executeJavaScript(
       `(() => ({
         controlled: document.body.classList.contains('agent-controlled'),
@@ -1270,14 +1287,20 @@ async function runControlUiAudit(context: {
         const host = document.getElementById('__x_browser_agent_overlay');
         if (!host) return { present: false };
         const style = getComputedStyle(host);
+        const button = document.querySelector('main button');
+        const rect = button?.getBoundingClientRect();
+        const clickThrough = rect
+          ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === button
+          : false;
         return {
           present: true,
           pointerEvents: style.pointerEvents,
-          background: style.background,
+          background: style.backgroundColor,
           boxShadow: style.boxShadow,
           backdropFilter: style.backdropFilter || style.webkitBackdropFilter,
           design: host.dataset.overlayDesign,
           motion: host.dataset.overlayMotion,
+          clickThrough,
         };
       })()`,
       true,
@@ -1290,6 +1313,10 @@ async function runControlUiAudit(context: {
       true,
     );
     await wait(220);
+    const backgroundAfterReturn = await view.webContents.executeJavaScript(
+      `({ present: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
+      true,
+    );
     const returned = {
       overview: presentation.current().kind === "overview",
       rootChildCount: window.contentView.children.length,
@@ -1305,19 +1332,23 @@ async function runControlUiAudit(context: {
       chrome.lockVisible === true &&
       chrome.spacesCount === "2" &&
       /共 2 个/.test(chrome.spacesLabel || "") &&
+      backgroundBeforePresentation.present === false &&
       overlay.present === true &&
-      overlay.pointerEvents === "auto" &&
-      /rgba\(7, 11, 10/.test(overlay.background || "") &&
-      /rgba\(205, 226, 219/.test(overlay.boxShadow || "") &&
+      overlay.pointerEvents === "none" &&
+      overlay.background === "rgba(0, 0, 0, 0)" &&
+      overlay.boxShadow === "none" &&
       overlay.backdropFilter === "none" &&
-      overlay.design === "openai-neutral-v1" &&
-      overlay.motion === "edge-wave" &&
+      overlay.design === "agent-dot-matrix-v2" &&
+      overlay.motion === "ambient-sweep-v1" &&
+      overlay.clickThrough === true &&
+      animationAdvanced === true &&
       returned.overview === true &&
+      backgroundAfterReturn.present === false &&
       returned.rootChildCount === 1 &&
       returned.runtimePreserved === true;
     await writeFile(
       join(testRoot, "control-ui-audit.json"),
-      `${JSON.stringify({ ok, chrome, overlay, returned }, null, 2)}\n`,
+      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, overlay, motionPreference, animationAdvanced, backgroundAfterReturn, returned }, null, 2)}\n`,
     );
   } finally {
     await presentation.showOverview().catch(() => undefined);

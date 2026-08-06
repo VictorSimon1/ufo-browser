@@ -3,12 +3,11 @@ import { contextBridge, ipcRenderer } from "electron";
 installChromiumBridge();
 
 const HOST_ID = "__x_browser_agent_overlay";
-let currentState: any = { controlled: false };
+let currentState: any = { controlled: false, presented: false };
 let overlayHost: HTMLElement | undefined;
 let rootObserver: MutationObserver | undefined;
 let hostObserver: MutationObserver | undefined;
 let repairFrame = 0;
-let agentInputActive = false;
 let overlayName: HTMLElement | undefined;
 let overlayMeta: HTMLElement | undefined;
 let overlayPointer: HTMLElement | undefined;
@@ -18,10 +17,6 @@ let pointerTimer: ReturnType<typeof setTimeout> | undefined;
 if ((process as any).isMainFrame !== false) installAgentOverlay();
 
 function installAgentOverlay() {
-  ipcRenderer.on("x-browser:page-agent-input", (_event, active) => {
-    agentInputActive = Boolean(active);
-    if (overlayHost?.isConnected) protectOverlayHost(overlayHost);
-  });
   ipcRenderer.on("x-browser:page-control-state", (_event, state) => {
     currentState = state;
     syncOverlay();
@@ -42,7 +37,7 @@ function syncOverlay() {
     return;
   }
   const existing = overlayHost?.isConnected ? overlayHost : undefined;
-  if (!currentState?.controlled) {
+  if (!currentState?.controlled || !currentState?.presented) {
     overlayHost?.remove();
     overlayHost = undefined;
     overlayName = undefined;
@@ -78,58 +73,116 @@ function syncOverlay() {
   style.textContent = `
     :host { all: initial; }
     .veil {
-      position: fixed; inset: 0; pointer-events: none;
-      border: 1px solid rgba(199, 220, 213, .42);
-      box-shadow: inset 0 0 0 1px rgba(18, 24, 22, .08);
+      position: fixed; inset: 0; overflow: hidden; pointer-events: none;
+      contain: strict;
+      background:
+        radial-gradient(circle, rgba(238, 243, 255, .62) 0 .72px, transparent .92px) 0 0 / 8px 8px,
+        radial-gradient(ellipse at 50% 112%, rgba(107, 139, 255, .31), transparent 54%),
+        radial-gradient(ellipse at -5% 58%, rgba(74, 119, 255, .29), transparent 34%),
+        radial-gradient(ellipse at 105% 56%, rgba(87, 127, 255, .27), transparent 34%),
+        linear-gradient(180deg, rgba(9, 12, 18, .28), rgba(7, 10, 17, .44));
+      box-shadow:
+        inset 0 0 0 1px rgba(212, 224, 255, .3),
+        inset 0 0 72px rgba(77, 118, 255, .18);
     }
     .veil::before {
-      content: ''; position: absolute; left: 0; top: -1px; width: min(42vw, 620px); height: 2px;
-      border-radius: 999px;
-      background: linear-gradient(90deg, transparent 0%, rgba(164, 222, 205, .08) 18%, rgba(192, 242, 226, .86) 50%, rgba(164, 222, 205, .08) 82%, transparent 100%);
-      opacity: .72; transform: translate3d(-120%, 0, 0);
+      content: ''; position: absolute; left: -46vw; top: -15%; width: 42vw; height: 130%;
+      background: linear-gradient(102deg, transparent 12%, rgba(214, 225, 255, .04) 28%, rgba(230, 237, 255, .24) 50%, rgba(196, 215, 255, .06) 72%, transparent 88%);
+      opacity: .66; transform: translate3d(0, 0, 0) skewX(-8deg);
       will-change: transform, opacity;
-      animation: edge-wave 8.4s cubic-bezier(.45,0,.25,1) infinite;
+      animation: ambient-sweep 6.8s cubic-bezier(.45,0,.2,1) infinite;
+    }
+    .veil::after {
+      content: ''; position: absolute; inset: -12%;
+      background:
+        radial-gradient(ellipse at 50% 105%, rgba(156, 178, 255, .22), transparent 48%),
+        radial-gradient(ellipse at 0% 55%, rgba(105, 143, 255, .18), transparent 31%),
+        radial-gradient(ellipse at 100% 55%, rgba(105, 143, 255, .16), transparent 31%);
+      opacity: .38;
+      will-change: opacity;
+      animation: ambient-breathe 4.8s ease-in-out infinite;
     }
     .bar {
-      position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
-      display: flex; align-items: center; gap: 10px; min-width: 368px; max-width: min(590px, calc(100vw - 28px));
-      padding: 8px 8px 8px 12px; border: 1px solid rgba(13, 18, 16, .13);
-      border-radius: 17px; background: rgba(247, 249, 248, .965);
-      box-shadow: 0 20px 52px rgba(4, 8, 7, .28), 0 1px 0 rgba(255,255,255,.8) inset;
-      color: #171b19; font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      position: fixed; left: 50%; bottom: 24px; transform: translate3d(-50%, 0, 0);
+      display: flex; align-items: center; gap: 11px; width: min(486px, calc(100vw - 36px));
+      min-height: 64px; box-sizing: border-box;
+      padding: 9px 10px 9px 12px; border: 1px solid rgba(255,255,255,.09);
+      border-radius: 24px; background: rgba(15, 18, 25, .965);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, .42), 0 1px 0 rgba(255,255,255,.075) inset;
+      color: rgba(250,252,255,.98); font: 500 12px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
       pointer-events: auto;
-      animation: bar-in .22s cubic-bezier(.2,.8,.2,1) both;
+      animation: bar-in .3s cubic-bezier(.16,1,.3,1) both;
+      -webkit-font-smoothing: antialiased;
     }
-    .agent-mark { position: relative; width: 27px; height: 27px; flex: 0 0 auto; display: grid; place-items: center; }
-    .agent-mark::before { content: ''; position: absolute; inset: 2px; border: 1px solid rgba(17,25,22,.2); border-radius: 50%; animation: agent-breathe 2.8s ease-in-out infinite; }
-    .agent-mark::after { content: ''; position: absolute; inset: 6px; border: 1px solid rgba(17,25,22,.12); border-radius: 50%; }
-    .agent-mark i { width: 6px; height: 6px; border-radius: 50%; background: #2b6758; box-shadow: 0 0 0 4px rgba(69,130,113,.1); }
+    .pause-mark {
+      display: flex; align-items: center; justify-content: center; gap: 3px;
+      width: 13px; height: 30px; flex: 0 0 auto; opacity: .56;
+    }
+    .pause-mark::before, .pause-mark::after {
+      content: ''; width: 2px; height: 10px; border-radius: 999px; background: rgba(225,231,244,.82);
+    }
+    .agent-mark {
+      position: relative; width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center;
+      border-radius: 12px; background: radial-gradient(circle at 50% 52%, rgba(94,224,188,.2), transparent 68%);
+    }
+    .agent-mark::before {
+      content: ''; position: absolute; inset: 7px;
+      background: conic-gradient(from 0deg, transparent 0 7%, rgba(230,255,248,.96) 8% 12%, transparent 13% 24%, rgba(230,255,248,.82) 25% 29%, transparent 30% 41%, rgba(230,255,248,.96) 42% 46%, transparent 47% 58%, rgba(230,255,248,.82) 59% 63%, transparent 64% 75%, rgba(230,255,248,.96) 76% 80%, transparent 81% 92%, rgba(230,255,248,.82) 93% 97%, transparent 98%);
+      border-radius: 50%;
+      -webkit-mask: radial-gradient(circle, transparent 0 3px, #000 3.5px);
+      mask: radial-gradient(circle, transparent 0 3px, #000 3.5px);
+      will-change: transform;
+      animation: agent-orbit 3.6s linear infinite;
+    }
+    .agent-mark::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #c9fff0; box-shadow: 0 0 0 5px rgba(85,211,177,.1), 0 0 16px rgba(104,242,205,.42); }
     .copy { flex: 1; min-width: 0; }
-    .name { color: #141816; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .meta { color: #65706c; font-size: 9.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    button { border: 1px solid transparent; border-radius: 8px; padding: 6px 9px; color: inherit; font: inherit; cursor: pointer; transition: transform .14s ease, background .14s ease, border-color .14s ease; }
-    button:active { transform: scale(.96); }
-    .take { border-color: #171b19; background: #171b19; color: #fff; }
-    .take:hover { background: #2b302e; border-color: #2b302e; }
-    .stop { border-color: rgba(157,51,47,.15); background: rgba(157,51,47,.07); color: #983d39; }
-    .stop:hover { background: rgba(157,51,47,.12); color: #7f302d; }
+    .name { color: rgba(255,255,255,.98); font-size: 14px; font-weight: 650; letter-spacing: -.012em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta { color: rgba(219,225,238,.78); font-size: 11px; font-weight: 560; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    button {
+      min-height: 38px; border: 1px solid rgba(255,255,255,.055); border-radius: 13px; padding: 0 14px;
+      color: inherit; background: rgba(255,255,255,.045); font: 620 12px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+      cursor: pointer; -webkit-font-smoothing: antialiased;
+      transition: transform .18s cubic-bezier(.16,1,.3,1), background .18s ease, border-color .18s ease;
+    }
+    button:hover { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.09); }
+    button:active { transform: scale(.965); }
+    .take { color: rgba(246,248,252,.96); }
+    .stop { background: rgba(255,255,255,.035); color: #ff674f; }
+    .stop:hover { background: rgba(255,94,72,.1); border-color: rgba(255,94,72,.12); color: #ff7864; }
     .agent-pointer { position: fixed; left: 0; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; opacity: 0; transform: translate3d(var(--x, 0px), var(--y, 0px), 0); transition: transform .18s cubic-bezier(.2,.8,.2,1), opacity .14s ease; pointer-events: none; }
     .agent-pointer.visible { opacity: 1; }
     .agent-pointer svg { width: 18px; height: 22px; overflow: visible; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
     .agent-pointer path { fill: rgba(255,255,255,.96); stroke: rgba(31,38,40,.9); stroke-width: 1.2; stroke-linejoin: round; }
-    .pointer-label { max-width: 190px; padding: 6px 9px; border: 1px solid rgba(64,75,78,.12); border-radius: 11px; background: rgba(255,255,255,.94); box-shadow: 0 10px 25px rgba(21,28,30,.22); color: #30383a; font: 600 10.5px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); }
-    @keyframes edge-wave { 0% { transform: translate3d(-120%,0,0); opacity: .18; } 45%,55% { opacity: .82; } 100% { transform: translate3d(calc(100vw + 120%),0,0); opacity: .18; } }
-    @keyframes agent-breathe { 0%,100% { transform: scale(.92); opacity: .42; } 50% { transform: scale(1.08); opacity: .9; } }
-    @keyframes bar-in { from { opacity: 0; transform: translate(-50%, 8px) scale(.98); } }
-    @media (prefers-reduced-motion: reduce) { .veil::before, .bar, .agent-mark::before, .agent-pointer { animation: none; transition-duration: .001ms; } .veil::before { left: 29%; transform: none; opacity: .5; } }
+    .pointer-label { max-width: 210px; padding: 8px 11px; border: 1px solid rgba(35,41,52,.1); border-radius: 13px; background: rgba(247,248,251,.98); box-shadow: 0 12px 30px rgba(4,8,18,.25); color: #262b35; font: 620 11px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    @keyframes ambient-sweep {
+      0% { transform: translate3d(0,0,0) skewX(-8deg); opacity: .22; }
+      42%,58% { opacity: .78; }
+      100% { transform: translate3d(192vw,0,0) skewX(-8deg); opacity: .22; }
+    }
+    @keyframes ambient-breathe { 0%,100% { opacity: .28; } 50% { opacity: .58; } }
+    @keyframes agent-orbit { to { transform: rotate(360deg); } }
+    @keyframes bar-in { from { opacity: 0; transform: translate3d(-50%, 10px, 0) scale(.975); } }
+    @media (max-width: 620px) {
+      .bar { width: calc(100vw - 24px); bottom: 12px; border-radius: 20px; padding-left: 10px; gap: 8px; }
+      .pause-mark { display: none; }
+      .agent-mark { width: 30px; height: 30px; }
+      button { padding: 0 11px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .veil::before, .veil::after, .bar, .agent-mark::before, .agent-pointer { animation: none; transition-duration: .001ms; }
+      .veil::before { left: 29%; transform: skewX(-8deg); opacity: .42; }
+      .veil::after { opacity: .4; }
+    }
   `;
   const bar = document.createElement("div");
   bar.className = "bar";
   bar.setAttribute("role", "group");
   bar.setAttribute("aria-label", "Agent 正在控制此 Space");
+  const pause = document.createElement("span");
+  pause.className = "pause-mark";
+  pause.setAttribute("aria-hidden", "true");
   const mark = document.createElement("span");
   mark.className = "agent-mark";
-  mark.append(document.createElement("i"));
   const copy = document.createElement("div");
   copy.className = "copy";
   const name = document.createElement("div");
@@ -157,7 +210,7 @@ function syncOverlay() {
     event.stopPropagation();
     void ipcRenderer.invoke("x-browser:page:complete");
   });
-  bar.append(mark, copy, take, stop);
+  bar.append(pause, mark, copy, take, stop);
   const pointer = document.createElement("div");
   pointer.className = "agent-pointer";
   pointer.innerHTML = `<svg viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1.5v16.2l4.3-4 3.2 6.7 3-1.45-3.15-6.55 5.65-.25L2 1.5Z"></path></svg>`;
@@ -191,7 +244,7 @@ function syncOverlayContent() {
 }
 
 function showAgentPointer(state: any) {
-  if (!currentState?.controlled) return;
+  if (!currentState?.controlled || !currentState?.presented) return;
   syncOverlay();
   const pointer = overlayPointer;
   if (!pointer) {
@@ -217,7 +270,7 @@ function showAgentPointer(state: any) {
 }
 
 function scheduleOverlayRepair() {
-  if (!currentState?.controlled || repairFrame) return;
+  if (!currentState?.controlled || !currentState?.presented || repairFrame) return;
   repairFrame = requestAnimationFrame(() => {
     repairFrame = 0;
     const host = overlayHost;
@@ -232,11 +285,9 @@ function scheduleOverlayRepair() {
 
 function protectOverlayHost(host: HTMLElement) {
   if (host.id !== HOST_ID) host.id = HOST_ID;
-  host.dataset.overlayDesign = "openai-neutral-v1";
-  host.dataset.overlayMotion = "edge-wave";
+  host.dataset.overlayDesign = "agent-dot-matrix-v2";
+  host.dataset.overlayMotion = "ambient-sweep-v1";
   host.removeAttribute("hidden");
-  const pointerEvents =
-    agentInputActive || host.dataset.agentInput === "1" ? "none" : "auto";
   const criticalStyles: Record<string, string> = {
     position: "fixed",
     inset: "0px",
@@ -246,10 +297,10 @@ function protectOverlayHost(host: HTMLElement) {
     transform: "none",
     filter: "none",
     "z-index": "2147483647",
-    "pointer-events": pointerEvents,
-    background: "rgba(7, 11, 10, .16)",
-    "box-shadow":
-      "inset 0 0 0 1px rgba(205, 226, 219, .28)",
+    "pointer-events": "none",
+    background: "transparent",
+    "box-shadow": "none",
+    contain: "layout style paint",
     "-webkit-backdrop-filter": "none",
     "backdrop-filter": "none",
   };
