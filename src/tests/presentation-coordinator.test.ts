@@ -15,6 +15,9 @@ function fakeView(name: string) {
       focus() {
         this.focused = true;
       },
+      isFocused() {
+        return this.focused;
+      },
     },
     setVisible(value: boolean) {
       this.visible = value;

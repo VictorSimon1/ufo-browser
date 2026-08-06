@@ -287,7 +287,12 @@ export class PresentationCoordinator {
       name: space.name,
       task: space.agentTask,
     });
-    if (newlyVisible) this.views.overlay.webContents.focus();
+    if (
+      newlyVisible ||
+      (this.window.isVisible() && !this.views.overlay.webContents.isFocused())
+    ) {
+      this.views.overlay.webContents.focus();
+    }
   }
 
   private removeIfAttached(view: WebContentsView) {
