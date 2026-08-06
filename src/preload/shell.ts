@@ -57,6 +57,12 @@ contextBridge.exposeInMainWorld("xBrowser", {
     complete: (spaceId: number) =>
       ipcRenderer.invoke("x-browser:control:complete", spaceId),
   },
+  overlay: {
+    onState: (listener: (state: any) => void) =>
+      on("x-browser:agent-overlay-state", listener),
+    onPointer: (listener: (state: any) => void) =>
+      on("x-browser:agent-overlay-pointer", listener),
+  },
   chat: {
     send: (text: string) => ipcRenderer.invoke("x-browser:chat:send", text),
     stop: () => ipcRenderer.invoke("x-browser:chat:stop"),

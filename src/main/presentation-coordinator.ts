@@ -7,6 +7,7 @@ type ShellViews = {
   chat: WebContentsView;
   overview: WebContentsView;
   browser: WebContentsView;
+  overlay: WebContentsView;
 };
 
 export class PresentationCoordinator {
@@ -14,6 +15,7 @@ export class PresentationCoordinator {
   private generation = 0;
   private commitQueue = Promise.resolve();
   private attachedPage: WebContentsView | null = null;
+  private overlaySpaceId: number | null = null;
 
   constructor(
     private readonly window: BaseWindow,
@@ -35,6 +37,7 @@ export class PresentationCoordinator {
 
   syncWindowState() {
     this.layout();
+    this.syncControlOverlay();
     this.syncPreviewActivity();
     // The shell can receive its initial Presentation while the native window
     // is still hidden. Re-publish after show/restore so Overview schedules
@@ -56,6 +59,21 @@ export class PresentationCoordinator {
       return this.request({ kind: "space", spaceId });
     }
     return Promise.resolve();
+  }
+
+  refreshControlOverlay() {
+    this.syncControlOverlay();
+  }
+
+  showAgentPointer(
+    spaceId: number,
+    pointer: { x: number; y: number; label: string },
+  ) {
+    if (this.overlaySpaceId !== spaceId || !this.views.overlay.webContents) return;
+    this.views.overlay.webContents.send(
+      "x-browser:agent-overlay-pointer",
+      pointer,
+    );
   }
 
   private request(next: Presentation) {
@@ -104,6 +122,7 @@ export class PresentationCoordinator {
       this.manager.setPresentedTarget(null);
       this.presentation = next;
       this.layout();
+      this.syncControlOverlay();
       this.syncPreviewActivity();
       this.publishState();
       return;
@@ -120,6 +139,7 @@ export class PresentationCoordinator {
       this.manager.setPresentedTarget(nextTargetId);
       this.presentation = next;
       this.layout();
+      this.syncControlOverlay();
       this.syncPreviewActivity();
       return;
     }
@@ -140,6 +160,7 @@ export class PresentationCoordinator {
       this.manager.setPresentedTarget(nextTargetId);
       this.presentation = next;
       this.layout();
+      this.syncControlOverlay();
       this.syncPreviewActivity();
       this.publishState();
       if (previousTarget && previousTarget !== nextTargetId) {
@@ -195,6 +216,7 @@ export class PresentationCoordinator {
       this.views.overview.setVisible(false);
       this.views.chat.setVisible(false);
     }
+    this.syncControlOverlay();
     this.syncPreviewActivity();
     this.publishState();
     if (previousTarget && previousTarget !== nextTargetId) {
@@ -213,6 +235,7 @@ export class PresentationCoordinator {
     } else {
       this.views.browser.setBounds(layout.chrome);
       this.attachedPage?.setBounds(layout.page);
+      if (this.overlaySpaceId !== null) this.views.overlay.setBounds(layout.page);
     }
   }
 
@@ -231,7 +254,44 @@ export class PresentationCoordinator {
     );
   }
 
+  private syncControlOverlay() {
+    const current = this.presentation;
+    const space =
+      current.kind === "space" ? this.manager.getSpace(current.spaceId) : undefined;
+    const controlled =
+      space?.ownership === "agent" && space.lifecycle === "active";
+    if (!space || !controlled) {
+      const wasVisible = this.overlaySpaceId !== null;
+      this.removeIfAttached(this.views.overlay);
+      this.views.overlay.setVisible(false);
+      this.overlaySpaceId = null;
+      if (wasVisible && current.kind === "space") {
+        this.attachedPage?.webContents.focus();
+      }
+      return;
+    }
+
+    const [width, height] = this.window.getContentSize();
+    this.views.overlay.setBounds(calculateShellLayout(width, height).page);
+    const root = this.window.contentView;
+    const children = root.children;
+    if (children.at(-1) !== this.views.overlay) {
+      if (children.includes(this.views.overlay)) root.removeChildView(this.views.overlay);
+      root.addChildView(this.views.overlay);
+    }
+    this.views.overlay.setVisible(true);
+    const newlyVisible = this.overlaySpaceId !== space.id;
+    this.overlaySpaceId = space.id;
+    this.views.overlay.webContents.send("x-browser:agent-overlay-state", {
+      spaceId: space.id,
+      name: space.name,
+      task: space.agentTask,
+    });
+    if (newlyVisible) this.views.overlay.webContents.focus();
+  }
+
   private removeIfAttached(view: WebContentsView) {
+    if (!this.window.contentView.children.includes(view)) return;
     try {
       this.window.contentView.removeChildView(view);
     } catch {

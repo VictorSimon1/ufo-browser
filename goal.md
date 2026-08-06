@@ -626,7 +626,7 @@ type SnapshotResult = {
 
 ## 9. 浏览器输入、观察与反自动化表面
 
-点击、双击、hover、拖动、滚轮和键盘由 CDP `Input.*` 发送真实浏览器输入事件；Agent 视觉高亮由独立 UI overlay 显示，不注入站点业务 DOM。后台 Space 的 `WebContentsView` 会在命令期间临时挂到不可聚焦、鼠标穿透、Mission Control 不可见的 2×2 合成器表面，但输入仍通过原始 `webContents.debugger.sendCommand("Input.dispatchMouseEvent")` 发送，不能降级成 Electron `sendInputEvent`：后者在 Cloudflare Turnstile 这类跨进程 iframe 上可能坐标正确却没有命中。Presentation 在命令排队期间切到前台时会重新检查实际附着状态并直接使用前台合成器，不能把预览停止错误串到 Agent 请求。整个路径不显示页面、不聚焦窗口、不触碰系统鼠标。截图使用页面 CDP，录像使用 `Page.startScreencast` 帧并由 FFmpeg 输出 VP8 WebM。
+点击、双击、hover、拖动、滚轮和键盘由 CDP `Input.*` 发送真实浏览器输入事件。Agent 接管遮罩是位于页面 `WebContentsView` 上方的独立 App `WebContentsView`，只在前台展示 Agent 控制中的 Space 时挂载；它拦截人的鼠标和键盘，并承载 Agent 指针、接管和终止任务控件，但绝不注入站点 DOM，也不参与 Agent 的 CDP 输入和页面截图路径。因此 Overview 预览、`Page.captureScreenshot` 与网页自身都看不到遮罩，而 Agent 可以在遮罩显示期间继续点击、输入和截图。后台 Space 的页面 `WebContentsView` 会在命令期间临时挂到不可聚焦、鼠标穿透、Mission Control 不可见的 2×2 合成器表面，但输入仍通过原始 `webContents.debugger.sendCommand("Input.dispatchMouseEvent")` 发送，不能降级成 Electron `sendInputEvent`：后者在 Cloudflare Turnstile 这类跨进程 iframe 上可能坐标正确却没有命中。Presentation 在命令排队期间切到前台时会重新检查实际附着状态并直接使用前台合成器，不能把预览停止错误串到 Agent 请求。整个路径不显示页面、不聚焦窗口、不触碰系统鼠标。截图使用页面 CDP，录像使用 `Page.startScreencast` 帧并由 FFmpeg 输出 VP8 WebM。
 
 页面触发 `window.open()`、`target=_blank` 或命名 popup 时，Manager 不再拒绝原生 child 后另建一个无关联标签。它通过 Electron `setWindowOpenHandler({ action: "allow", createWindow })` 将 Chromium 传入的完整 constructor options 原样交给受管 `WebContentsView`，从而保留真实 `WindowProxy`、`window.opener`、`postMessage`、命名窗口复用和 `popup.close()/closed` 语义。child 同步登记为同一 Space 的 managed tab，继承原 Profile/沙箱/ownership/overlay/CDP 边界；后台 Agent popup 不改变 Presentation，也不会创建第二个 macOS 产品窗口。popup 自身或 opener 关闭 child 时，native WebContents 销毁会关闭对应标签并清理 CDP session。
 

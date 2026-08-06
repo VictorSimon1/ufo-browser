@@ -104,6 +104,9 @@ export class TaskSpaceManager {
   private readonly activeAgentConnections = new Set<number>();
   private readonly listeners = new Set<() => void>();
   private readonly controlListeners = new Set<(spaceId: number) => void>();
+  private readonly agentPointerListeners = new Set<
+    (spaceId: number, pointer: { x: number; y: number; label: string }) => void
+  >();
   private readonly activeTabListeners = new Set<
     (spaceId: number, targetId: string) => void | Promise<void>
   >();
@@ -158,6 +161,16 @@ export class TaskSpaceManager {
   onControlChanged(listener: (spaceId: number) => void) {
     this.controlListeners.add(listener);
     return () => this.controlListeners.delete(listener);
+  }
+
+  onAgentPointer(
+    listener: (
+      spaceId: number,
+      pointer: { x: number; y: number; label: string },
+    ) => void,
+  ) {
+    this.agentPointerListeners.add(listener);
+    return () => this.agentPointerListeners.delete(listener);
   }
 
   onActiveTabChanged(
@@ -482,16 +495,6 @@ export class TaskSpaceManager {
     if (previousTargetId && previousTargetId !== targetId) {
       this.bumpSurfaceGeneration(previousTargetId);
     }
-    const affectedSpaceIds = new Set<number>();
-    if (previousTargetId) {
-      const previousSpace = this.findSpaceByTargetId(previousTargetId);
-      if (previousSpace) affectedSpaceIds.add(previousSpace.id);
-    }
-    if (targetId) {
-      const nextSpace = this.findSpaceByTargetId(targetId);
-      if (nextSpace) affectedSpaceIds.add(nextSpace.id);
-    }
-    for (const spaceId of affectedSpaceIds) this.broadcastControl(spaceId);
   }
 
   setPageViewport(width: number, height: number) {
@@ -1015,13 +1018,14 @@ export class TaskSpaceManager {
     ) {
       return;
     }
-    const view = this.getView(space.activeTabId);
-    if (!view || view.webContents.isDestroyed()) return;
-    view.webContents.send("x-browser:page-agent-pointer", {
+    const pointer = {
       x: Math.max(0, x),
       y: Math.max(0, y),
       label: "正在浏览网页",
-    });
+    };
+    for (const listener of this.agentPointerListeners) {
+      listener(spaceId, pointer);
+    }
     this.noteOverviewActivity(space.activeTabId);
   }
 
@@ -1033,21 +1037,6 @@ export class TaskSpaceManager {
     if (state.resubscribeTimer) clearTimeout(state.resubscribeTimer);
     state.resubscribeTimer = undefined;
     if (!state.subscriptionActive) this.scheduleNextOverviewFrame(state, 0);
-  }
-
-  controlStateForWebContents(webContentsId: number) {
-    const match = this.findSpaceByWebContentsId(webContentsId);
-    if (!match) return { controlled: false };
-    return {
-      controlled:
-        match.space.lifecycle === "active" && match.space.ownership === "agent",
-      presented: this.presentedTargetId === match.tab.targetId,
-      spaceId: match.space.id,
-      name: match.space.name,
-      lifecycle: match.space.lifecycle,
-      ownership: match.space.ownership,
-      task: match.space.agentTask,
-    };
   }
 
   async capturePreview(spaceId: number, bounds: Rectangle): Promise<Buffer> {
@@ -2246,15 +2235,6 @@ export class TaskSpaceManager {
   }
 
   private broadcastControl(spaceId: number) {
-    const space = this.getSpace(spaceId);
-    if (!space) return;
-    for (const tab of space.tabs) {
-      const runtime = this.runtimes.get(tab.targetId);
-      runtime?.view.webContents.send(
-        "x-browser:page-control-state",
-        this.controlStateForWebContents(runtime.view.webContents.id),
-      );
-    }
     for (const listener of this.controlListeners) listener(spaceId);
   }
 

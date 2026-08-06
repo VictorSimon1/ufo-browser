@@ -1,0 +1,310 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  position: relative;
+  cursor: default;
+}
+
+.veil {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  contain: strict;
+  background:
+    radial-gradient(circle, rgba(238, 243, 255, 0.62) 0 0.72px, transparent 0.92px) 0 0 / 8px 8px,
+    radial-gradient(ellipse at 50% 112%, rgba(107, 139, 255, 0.31), transparent 54%),
+    radial-gradient(ellipse at -5% 58%, rgba(74, 119, 255, 0.29), transparent 34%),
+    radial-gradient(ellipse at 105% 56%, rgba(87, 127, 255, 0.27), transparent 34%),
+    linear-gradient(180deg, rgba(9, 12, 18, 0.28), rgba(7, 10, 17, 0.44));
+  box-shadow:
+    inset 0 0 0 1px rgba(212, 224, 255, 0.3),
+    inset 0 0 72px rgba(77, 118, 255, 0.18);
+}
+
+.veil::before {
+  content: "";
+  position: absolute;
+  left: -46vw;
+  top: -15%;
+  width: 42vw;
+  height: 130%;
+  background: linear-gradient(102deg, transparent 12%, rgba(214, 225, 255, 0.04) 28%, rgba(230, 237, 255, 0.24) 50%, rgba(196, 215, 255, 0.06) 72%, transparent 88%);
+  opacity: 0.66;
+  transform: translate3d(0, 0, 0) skewX(-8deg);
+  will-change: transform, opacity;
+  animation: ambient-sweep 6.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+
+.veil::after {
+  content: "";
+  position: absolute;
+  inset: -12%;
+  background:
+    radial-gradient(ellipse at 50% 105%, rgba(156, 178, 255, 0.22), transparent 48%),
+    radial-gradient(ellipse at 0% 55%, rgba(105, 143, 255, 0.18), transparent 31%),
+    radial-gradient(ellipse at 100% 55%, rgba(105, 143, 255, 0.16), transparent 31%);
+  opacity: 0.38;
+  will-change: opacity;
+  animation: ambient-breathe 4.8s ease-in-out infinite;
+}
+
+.control-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: min(486px, calc(100vw - 36px));
+  min-height: 64px;
+  margin: 0;
+  padding: 9px 10px 9px 12px;
+  transform: translate3d(-50%, 0, 0);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 24px;
+  background: rgba(15, 18, 25, 0.965);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.075);
+  color: rgba(250, 252, 255, 0.98);
+  animation: bar-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.pause-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 13px;
+  height: 30px;
+  flex: 0 0 auto;
+  opacity: 0.56;
+}
+
+.pause-mark::before,
+.pause-mark::after {
+  content: "";
+  width: 2px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(225, 231, 244, 0.82);
+}
+
+.agent-mark {
+  position: relative;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
+  background: radial-gradient(circle at 50% 52%, rgba(94, 224, 188, 0.2), transparent 68%);
+}
+
+.agent-mark::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 7%, rgba(230, 255, 248, 0.96) 8% 12%, transparent 13% 24%, rgba(230, 255, 248, 0.82) 25% 29%, transparent 30% 41%, rgba(230, 255, 248, 0.96) 42% 46%, transparent 47% 58%, rgba(230, 255, 248, 0.82) 59% 63%, transparent 64% 75%, rgba(230, 255, 248, 0.96) 76% 80%, transparent 81% 92%, rgba(230, 255, 248, 0.82) 93% 97%, transparent 98%);
+  mask: radial-gradient(circle, transparent 0 3px, #000 3.5px);
+  -webkit-mask: radial-gradient(circle, transparent 0 3px, #000 3.5px);
+  will-change: transform;
+  animation: agent-orbit 3.6s linear infinite;
+}
+
+.agent-mark::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #c9fff0;
+  box-shadow: 0 0 0 5px rgba(85, 211, 177, 0.1), 0 0 16px rgba(104, 242, 205, 0.42);
+}
+
+.copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.copy strong,
+.copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy strong {
+  color: rgba(255, 255, 255, 0.98);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+}
+
+.copy small {
+  margin-top: 3px;
+  color: rgba(219, 225, 238, 0.78);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  font: 620 12px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), background 0.18s ease, border-color 0.18s ease;
+}
+
+button:hover {
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.085);
+}
+
+button:active {
+  transform: scale(0.965);
+}
+
+.stop {
+  background: rgba(255, 255, 255, 0.035);
+  color: #ff674f;
+}
+
+.stop:hover {
+  border-color: rgba(255, 94, 72, 0.12);
+  background: rgba(255, 94, 72, 0.1);
+  color: #ff7864;
+}
+
+.agent-pointer {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transform: translate3d(var(--x, 0), var(--y, 0), 0);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.14s ease;
+  pointer-events: none;
+}
+
+.agent-pointer.visible {
+  opacity: 1;
+}
+
+.agent-pointer svg {
+  width: 18px;
+  height: 22px;
+  overflow: visible;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
+}
+
+.agent-pointer path {
+  fill: rgba(255, 255, 255, 0.96);
+  stroke: rgba(31, 38, 40, 0.9);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.pointer-label {
+  max-width: 210px;
+  overflow: hidden;
+  padding: 8px 11px;
+  border: 1px solid rgba(35, 41, 52, 0.1);
+  border-radius: 13px;
+  background: rgba(247, 248, 251, 0.98);
+  box-shadow: 0 12px 30px rgba(4, 8, 18, 0.25);
+  color: #262b35;
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes ambient-sweep {
+  0% { transform: translate3d(0, 0, 0) skewX(-8deg); opacity: 0.22; }
+  42%, 58% { opacity: 0.78; }
+  100% { transform: translate3d(192vw, 0, 0) skewX(-8deg); opacity: 0.22; }
+}
+
+@keyframes ambient-breathe {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 0.58; }
+}
+
+@keyframes agent-orbit {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes bar-in {
+  from { opacity: 0; transform: translate3d(-50%, 10px, 0) scale(0.975); }
+}
+
+@media (max-width: 620px) {
+  .control-bar {
+    bottom: 12px;
+    width: calc(100vw - 24px);
+    gap: 8px;
+    padding-left: 10px;
+    border-radius: 20px;
+  }
+
+  .pause-mark {
+    display: none;
+  }
+
+  .agent-mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  button {
+    padding: 0 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .veil::before,
+  .veil::after,
+  .control-bar,
+  .agent-mark::before,
+  .agent-pointer {
+    animation: none;
+    transition-duration: 0.001ms;
+  }
+
+  .veil::before {
+    left: 29%;
+    transform: skewX(-8deg);
+    opacity: 0.42;
+  }
+
+  .veil::after {
+    opacity: 0.4;
+  }
+}

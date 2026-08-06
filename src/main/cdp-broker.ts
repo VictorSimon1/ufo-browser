@@ -25,10 +25,6 @@ export class CdpBroker {
     string,
     ReturnType<typeof setTimeout>
   >();
-  private readonly inputBlockerTimers = new Map<
-    number,
-    ReturnType<typeof setTimeout>
-  >();
   private readonly downloads: DownloadRegistry;
 
   constructor(
@@ -235,7 +231,8 @@ export class CdpBroker {
     try {
       // Input preparation can itself race navigation or renderer teardown.
       // Keep it inside the cleanup boundary so temporary focus emulation is
-      // always released even when the blocker transition fails.
+      // always released. The App-level overlay is a separate native View and
+      // never participates in the page CDP input path.
       if (isInput) {
         await this.beginAgentInput(route.ownerTargetId, view.webContents);
       }
@@ -292,9 +289,6 @@ export class CdpBroker {
       const focusTimer = this.focusEmulationTimers.get(targetId);
       if (focusTimer) clearTimeout(focusTimer);
       this.focusEmulationTimers.delete(targetId);
-      const blockerTimer = this.inputBlockerTimers.get(contents.id);
-      if (blockerTimer) clearTimeout(blockerTimer);
-      this.inputBlockerTimers.delete(contents.id);
       for (const [sessionId, route] of this.sessions) {
         if (route.ownerTargetId !== targetId) continue;
         this.sessions.delete(sessionId);
@@ -326,20 +320,9 @@ export class CdpBroker {
     if (focusTimer) clearTimeout(focusTimer);
     this.focusEmulationTimers.delete(targetId);
     await this.setFocusEmulation(targetId, contents, true);
-    const timer = this.inputBlockerTimers.get(contents.id);
-    if (timer) clearTimeout(timer);
-    this.inputBlockerTimers.delete(contents.id);
-    await togglePageBlocker(contents, false);
   }
 
   private endAgentInput(targetId: string, contents: WebContents) {
-    const previous = this.inputBlockerTimers.get(contents.id);
-    if (previous) clearTimeout(previous);
-    const timer = setTimeout(() => {
-      this.inputBlockerTimers.delete(contents.id);
-      void togglePageBlocker(contents, true);
-    }, 250);
-    this.inputBlockerTimers.set(contents.id, timer);
     const previousFocusTimer = this.focusEmulationTimers.get(targetId);
     if (previousFocusTimer) clearTimeout(previousFocusTimer);
     const focusTimer = setTimeout(() => {
@@ -467,25 +450,5 @@ export async function scopedChildTargets(contents: WebContents) {
     );
   } catch {
     return [];
-  }
-}
-
-async function togglePageBlocker(contents: WebContents, enabled: boolean) {
-  if (contents.isDestroyed()) return;
-  contents.send("x-browser:page-agent-input", !enabled);
-  const expression = `(() => {
-    const host = document.getElementById('__x_browser_agent_overlay');
-    if (!host) return;
-    host.dataset.agentInput = ${enabled ? "'0'" : "'1'"};
-    host.style.setProperty(
-      'pointer-events',
-      ${enabled ? "'auto'" : "'none'"},
-      'important',
-    );
-  })()`;
-  try {
-    await contents.executeJavaScript(expression, true);
-  } catch {
-    // Navigation can destroy the execution context between input commands.
   }
 }

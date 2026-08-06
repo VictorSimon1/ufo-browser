@@ -42,6 +42,7 @@ await build({
   sourcemap: true,
   target: "chrome136",
   entryPoints: {
+    "agent-overlay": "src/renderer/agent-overlay.ts",
     chat: "src/renderer/chat.ts",
     overview: "src/renderer/overview.ts",
     browser: "src/renderer/browser.ts",
@@ -69,9 +70,10 @@ await build({
   external: ["electron"],
 });
 
-for (const name of ["chat", "overview", "browser", "newtab"]) {
+for (const name of ["agent-overlay", "chat", "overview", "browser", "newtab"]) {
   await cp(`src/renderer/${name}.html`, `dist/renderer/${name}.html`);
 }
+await cp("src/renderer/agent-overlay.css", "dist/renderer/agent-overlay.css");
 await cp("src/renderer/styles.css", "dist/renderer/styles.css");
 
 await mkdir(join(dist, "bin"), { recursive: true });

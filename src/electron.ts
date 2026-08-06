@@ -16,6 +16,7 @@ import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
 import { ClaudeSessionManager } from "./main/claude-chat/manager.js";
 import { visibleSpaceIds } from "./main/preview-visibility.js";
+import { BROWSER_CHROME_HEIGHT } from "./main/shell-page-bounds.js";
 import type { Rect } from "./main/types.js";
 import {
   chromiumAcceptLanguages,
@@ -119,9 +120,17 @@ async function start() {
   const chatView = new WebContentsView({ webPreferences: shellPreferences });
   const overviewView = new WebContentsView({ webPreferences: shellPreferences });
   const browserView = new WebContentsView({ webPreferences: shellPreferences });
+  const overlayView = new WebContentsView({
+    webPreferences: {
+      ...shellPreferences,
+      backgroundThrottling: true,
+    },
+  });
   for (const view of [chatView, overviewView, browserView]) {
     view.setBackgroundColor("#f7faf9");
   }
+  overlayView.setBackgroundColor("#00000000");
+  overlayView.setVisible(false);
   traceStart("shell-created");
 
   const store = new BrowserStateStore(join(app.getPath("userData"), "browser-state.json"));
@@ -182,7 +191,12 @@ async function start() {
   traceStart("chat-initialized");
   const presentation = new PresentationCoordinator(
     window,
-    { chat: chatView, overview: overviewView, browser: browserView },
+    {
+      chat: chatView,
+      overview: overviewView,
+      browser: browserView,
+      overlay: overlayView,
+    },
     manager,
   );
   manager.onActiveTabChanged((spaceId) => {
@@ -190,11 +204,15 @@ async function start() {
     if (current.kind !== "space" || current.spaceId !== spaceId) return;
     return presentation.refreshSpace(spaceId).catch(() => undefined);
   });
+  manager.onAgentPointer((spaceId, pointer) =>
+    presentation.showAgentPointer(spaceId, pointer),
+  );
 
   const shellIds = new Set([
     chatView.webContents.id,
     overviewView.webContents.id,
     browserView.webContents.id,
+    overlayView.webContents.id,
   ]);
   registerIpc({
     manager,
@@ -221,6 +239,7 @@ async function start() {
         manager.navigationState(current.spaceId),
       );
     }
+    presentation.refreshControlOverlay();
   };
   manager.onChanged(publish);
   manager.onControlChanged(publish);
@@ -229,6 +248,7 @@ async function start() {
     chatView.webContents.loadFile(renderer("chat.html")),
     overviewView.webContents.loadFile(renderer("overview.html")),
     browserView.webContents.loadFile(renderer("browser.html")),
+    overlayView.webContents.loadFile(renderer("agent-overlay.html")),
   ]);
   traceStart("shell-loaded");
   await presentation.showOverview();
@@ -404,6 +424,7 @@ async function start() {
         presentation,
         browserView,
         overviewView,
+        overlayView,
       }).catch(async (error) => {
         await writeFile(
           join(testRoot, "control-ui-audit.json"),
@@ -725,21 +746,6 @@ function registerIpc(context: IpcContext) {
   });
   shell("x-browser:chat:stop", () => context.claude.stop());
 
-  ipcMain.handle("x-browser:page-control-state", (event) =>
-    manager.controlStateForWebContents(event.sender.id),
-  );
-  ipcMain.handle("x-browser:page:take-over", async (event) => {
-    const match = manager.findSpaceByWebContentsId(event.sender.id);
-    if (!match) throw new Error("page is not managed");
-    leases.release(match.space.id);
-    await manager.setOwnership(match.space.id, "user", "active");
-  });
-  ipcMain.handle("x-browser:page:complete", async (event) => {
-    const match = manager.findSpaceByWebContentsId(event.sender.id);
-    if (!match) throw new Error("page is not managed");
-    leases.release(match.space.id);
-    await manager.setLifecycle(match.space.id, "completed");
-  });
 }
 
 function currentBrowserState(context: IpcContext) {
@@ -1225,6 +1231,7 @@ async function runControlUiAudit(context: {
   presentation: PresentationCoordinator;
   browserView: WebContentsView;
   overviewView: WebContentsView;
+  overlayView: WebContentsView;
 }) {
   const {
     testRoot,
@@ -1233,6 +1240,7 @@ async function runControlUiAudit(context: {
     presentation,
     browserView,
     overviewView,
+    overlayView,
   } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const space = await manager.createSpace("Agent control UI audit", "agent");
@@ -1243,27 +1251,30 @@ async function runControlUiAudit(context: {
       `data:text/html;charset=utf-8,${encodeURIComponent(`
         <!doctype html><meta charset="utf-8"><title>Agent UI Audit</title>
         <style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f4f5f3;color:#2d3532;font:16px -apple-system}.card{width:420px;padding:38px;border:1px solid #dce2df;border-radius:24px;background:#fff;box-shadow:0 24px 70px rgba(36,52,45,.1)}button{padding:12px 18px;border:0;border-radius:12px;background:#173d32;color:#fff}</style>
-        <main class="card"><h1>Agent is browsing</h1><p>The page remains visible while X-Browser protects user input.</p><button>Continue</button></main>
+        <main class="card"><h1>Agent is browsing</h1><p>The page remains visible while X-Browser protects user input.</p><button onclick="window.clickCount=(window.clickCount||0)+1">Continue</button></main>
       `)}`,
     );
     const view = manager.getView(manager.getActiveTab(space.id).targetId)!;
-    const backgroundBeforePresentation = await view.webContents.executeJavaScript(
-      `({ present: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
-      true,
-    );
+    const backgroundBeforePresentation = {
+      overlayAttached: window.contentView.children.includes(overlayView),
+      pageOverlayPresent: await view.webContents.executeJavaScript(
+        `Boolean(document.getElementById('__x_browser_agent_overlay'))`,
+        true,
+      ),
+    };
     await presentation.showSpace(space.id);
     browserView.webContents.send(
       "x-browser:browser-state",
       manager.navigationState(space.id),
     );
     await wait(420);
-    const motionPreference = await view.webContents.executeJavaScript(
+    const motionPreference = await overlayView.webContents.executeJavaScript(
       `({ reduced: matchMedia('(prefers-reduced-motion: reduce)').matches })`,
       true,
     );
-    const motionFrameA = await captureWebContentsPng(view);
+    const motionFrameA = await captureWebContentsPng(overlayView);
     await wait(420);
-    const motionFrameB = await captureWebContentsPng(view);
+    const motionFrameB = await captureWebContentsPng(overlayView);
     const animationAdvanced =
       motionPreference.reduced === true || !motionFrameA.equals(motionFrameB);
     await Promise.all([
@@ -1282,41 +1293,91 @@ async function runControlUiAudit(context: {
       }))()`,
       true,
     );
-    const overlay = await view.webContents.executeJavaScript(
+    const overlay = await overlayView.webContents.executeJavaScript(
+      `(() => ({
+        design: document.body.dataset.overlayDesign,
+        motion: document.body.dataset.overlayMotion,
+        spaceId: document.body.dataset.spaceId,
+        name: document.querySelector('#space-name')?.textContent,
+        detail: document.querySelector('#task-detail')?.textContent,
+        buttons: [...document.querySelectorAll('button')].map((button) => button.textContent?.trim()),
+      }))()`,
+      true,
+    );
+    const nativeOverlay = {
+      attached: window.contentView.children.includes(overlayView),
+      topmost: window.contentView.children.at(-1) === overlayView,
+      bounds: overlayView.getBounds(),
+      focused: overlayView.webContents.isFocused(),
+    };
+    const pageButton = await view.webContents.executeJavaScript(
       `(() => {
-        const host = document.getElementById('__x_browser_agent_overlay');
-        if (!host) return { present: false };
-        const style = getComputedStyle(host);
         const button = document.querySelector('main button');
         const rect = button?.getBoundingClientRect();
-        const clickThrough = rect
-          ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === button
-          : false;
-        return {
-          present: true,
-          pointerEvents: style.pointerEvents,
-          background: style.backgroundColor,
-          boxShadow: style.boxShadow,
-          backdropFilter: style.backdropFilter || style.webkitBackdropFilter,
-          design: host.dataset.overlayDesign,
-          motion: host.dataset.overlayMotion,
-          clickThrough,
-        };
+        return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
       })()`,
+      true,
+    );
+    if (!pageButton) throw new Error("control audit button missing");
+    if (!view.webContents.debugger.isAttached()) view.webContents.debugger.attach("1.3");
+    await view.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: pageButton.x,
+      y: pageButton.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await view.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: pageButton.x,
+      y: pageButton.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await wait(80);
+    const agentClickCount = await view.webContents.executeJavaScript(
+      `Number(window.clickCount || 0)`,
+      true,
+    );
+    overlayView.webContents.sendInputEvent({
+      type: "mouseDown",
+      x: Math.round(pageButton.x),
+      y: Math.round(pageButton.y),
+      button: "left",
+      clickCount: 1,
+    });
+    overlayView.webContents.sendInputEvent({
+      type: "mouseUp",
+      x: Math.round(pageButton.x),
+      y: Math.round(pageButton.y),
+      button: "left",
+      clickCount: 1,
+    });
+    await wait(80);
+    const humanAttemptClickCount = await view.webContents.executeJavaScript(
+      `Number(window.clickCount || 0)`,
+      true,
+    );
+    const pageIsolation = await view.webContents.executeJavaScript(
+      `({ overlayNode: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
       true,
     );
     await writeFile(join(testRoot, "control-ui-chrome.png"), await captureWebContentsPng(browserView));
     await writeFile(join(testRoot, "control-ui-page.png"), await captureWebContentsPng(view));
+    await writeFile(join(testRoot, "control-ui-overlay.png"), await captureWebContentsPng(overlayView));
 
     await browserView.webContents.executeJavaScript(
       "document.querySelector('#spaces-button')?.click()",
       true,
     );
     await wait(220);
-    const backgroundAfterReturn = await view.webContents.executeJavaScript(
-      `({ present: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
-      true,
-    );
+    const backgroundAfterReturn = {
+      overlayAttached: window.contentView.children.includes(overlayView),
+      pageOverlayPresent: await view.webContents.executeJavaScript(
+        `Boolean(document.getElementById('__x_browser_agent_overlay'))`,
+        true,
+      ),
+    };
     const returned = {
       overview: presentation.current().kind === "overview",
       rootChildCount: window.contentView.children.length,
@@ -1332,23 +1393,32 @@ async function runControlUiAudit(context: {
       chrome.lockVisible === true &&
       chrome.spacesCount === "2" &&
       /共 2 个/.test(chrome.spacesLabel || "") &&
-      backgroundBeforePresentation.present === false &&
-      overlay.present === true &&
-      overlay.pointerEvents === "none" &&
-      overlay.background === "rgba(0, 0, 0, 0)" &&
-      overlay.boxShadow === "none" &&
-      overlay.backdropFilter === "none" &&
-      overlay.design === "agent-dot-matrix-v2" &&
-      overlay.motion === "ambient-sweep-v1" &&
-      overlay.clickThrough === true &&
+      backgroundBeforePresentation.overlayAttached === false &&
+      backgroundBeforePresentation.pageOverlayPresent === false &&
+      nativeOverlay.attached === true &&
+      nativeOverlay.topmost === true &&
+      nativeOverlay.bounds.y === BROWSER_CHROME_HEIGHT &&
+      nativeOverlay.bounds.width > 0 &&
+      nativeOverlay.bounds.height > 0 &&
+      nativeOverlay.focused === true &&
+      overlay.design === "agent-dot-matrix-v3" &&
+      overlay.motion === "ambient-sweep-v2" &&
+      overlay.spaceId === String(space.id) &&
+      overlay.name === space.name &&
+      overlay.detail === "正在检查页面状态" &&
+      overlay.buttons?.join(",") === "接管,终止任务" &&
+      pageIsolation.overlayNode === false &&
+      agentClickCount === 1 &&
+      humanAttemptClickCount === 1 &&
       animationAdvanced === true &&
       returned.overview === true &&
-      backgroundAfterReturn.present === false &&
+      backgroundAfterReturn.overlayAttached === false &&
+      backgroundAfterReturn.pageOverlayPresent === false &&
       returned.rootChildCount === 1 &&
       returned.runtimePreserved === true;
     await writeFile(
       join(testRoot, "control-ui-audit.json"),
-      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, overlay, motionPreference, animationAdvanced, backgroundAfterReturn, returned }, null, 2)}\n`,
+      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, nativeOverlay, overlay, pageIsolation, agentClickCount, humanAttemptClickCount, motionPreference, animationAdvanced, backgroundAfterReturn, returned }, null, 2)}\n`,
     );
   } finally {
     await presentation.showOverview().catch(() => undefined);

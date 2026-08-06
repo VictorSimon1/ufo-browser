@@ -9,7 +9,13 @@ function fakeView(name: string) {
     name,
     visible: false,
     bounds: { x: 0, y: 0, width: 0, height: 0 },
-    webContents: { send() {} },
+    webContents: {
+      focused: false,
+      send() {},
+      focus() {
+        this.focused = true;
+      },
+    },
     setVisible(value: boolean) {
       this.visible = value;
     },
@@ -19,11 +25,14 @@ function fakeView(name: string) {
   };
 }
 
-function harness(options: { overviewAttached?: boolean } = {}) {
+function harness(
+  options: { overviewAttached?: boolean; agentControlled?: boolean } = {},
+) {
   const overview = fakeView("overview");
   const browser = fakeView("browser");
   const chat = fakeView("chat");
   const page = fakeView("page");
+  const overlay = fakeView("overlay");
   const events: string[] = [];
   let minimumChildren = Number.POSITIVE_INFINITY;
   const children: FakeView[] = options.overviewAttached === false ? [] : [overview];
@@ -57,6 +66,14 @@ function harness(options: { overviewAttached?: boolean } = {}) {
     setPresentedTarget() {},
     setOverviewPreviewActive() {},
     setPageViewport() {},
+    getSpace: () => ({
+      id: 1,
+      name: "Space 1",
+      ownership: options.agentControlled ? "agent" : "user",
+      lifecycle: "active",
+      tabs: [{ targetId: "target-1" }],
+      activeTabId: "target-1",
+    }),
     listSpaces: () => [
       { id: 1, tabs: [{ targetId: "target-1" }] },
     ],
@@ -64,12 +81,12 @@ function harness(options: { overviewAttached?: boolean } = {}) {
   };
   const coordinator = new PresentationCoordinator(
     window as any,
-    { chat, overview, browser } as any,
+    { chat, overview, browser, overlay } as any,
     manager as any,
   );
   return {
     coordinator,
-    views: { chat, overview, browser, page },
+    views: { chat, overview, browser, page, overlay },
     children,
     events,
     minimumChildren: () => minimumChildren,
@@ -111,7 +128,30 @@ test("re-publishing Overview does not detach its native view", async () => {
 test("the first cold-start Overview presentation attaches its native view", async () => {
   const state = harness({ overviewAttached: false });
   await state.coordinator.showOverview();
-  assert.deepEqual(state.events, ["add:overview", "remove:browser", "remove:chat"]);
+  assert.deepEqual(state.events, ["add:overview"]);
   assert.deepEqual(state.children.map((view) => view.name), ["overview"]);
   assert.equal(state.views.overview.visible, true);
+});
+
+test("an Agent-controlled Space places the App overlay above the page only while presented", async () => {
+  const state = harness({ agentControlled: true });
+
+  await state.coordinator.showSpace(1);
+  assert.deepEqual(state.children.map((view) => view.name), [
+    "browser",
+    "page",
+    "overlay",
+  ]);
+  assert.equal(state.views.overlay.visible, true);
+  assert.deepEqual(state.views.overlay.bounds, {
+    x: 0,
+    y: 82,
+    width: 1200,
+    height: 718,
+  });
+  assert.equal(state.views.overlay.webContents.focused, true);
+
+  await state.coordinator.showOverview();
+  assert.deepEqual(state.children.map((view) => view.name), ["overview"]);
+  assert.equal(state.views.overlay.visible, false);
 });

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./agent-overlay.css" />
+    <title>Agent Control Overlay</title>
+  </head>
+  <body>
+    <div class="veil" aria-hidden="true"></div>
+    <div id="agent-pointer" class="agent-pointer" aria-hidden="true">
+      <svg viewBox="0 0 18 22"><path d="M2 1.5v16.2l4.3-4 3.2 6.7 3-1.45-3.15-6.55 5.65-.25L2 1.5Z"></path></svg>
+      <span id="pointer-label" class="pointer-label">正在浏览网页</span>
+    </div>
+    <section class="control-bar" role="group" aria-label="Agent 正在控制此 Space">
+      <span class="pause-mark" aria-hidden="true"></span>
+      <span class="agent-mark" aria-hidden="true"></span>
+      <span class="copy">
+        <strong id="space-name">Browser Agent</strong>
+        <small id="task-detail">Agent 正在控制</small>
+      </span>
+      <button id="take-over" class="take" type="button">接管</button>
+      <button id="stop-task" class="stop" type="button">终止任务</button>
+    </section>
+    <script src="./agent-overlay.js"></script>
+  </body>
+</html>
