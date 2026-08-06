@@ -29,7 +29,11 @@ function fakeView(name: string) {
 }
 
 function harness(
-  options: { overviewAttached?: boolean; agentControlled?: boolean } = {},
+  options: {
+    overviewAttached?: boolean;
+    agentControlled?: boolean;
+    windowFocused?: boolean;
+  } = {},
 ) {
   const overview = fakeView("overview");
   const browser = fakeView("browser");
@@ -37,6 +41,9 @@ function harness(
   const page = fakeView("page");
   const overlay = fakeView("overlay");
   const events: string[] = [];
+  const windowEvents = new Map<string, Array<() => void>>();
+  let agentControlled = options.agentControlled ?? false;
+  let windowFocused = options.windowFocused ?? true;
   let minimumChildren = Number.POSITIVE_INFINITY;
   const children: FakeView[] = options.overviewAttached === false ? [] : [overview];
   const contentView = {
@@ -55,10 +62,15 @@ function harness(
   };
   const window = {
     contentView,
-    on() {},
+    on(event: string, listener: () => void) {
+      const listeners = windowEvents.get(event) ?? [];
+      listeners.push(listener);
+      windowEvents.set(event, listeners);
+    },
     getContentSize: () => [1200, 800] as [number, number],
     isMinimized: () => false,
     isVisible: () => true,
+    isFocused: () => windowFocused,
   };
   const manager = {
     getActiveTab: () => ({ targetId: "target-1" }),
@@ -72,7 +84,7 @@ function harness(
     getSpace: () => ({
       id: 1,
       name: "Space 1",
-      ownership: options.agentControlled ? "agent" : "user",
+      ownership: agentControlled ? "agent" : "user",
       lifecycle: "active",
       tabs: [{ targetId: "target-1" }],
       activeTabId: "target-1",
@@ -93,6 +105,15 @@ function harness(
     children,
     events,
     minimumChildren: () => minimumChildren,
+    setAgentControlled(value: boolean) {
+      agentControlled = value;
+    },
+    setWindowFocused(value: boolean) {
+      windowFocused = value;
+    },
+    emitWindow(event: string) {
+      for (const listener of windowEvents.get(event) ?? []) listener();
+    },
   };
 }
 
@@ -157,4 +178,28 @@ test("an Agent-controlled Space places the App overlay above the page only while
   await state.coordinator.showOverview();
   assert.deepEqual(state.children.map((view) => view.name), ["overview"]);
   assert.equal(state.views.overlay.visible, false);
+});
+
+test("background Agent overlay updates never focus UFO-Browser", async () => {
+  const state = harness({ agentControlled: true, windowFocused: false });
+
+  await state.coordinator.showSpace(1);
+  assert.equal(state.views.overlay.visible, true);
+  assert.equal(state.views.overlay.webContents.focused, false);
+
+  state.setWindowFocused(true);
+  state.emitWindow("focus");
+  assert.equal(state.views.overlay.webContents.focused, true);
+});
+
+test("removing the overlay restores page focus only in the foreground", async () => {
+  const state = harness({ agentControlled: true });
+  await state.coordinator.showSpace(1);
+  assert.equal(state.views.overlay.webContents.focused, true);
+
+  state.views.page.webContents.focused = false;
+  state.setWindowFocused(false);
+  state.setAgentControlled(false);
+  state.coordinator.refreshControlOverlay();
+  assert.equal(state.views.page.webContents.focused, false);
 });

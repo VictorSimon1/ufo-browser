@@ -23,6 +23,7 @@
     "verify:browser-interaction": "npm run build && node scripts/browser-interaction-e2e.mjs",
     "verify:control-ui": "npm run build && node scripts/control-ui-e2e.mjs",
     "verify:agent-initial-tab": "npm run build && node scripts/agent-initial-tab-e2e.mjs",
+    "verify:agent-focus-isolation": "npm run build && node scripts/agent-focus-isolation-e2e.mjs",
     "verify:helper-parity": "npm run build && node scripts/helper-parity-e2e.mjs",
     "verify:window-lifecycle": "npm run build && node scripts/window-lifecycle-e2e.mjs",
     "verify:popup-download": "npm run build && node scripts/popup-download-e2e.mjs",

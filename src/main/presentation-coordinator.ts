@@ -29,6 +29,12 @@ export class PresentationCoordinator {
       this.syncWindowState();
     });
     this.window.on("show", () => this.syncWindowState());
+    // Agent ownership/state broadcasts can update the overlay while another
+    // macOS application owns the foreground. Never make a child WebContents
+    // first responder from that background path. When the user explicitly
+    // returns to UFO-Browser, the native window focus event is the safe point
+    // to restore the overlay's input interception.
+    this.window.on("focus", () => this.syncControlOverlay());
   }
 
   current() {
@@ -265,7 +271,11 @@ export class PresentationCoordinator {
       this.removeIfAttached(this.views.overlay);
       this.views.overlay.setVisible(false);
       this.overlaySpaceId = null;
-      if (wasVisible && current.kind === "space") {
+      if (
+        wasVisible &&
+        current.kind === "space" &&
+        this.window.isFocused()
+      ) {
         this.attachedPage?.webContents.focus();
       }
       return;
@@ -288,8 +298,8 @@ export class PresentationCoordinator {
       task: space.agentTask,
     });
     if (
-      newlyVisible ||
-      (this.window.isVisible() && !this.views.overlay.webContents.isFocused())
+      this.window.isFocused() &&
+      (newlyVisible || !this.views.overlay.webContents.isFocused())
     ) {
       this.views.overlay.webContents.focus();
     }

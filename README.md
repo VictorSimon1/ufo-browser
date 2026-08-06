@@ -118,12 +118,13 @@ npm run verify:browser-interaction
 npm run verify:live-preview
 npm run verify:restart-scale
 npm run verify:agent-initial-tab
+npm run verify:agent-focus-isolation
 npm run verify:helper-parity
 npm run verify:fingerprint
 npm run verify:janitor
 ```
 
-These suites cover Task Space leases, native input isolation, tab lifecycle, OOPIF routing, semantic snapshots, helper parity, Chromium fingerprint behavior, live page previews, GPU parking, and JanitorAI Turnstile completion.
+These suites cover Task Space leases, macOS foreground/cursor isolation, native input isolation, tab lifecycle, OOPIF routing, semantic snapshots, helper parity, Chromium fingerprint behavior, live page previews, GPU parking, and JanitorAI Turnstile completion. See [docs/agent-focus-isolation.md](docs/agent-focus-isolation.md) for the system-level focus contract and the review of `.x-browser-test/update.md`.
 
 ## macOS builds
 

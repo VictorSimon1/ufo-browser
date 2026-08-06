@@ -106,8 +106,15 @@ async function start() {
     show: false,
     frame: false,
     transparent: true,
+    backgroundColor: "#00000000",
     focusable: false,
     skipTaskbar: true,
+    hiddenInMissionControl: true,
+    hasShadow: false,
+    fullscreenable: false,
+    minimizable: false,
+    maximizable: false,
+    resizable: false,
   });
   captureWindow.setOpacity(0);
   captureWindow.setIgnoreMouseEvents(true);
@@ -360,7 +367,19 @@ async function start() {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await writeFile(
       join(testRoot, "preview-main-initial.json"),
-      `${JSON.stringify(testPreviewDiagnostics(manager), null, 2)}\n`,
+      `${JSON.stringify(
+        testPreviewDiagnostics(manager, {
+          window,
+          captureWindow,
+          presentation,
+          chatView,
+          overviewView,
+          browserView,
+          overlayView,
+        }),
+        null,
+        2,
+      )}\n`,
     );
     await writeFile(
       join(testRoot, "view-state.json"),
@@ -466,7 +485,19 @@ async function start() {
     testDiagnosticsTimer = setInterval(() => {
       void writeFile(
         join(testRoot, "preview-main-live.json"),
-        `${JSON.stringify(testPreviewDiagnostics(manager), null, 2)}\n`,
+        `${JSON.stringify(
+          testPreviewDiagnostics(manager, {
+            window,
+            captureWindow,
+            presentation,
+            chatView,
+            overviewView,
+            browserView,
+            overlayView,
+          }),
+          null,
+          2,
+        )}\n`,
       ).catch(() => undefined);
     }, 350);
     setTimeout(() => {
@@ -1719,9 +1750,66 @@ async function captureVisibleTestViews(context: {
   }
 }
 
-function testPreviewDiagnostics(manager: TaskSpaceManager) {
+function testPreviewDiagnostics(
+  manager: TaskSpaceManager,
+  context?: {
+    window: BaseWindow;
+    captureWindow: BaseWindow;
+    presentation: PresentationCoordinator;
+    chatView: WebContentsView;
+    overviewView: WebContentsView;
+    browserView: WebContentsView;
+    overlayView: WebContentsView;
+  },
+) {
+  const shellViews = context
+    ? new Map<WebContentsView, string>([
+        [context.chatView, "chat"],
+        [context.overviewView, "overview"],
+        [context.browserView, "browser"],
+        [context.overlayView, "overlay"],
+      ])
+    : undefined;
+  const pageViews = new Map<WebContentsView, string>();
+  if (context) {
+    for (const space of manager.listSpaces()) {
+      for (const tab of space.tabs) {
+        const view = manager.getView(tab.targetId);
+        if (view) pageViews.set(view, `page:${space.id}:${tab.targetId}`);
+      }
+    }
+  }
+  const rootChildren = context
+    ? context.window.contentView.children.map((child) => {
+        const shellName = shellViews?.get(child as WebContentsView);
+        if (shellName) return shellName;
+        return pageViews.get(child as WebContentsView) ?? "unknown";
+      })
+    : [];
   return {
     ...manager.previewDiagnostics(),
+    app: context
+      ? {
+          presentation: context.presentation.current(),
+          mainWindow: {
+            visible: context.window.isVisible(),
+            focused: context.window.isFocused(),
+            rootChildren,
+          },
+          backgroundSurfaceWindow: {
+            visible: context.captureWindow.isVisible(),
+            focused: context.captureWindow.isFocused(),
+            focusable: context.captureWindow.isFocusable(),
+            opacity: context.captureWindow.getOpacity(),
+            hasShadow: context.captureWindow.hasShadow(),
+            resizable: context.captureWindow.isResizable(),
+            minimizable: context.captureWindow.isMinimizable(),
+            maximizable: context.captureWindow.isMaximizable(),
+            fullscreenable: context.captureWindow.isFullScreenable(),
+            childCount: context.captureWindow.contentView.children.length,
+          },
+        }
+      : undefined,
     processMetrics: app.getAppMetrics().map((metric) => ({
       pid: metric.pid,
       type: metric.type,

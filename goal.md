@@ -388,6 +388,7 @@ cd /Users/a111/workspace/x-browser
 git diff --check
 npm run typecheck
 npm test
+npm run verify:agent-focus-isolation
 npm run dist:mac
 npm run smoke
 ```
@@ -423,6 +424,7 @@ X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/UFO-Browser.app/Contents/Resource
 专项文档：
 
 - `docs/agent-cli.md`
+- `docs/agent-focus-isolation.md`
 - `docs/live-space-previews.md`
 - `docs/claude-chat-sidebar.md`
 - `docs/chrome-profile-import.md`
@@ -724,6 +726,7 @@ npm run package:mac
 - 3 列大卡片下的 64-Space 回归进一步收紧：压力滚动必须实际到达 Space 64，不能在 56 提前通过。最终结果为首轮 6 张 ready、底部可见 Space 64、可见集合 4、runtime/隐藏 surface/capture/cold capture 均为 0、缓存严格 24 项并发生 28 次 LRU 淘汰；大卡片没有引入按 Space 数线性增长的 renderer 或截图负载。
 - 真实长期测试 Profile 暴露了另一个启动竞态：主进程可能已经得到 JPEG，但旧的 4 列预热仍抢跑 8 个 Space，而 3 列首屏只需要 6 个；早期发布又可能发生在对应 Canvas 建立之前。现在 native show 只预热 6 张，renderer 每次确认可见集合时都会重放每个 Space 最新的有界内存缓存；Canvas 仍按 revision 丢弃重复帧，因此滚动/resize 不会重复解码旧图。收紧后的 64-Space 冷启动在 2.8 秒状态采样中 `startupVisible=8`、`startupReady=8`，所有实际可见卡片均已画出内容；滚到底部 Space 64 时 runtime=1、hidden surface=1、capture=1、cold capture=1，缓存 23/24 项并已完成 29 次 LRU 淘汰。
 - 离屏清理也覆盖恢复出的 Agent-owned Space：预览预热或主 screencast 曾短暂使用过、但没有真实 Agent/CDP 保留标记的 runtime，在卡片离开可见集合或失去主 screencast 后统一进入 `releasePreviewOnlyRuntime`；`retained=true` 的实际浏览工作仍不会因用户滚动总览而被终止。64-Space 压测现在交替混合 user/agent ownership，并且必须在到达 Space 64 后等待 capture 队列空闲再验收；稳定结果为 `startupVisible=8`、`startupReady=8`、底部可见 64、runtime=1、hidden surface=1、capture/cold capture=0、缓存 24 项与 30 次 LRU 淘汰，没有遗留第二个离屏 Agent renderer。
+- Agent 后台操作与 macOS 前台状态现在有独立硬门禁：overlay/page 的 `webContents.focus()` 只允许在主窗口已经 focused 时执行，用户主动切回 App 后再由 native `focus` 事件恢复遮罩 first responder；共享 capture window 同时补齐透明背景、Mission Control 隐藏、无阴影和不可 resize/minimize/maximize/fullscreen 约束。`npm run verify:agent-focus-isolation` 在 Overview 与已呈现 Agent Space 两种场景中连续执行导航、填写、CDP 点击和截图，实测 Finder 前台 PID/bundle、`CGEvent` cursor 坐标和 Presentation 全程不变；Overview 主窗口 child tree 始终只有 Overview，后台页面只挂在 `opacity=0`、`focusable=false` 的 capture surface。`.x-browser-test/update.md` 中关于 Presentation/selection 解耦、CDP-only 输入、共享 surface 串行和系统级验收的观点已采纳；旧命名、未实现模块声明和无证据关闭 CDP focus emulation 的建议未照搬，完整结论见 `docs/agent-focus-isolation.md`。
 - macOS 主窗口生命周期改为浏览器式保活：点击红色关闭按钮只隐藏窗口并同步停止 Overview 预览捕获，不销毁窗口、shell renderer 或内存缩略图；Dock 再激活或第二次启动会显示并聚焦原窗口，Cmd+Q 才真正退出。新增 `npm run verify:window-lifecycle`，实测隐藏态 `visible=false`、`previewActive=false`、renderer 未销毁；重新激活后 `overviewWebContentsId` 与写入 DOM 的生命周期 token 均保持不变。补丁后 38/38 单元测试、动态 Canvas 像素变化和 64-Space 有界恢复继续通过。
 - 新一轮目标图/Ego 对照收敛了纯浏览器 UI 的状态噪声：Agent 卡片不再插入会让标题横向跳动的“运行中”胶囊，也不再使用大面积蓝色外发光；页面内真实控制遮罩继续作为主要反馈，卡片信息行只保留固定 5px 状态点。预览/新建卡片圆角统一为 18px，悬浮位移与阴影减弱，新建卡改为目标图中的裸 `+`，背景和 sticky header 更中性。`space-ui-e2e` 现在验证 user→agent 状态切换前后标题 x 坐标完全一致、没有旧 chip、预览阴影不变且新圆角/状态点准确生效。
 - Browser Chrome 补齐常用 macOS 浏览器交互：点击 `+` 或 `⌘T` 创建本地 New Tab 后，主进程在页面 native attach 完成后把 first responder 交还持久 Chrome，并二次确认聚焦/全选地址栏；`⌘1…⌘9`、`Ctrl+Tab`、`Ctrl+Shift+Tab`、`⌘⌥←/→` 串行读取最新 tab 状态后切换，`⌘[/]` 执行前进后退，`⌘⇧T` 不再被误当成普通新标签。新增 `npm run verify:browser-interaction`，真实 Electron 验证新标签地址栏焦点、数字定位、循环切换、快速连续指令和 Presentation 往返 renderer 保活。最终 38/38 单测、Space UI、Browser interaction、窗口生命周期、动态预览与 64-Space 稳定态全部通过；动态 Canvas 签名 `5349c2d4 → bd4d15c5`，64-Space 仍为 runtime=1、hidden surface=1、空 capture 队列、24 项缓存与 30 次 LRU 淘汰。
