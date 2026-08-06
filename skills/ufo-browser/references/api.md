@@ -23,6 +23,17 @@ Legacy `timeout`, `settle`, and `wait` values are interpreted as seconds.
 
 `site` provides optional learned site tools. `fetch.server` issues Node-side requests; `fetch.browser` issues requests from the active browser page. `cdp` sends a raw protocol command.
 
+The installed flat host aliases also include `createTab`, `getBrowserVersion`,
+`listProfiles`, `markTaskSpaceError`, `sendCDPMessage`,
+`setAgentTaskState`, `animationHighlightMouseToPosition`, and `iframeTarget`.
+They are non-enumerable globals, matching the audited Ego 0.4.5.9 runtime;
+Node's callable `fetch` keeps its original enumerable property.
+
+`getBrowserVersion()` resolves to
+`{ currentVersion: string, updateAvailable: boolean }`. `listProfiles()`
+resolves to `{ profiles: [{ id, isDefault, name }] }`. `createTab(url)` requires
+a string URL and resolves to `{ targetId }`.
+
 ## Task Space lifecycle
 
 Spaces persist metadata and page sessions across CLI processes. Ownership and the active socket lease are separate:

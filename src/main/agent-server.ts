@@ -26,6 +26,7 @@ export class AgentServer {
     private readonly leases: SpaceLeaseRegistry,
     private readonly snapshotService: SnapshotService,
     private readonly broker: CdpBroker,
+    private readonly browserVersion = "0.1.0",
   ) {}
 
   async listen() {
@@ -133,7 +134,15 @@ export class AgentServer {
       case "listTaskSpaces":
         return { taskSpaces: this.manager.listSpaces() };
       case "listProfiles":
-        return { profiles: [{ id: "default", name: "Default" }] };
+        return {
+          profiles: [
+            {
+              id: "Default",
+              isDefault: true,
+              name: "您的 UFO-Browser",
+            },
+          ],
+        };
       case "createTaskSpace": {
         const space = await this.manager.createSpace(String(args[0] || "Agent Space"), "agent");
         await this.select(connection, space.id);
@@ -158,7 +167,14 @@ export class AgentServer {
       }
       case "createTab": {
         const { spaceId } = this.assertAgentControl(connection);
-        return this.manager.createAgentTab(spaceId, args[0]);
+        if (typeof args[0] !== "string") {
+          throw new TypeError(
+            "ego.createTab(url) expects a string URL.\n" +
+              "Example: await ego.createTab('https://example.com')",
+          );
+        }
+        const tab = await this.manager.createAgentTab(spaceId, args[0]);
+        return { targetId: tab.targetId };
       }
       case "listTabs": {
         const { spaceId } = this.assertAgentControl(connection);
@@ -214,7 +230,10 @@ export class AgentServer {
         return { done: true };
       }
       case "getBrowserVersion":
-        return { name: "UFO-Browser", version: "0.1.0" };
+        return {
+          currentVersion: this.browserVersion,
+          updateAvailable: false,
+        };
       default:
         throw new Error(`EGO_INVALID_ARGUMENT: unknown method ${method}`);
     }

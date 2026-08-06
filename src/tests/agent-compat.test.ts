@@ -3,18 +3,30 @@ import assert from "node:assert/strict";
 import {
   createEgoCompatibilityContext,
   EGO_GLOBAL_HELPER_NAMES,
+  EGO_HOST_GLOBAL_HELPER_NAMES,
+  installEgoCompatibilityGlobals,
 } from "../agent/compat.js";
 
 test("the complete Ego global helper contract is exposed unchanged", () => {
-  const harness = Object.fromEntries(
+  const harness: Record<string, any> = Object.fromEntries(
     EGO_GLOBAL_HELPER_NAMES.map((name) => [name, () => name]),
+  );
+  harness.iframeTarget = () => "iframeTarget";
+  const host = Object.fromEntries(
+    EGO_HOST_GLOBAL_HELPER_NAMES.filter((name) => name !== "iframeTarget").map(
+      (name) => [name, () => name],
+    ),
   );
   const context = createEgoCompatibilityContext(
     { page: {}, browser: {}, taskSpaces: {}, site: {} },
     harness,
     () => undefined,
+    host,
   );
-  const missing = EGO_GLOBAL_HELPER_NAMES.filter(
+  const missing = [
+    ...EGO_GLOBAL_HELPER_NAMES,
+    ...EGO_HOST_GLOBAL_HELPER_NAMES,
+  ].filter(
     (name) => typeof context[name] !== "function",
   );
   assert.deepEqual(missing, []);
@@ -23,6 +35,35 @@ test("the complete Ego global helper contract is exposed unchanged", () => {
   assert.equal(context.textContent(), "textContent");
   assert.equal(context.waitForURL(), "waitForURL");
   assert.equal(context.waitForResponse(), "waitForResponse");
+  assert.equal(context.createTab("https://example.com"), "createTab");
+  assert.equal(context.getBrowserVersion(), "getBrowserVersion");
+  assert.equal(context.iframeTarget(), "iframeTarget");
+  assert.throws(
+    () => context.createTab(),
+    /ego\.createTab\(url\) expects a string URL/,
+  );
+});
+
+test("Ego-compatible helpers are non-enumerable globals except fetch", () => {
+  const target = {
+    fetch: () => "native fetch",
+  } as Record<string, any>;
+  installEgoCompatibilityGlobals(target, {
+    openOrReuseTab: () => undefined,
+    createTab: () => undefined,
+    fetch: () => "compatible fetch",
+  });
+
+  assert.equal(
+    Object.getOwnPropertyDescriptor(target, "openOrReuseTab")?.enumerable,
+    false,
+  );
+  assert.equal(
+    Object.getOwnPropertyDescriptor(target, "createTab")?.enumerable,
+    false,
+  );
+  assert.equal(Object.getOwnPropertyDescriptor(target, "fetch")?.enumerable, true);
+  assert.deepEqual(Object.keys(target), ["fetch"]);
 });
 
 test("legacy ego Skill helper names map to the facade harness", async () => {

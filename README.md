@@ -94,6 +94,16 @@ npm run build
 npm test
 ```
 
+Install the development CLI into `~/.local/bin` so the Skill can call
+`ufo-browser` directly from any working directory:
+
+```bash
+npm run cli:install:local
+```
+
+The installer preserves an unrelated existing command by default. Use
+`npm run cli:install:local -- --force` only after reviewing that exact path.
+
 Run the development App:
 
 ```bash

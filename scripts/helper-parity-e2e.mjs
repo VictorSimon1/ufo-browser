@@ -108,14 +108,41 @@ try {
     ego.result,
     "the same flat-helper Skill script must produce the same observable result",
   );
+  assert.deepEqual(
+    xBrowser.contract,
+    ego.contract,
+    "the shared Ego runtime contract must have the same globals and shapes",
+  );
   assert.ok((await stat(egoScreenshot)).size > 1_000);
   assert.ok((await stat(xBrowserScreenshot)).size > 1_000);
+
+  const performanceRatio = Number(
+    (xBrowser.timings.totalMs / Math.max(1, ego.timings.totalMs)).toFixed(3),
+  );
+  assert.ok(
+    xBrowser.timings.totalMs <= Math.max(2_000, ego.timings.totalMs * 1.75),
+    `UFO-Browser helper workflow regressed beyond the Ego performance budget: ${JSON.stringify({ ego: ego.timings, xBrowser: xBrowser.timings })}`,
+  );
 
   const evidence = {
     ok: true,
     fixtureUrl,
-    ego: { taskId: ego.taskId, screenshot: egoScreenshot },
-    xBrowser: { taskId: xBrowser.taskId, screenshot: xBrowserScreenshot },
+    ego: {
+      taskId: ego.taskId,
+      screenshot: egoScreenshot,
+      timings: ego.timings,
+      processElapsedMs: ego.processElapsedMs,
+      extensions: ego.extensions,
+    },
+    xBrowser: {
+      taskId: xBrowser.taskId,
+      screenshot: xBrowserScreenshot,
+      timings: xBrowser.timings,
+      processElapsedMs: xBrowser.processElapsedMs,
+      extensions: xBrowser.extensions,
+    },
+    performanceRatio,
+    contract: xBrowser.contract,
     result: xBrowser.result,
   };
   await writeFile(
@@ -170,23 +197,95 @@ function helperAuditSource(taskName, fixtureUrl, screenshotPath) {
     items: [...document.querySelectorAll('.item')].map(item => item.innerText),
   }))()`;
   return `
+const auditStartedAt = performance.now()
+const timings = {}
+const measure = async (name, operation) => {
+  const startedAt = performance.now()
+  const value = await operation()
+  timings[name] = Math.round((performance.now() - startedAt) * 10) / 10
+  return value
+}
+const resultOf = async operation => {
+  try { return { ok: true, value: await operation() } }
+  catch (error) { return { ok: false, name: error?.name, message: error?.message } }
+}
 const task = await useOrCreateTaskSpace(${JSON.stringify(taskName)})
-await openOrReuseTab(${JSON.stringify(fixtureUrl)}, { wait: true, timeout: 20 })
-const initialSnapshot = await snapshotText()
+const contractNames = [
+  'createTab',
+  'getBrowserVersion',
+  'listProfiles',
+  'markTaskSpaceError',
+  'sendCDPMessage',
+  'setAgentTaskState',
+  'animationHighlightMouseToPosition',
+  'iframeTarget',
+  'fetch',
+  'openOrReuseTab',
+  'snapshotText',
+  'captureScreenshot',
+]
+const descriptors = Object.fromEntries(contractNames.map(name => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, name)
+  return [name, {
+    type: typeof globalThis[name],
+    own: Boolean(descriptor),
+    enumerable: descriptor?.enumerable ?? null,
+    writable: descriptor?.writable ?? null,
+    configurable: descriptor?.configurable ?? null,
+  }]
+}))
+const version = await measure('version', () => getBrowserVersion())
+const profiles = await measure('profiles', () => listProfiles())
+const noArgCreateTab = await resultOf(() => createTab())
+const contract = {
+  descriptors,
+  version: {
+    keys: Object.keys(version).sort(),
+    currentVersionType: typeof version.currentVersion,
+    updateAvailable: version.updateAvailable,
+  },
+  profiles: profiles.profiles.map(profile => ({
+    keys: Object.keys(profile).sort(),
+    id: profile.id,
+    isDefault: profile.isDefault,
+    nameType: typeof profile.name,
+  })),
+  noArgCreateTab: {
+    ok: noArgCreateTab.ok,
+    name: noArgCreateTab.name,
+    message: noArgCreateTab.message,
+  },
+}
+const extensions = {
+  waitForRequest: typeof waitForRequest,
+  waitForResponse: typeof waitForResponse,
+  startScreencast: typeof startScreencast,
+  stopScreencast: typeof stopScreencast,
+  waitForDownload: typeof waitForDownload,
+}
+await measure('open', () => openOrReuseTab(${JSON.stringify(fixtureUrl)}, { wait: true, timeout: 20 }))
+const initialSnapshot = await measure('snapshot', () => snapshotText())
 const screenshot = 'local helper-name shadow remains legal'
-await fillInput('#name', 'Ada Lovelace')
-await click('#agree')
-await js(${JSON.stringify(setExtendedForm)})
-await click('#increment')
-await waitForElement('.item:nth-child(3)', { timeout: 5 })
+await measure('input', async () => {
+  await fillInput('#name', 'Ada Lovelace')
+  await click('#agree')
+  await js(${JSON.stringify(setExtendedForm)})
+  await click('#increment')
+  await waitForElement('.item:nth-child(3)', { timeout: 5 })
+})
 const form = await js(${JSON.stringify(readForm)})
-await captureScreenshot(${JSON.stringify(screenshotPath)})
-await click('#navigate')
-await waitForElement('#result', { timeout: 10 })
+await measure('screenshot', () => captureScreenshot(${JSON.stringify(screenshotPath)}))
+await measure('navigate', async () => {
+  await click('#navigate')
+  await waitForElement('#result', { timeout: 10 })
+})
 const page = await pageInfo()
 const resultText = await js("document.querySelector('#result').textContent")
-const browserResponse = JSON.parse(await browserFetch(${JSON.stringify(apiUrl)}))
-const serverResponse = JSON.parse(await serverFetch(${JSON.stringify(apiUrl)}))
+const responses = await measure('fetch', async () => ({
+  browserResponse: JSON.parse(await browserFetch(${JSON.stringify(apiUrl)})),
+  serverResponse: JSON.parse(await serverFetch(${JSON.stringify(apiUrl)})),
+}))
+const { browserResponse, serverResponse } = responses
 const result = {
   initialSnapshot: initialSnapshot.includes('Parity Fixture') && initialSnapshot.includes('Accept terms'),
   localShadow: screenshot,
@@ -197,11 +296,13 @@ const result = {
   browserResponse,
   serverResponse,
 }
-cliLog('__X_BROWSER_HELPER_PARITY__' + JSON.stringify({ taskId: task.id, result }))
+timings.totalMs = Math.round((performance.now() - auditStartedAt) * 10) / 10
+cliLog('__X_BROWSER_HELPER_PARITY__' + JSON.stringify({ taskId: task.id, contract, extensions, timings, result }))
 `;
 }
 
 async function runHelperAudit(runner, taskName, fixtureUrl, screenshotPath, label) {
+  const startedAt = performance.now();
   const output = await runner(
     helperAuditSource(taskName, fixtureUrl, screenshotPath),
   );
@@ -210,7 +311,10 @@ async function runHelperAudit(runner, taskName, fixtureUrl, screenshotPath, labe
     .split(/\r?\n/)
     .find((candidate) => candidate.startsWith(marker));
   if (!line) throw new Error(`${label} helper audit did not emit its result: ${output}`);
-  return JSON.parse(line.slice(marker.length));
+  return {
+    ...JSON.parse(line.slice(marker.length)),
+    processElapsedMs: Math.round((performance.now() - startedAt) * 10) / 10,
+  };
 }
 
 function escapeHtml(value) {

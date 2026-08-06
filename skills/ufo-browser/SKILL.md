@@ -26,7 +26,7 @@ EOF
 
 The heredoc body runs as a Node.js script that controls the selected ufo-browser task space. All ufo-browser helpers are preloaded into that script.
 
-The flat helper contract matches Ego 1.2.6. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades. Read [references/cli-parity.md](references/cli-parity.md) for the capability matrix and [references/api.md](references/api.md) for host protocol details.
+The shared flat helper contract matches the installed Ego 0.4.5.9 runtime and Ego Skill 1.2.3. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades plus selected forward-compatible helpers. Read [references/cli-parity.md](references/cli-parity.md) for the measured capability matrix and [references/api.md](references/api.md) for host protocol details.
 
 ## Common helpers
 

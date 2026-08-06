@@ -16,7 +16,15 @@ export async function serverFetch(url, options: any = {}) {
   const { timeout = 20.0, headers = {}, ...fetchOptions } = options;
   const response = await nativeFetch(url, {
     ...fetchOptions,
-    headers: { "User-Agent": "Mozilla/5.0", ...headers },
+    // Each CLI heredoc is a short-lived process. Undici's default keep-alive
+    // socket can otherwise hold the event loop open for roughly four seconds
+    // after the script has already finished, making UFO feel slower than Ego
+    // even when the browser work itself completed sooner.
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      Connection: "close",
+      ...headers,
+    },
     signal: AbortSignal.timeout(timeout * 1000),
   });
   if (!response.ok) {

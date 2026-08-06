@@ -29,6 +29,7 @@
     "verify:popup-download": "npm run build && node scripts/popup-download-e2e.mjs",
     "verify:fingerprint": "npm run build && node scripts/fingerprint-parity-e2e.mjs",
     "verify:janitor": "npm run build && node scripts/janitor-turnstile-e2e.mjs",
+    "cli:install:local": "npm run build && node scripts/install-local-cli.mjs",
     "skills:sync": "node scripts/sync-agent-skills.mjs",
     "skills:sync:dry-run": "node scripts/sync-agent-skills.mjs --dry-run",
     "verify:skill-sync": "node --test scripts/sync-agent-skills.test.mjs",

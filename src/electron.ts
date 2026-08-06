@@ -179,7 +179,14 @@ async function start() {
   const socketPath = isTestApp
     ? join(testRoot, "x-browser.sock")
     : join(app.getPath("userData"), "ufo-browser.sock");
-  const server = new AgentServer(socketPath, manager, leases, snapshot, broker);
+  const server = new AgentServer(
+    socketPath,
+    manager,
+    leases,
+    snapshot,
+    broker,
+    app.getVersion(),
+  );
   const assistantWorkspace = join(app.getPath("userData"), "Assistant Workspace");
   const skillSource = app.isPackaged
     ? join(process.resourcesPath, "skills/ufo-browser")

@@ -78,6 +78,21 @@ export const EGO_GLOBAL_HELPER_NAMES = [
   "learnContext",
 ] as const;
 
+export const EGO_HOST_GLOBAL_HELPER_NAMES = [
+  "createTab",
+  "getBrowserVersion",
+  "listProfiles",
+  "markTaskSpaceError",
+  "sendCDPMessage",
+  "setAgentTaskState",
+  "animationHighlightMouseToPosition",
+  "iframeTarget",
+] as const;
+
+const CREATE_TAB_ARGUMENT_ERROR =
+  "ego.createTab(url) expects a string URL.\n" +
+  "Example: await ego.createTab('https://example.com')";
+
 const secondsToMilliseconds = (value: unknown, fallback?: number) => {
   if (value === undefined) return fallback;
   const seconds = Number(value);
@@ -88,6 +103,7 @@ export function createEgoCompatibilityContext(
   modern: HelperContext,
   harness: HelperContext,
   log: (...values: unknown[]) => void,
+  host: HelperContext = (globalThis as any).ego ?? {},
 ): HelperContext {
   const page = modern.page ?? {};
   const browser = modern.browser ?? {};
@@ -183,6 +199,11 @@ export function createEgoCompatibilityContext(
     return call(modern.help ?? harness.help, ...names);
   };
 
+  const createTab = (url: unknown) => {
+    assertEgoCreateTabUrl(url);
+    return call(host.createTab, url);
+  };
+
   return {
     // Keep the current facade API available.
     ...modern,
@@ -193,6 +214,17 @@ export function createEgoCompatibilityContext(
     // Installed ego leaves Node's fetch() callable. Preserve that behavior
     // while retaining UFO-Browser's fetch.server()/fetch.browser() extensions.
     fetch: compatibleFetch,
+
+    // Raw host aliases installed by Ego alongside its runtime helpers.
+    createTab,
+    getBrowserVersion: (...args: any[]) => call(host.getBrowserVersion, ...args),
+    listProfiles: (...args: any[]) => call(host.listProfiles, ...args),
+    markTaskSpaceError: (...args: any[]) => call(host.markTaskSpaceError, ...args),
+    sendCDPMessage: (...args: any[]) => call(host.sendCDPMessage, ...args),
+    setAgentTaskState: (...args: any[]) => call(host.setAgentTaskState, ...args),
+    animationHighlightMouseToPosition: (...args: any[]) =>
+      call(host.animationHighlightMouseToPosition, ...args),
+    iframeTarget: harness.iframeTarget ?? browser.iframeTarget,
 
     // ego-lite Skill compatible flat task-space helpers.
     listTaskSpaces: harness.listTaskSpaces ?? taskSpaces.list,
@@ -288,6 +320,29 @@ export function createEgoCompatibilityContext(
     cliLog: (...values: unknown[]) => log(...values.map(formatCliLogValue)),
     help,
   };
+}
+
+export function assertEgoCreateTabUrl(url: unknown): asserts url is string {
+  if (typeof url !== "string") throw new TypeError(CREATE_TAB_ARGUMENT_ERROR);
+}
+
+export function installEgoCompatibilityGlobals(
+  target: Record<string, any>,
+  context: HelperContext,
+) {
+  for (const [name, value] of Object.entries(context)) {
+    const existing = Object.getOwnPropertyDescriptor(target, name);
+    if (existing && existing.configurable === false) {
+      target[name] = value;
+      continue;
+    }
+    Object.defineProperty(target, name, {
+      value,
+      enumerable: name === "fetch" ? (existing?.enumerable ?? true) : false,
+      writable: true,
+      configurable: true,
+    });
+  }
 }
 
 const LEGACY_HELP: Record<string, string> = {

@@ -1,28 +1,57 @@
-# UFO-Browser CLI parity with Ego 1.2.6
+# UFO-Browser CLI parity with Ego 0.4.5.9
+
+The reference installed during the current audit is Ego App `0.4.5.9` with
+Ego Skill `1.2.3`. The regression command is:
+
+```bash
+npm run verify:helper-parity
+```
+
+It sends the same heredoc program to both CLIs, compares the shared global
+contract and observable browser result, captures screenshots, and records
+operation timings in
+`.x-browser-test/runs/helper-parity/helper-parity-audit.json`.
 
 ## Capability matrix
 
-| Area | Ego Skill / CLI | UFO-Browser | Notes |
+| Area | Installed Ego | UFO-Browser | Status |
 |---|---|---|---|
-| Heredoc execution | `ego-browser nodejs` | `ufo-browser nodejs` | Same async global-helper execution model; local helper-name shadowing remains legal. |
-| Task spaces | list, create/reuse, claim, handoff, takeover, complete | Aligned | UFO-Browser additionally enforces a generation lease on every host mutation and CDP command. |
-| Tabs and navigation | list, reuse/open, switch, close, wait | Aligned | Internal new-tab file paths are hidden behind `x-browser://newtab/`. |
-| Semantic snapshots | full AX tree, refs, stable locators | Aligned | Cross-site iframe refs are collision-safe and route through the owning OOPIF session. |
-| Pointer input | selector/ref/locator/coordinate click, hover, drag, wheel | Aligned | Input uses Chromium CDP, never OS-level mouse automation. |
-| Keyboard and forms | press, type, fill, checkbox, select, events | Aligned | Trusted input is bounded by focus emulation and the visible Agent control layer. |
-| Locator facade | CSS, XPath, role/text/label/test-id, filters | Aligned | Available through flat helpers and `page.locator(...)`. |
-| Waits and events | selector, function, URL, load, request, response | Aligned | Compatibility aliases use seconds; raw facade methods use milliseconds. |
-| Files and downloads | upload and download events | Aligned | Download routing is isolated to the owning connection and Space. |
-| Screenshot and screencast | page/clip/full-page capture and video frames | Aligned | Overview preview has its own adaptive compositor budget and does not compete with Agent screencasts. |
-| Evaluate and CDP | page JS, raw CDP, event drain | Aligned | Browser-level targets are scoped so another Space cannot be observed. |
-| Fetch | Node-side and page-context requests | Aligned | `fetch` remains callable and also exposes `fetch.server` / `fetch.browser`. |
-| Site skills | discovery, Node tools, browser tools, learned context | Aligned | Resources resolve from `skills/ufo-browser`, not from an Ego installation. |
-| Help and facades | flat helpers plus page/browser/taskSpaces/site | Aligned | UFO-Browser keeps the complete flat compatibility surface and the structured facades. |
+| Heredoc execution | `ego-browser nodejs` | `ufo-browser nodejs` | Same async global-helper model and legal local name shadowing. |
+| Host aliases | `createTab`, `getBrowserVersion`, `listProfiles`, `markTaskSpaceError`, `sendCDPMessage`, `setAgentTaskState`, `animationHighlightMouseToPosition` | Same | Installed as writable, configurable, non-enumerable globals. |
+| Runtime iframe lookup | `iframeTarget` | Same | Flat global and `browser.iframeTarget(...)` are available. |
+| Native fetch | Callable, enumerable global | Same | UFO additionally exposes `fetch.server` and `fetch.browser`. |
+| Version result | `{ currentVersion, updateAvailable }` | Same shape | UFO reports its own version and never claims to be Ego. |
+| Profile result | `{ profiles: [{ id, isDefault, name }] }` | Same shape | Default profile id is `Default`; the display name remains UFO-branded. |
+| `createTab(url)` | Requires a string and returns `{ targetId }` | Same | Missing arguments throw the same `TypeError` text before RPC. |
+| Task Spaces | list, create/reuse, claim, handoff, takeover, complete | Aligned | UFO additionally enforces a generation lease on every host mutation and CDP command. |
+| Tabs and navigation | list, reuse/open, switch, close, wait | Aligned | Internal file paths are hidden behind `x-browser://newtab/`. |
+| Semantic snapshots | full AX tree, refs, stable locators | Aligned | Cross-site iframe refs route through the owning OOPIF session. |
+| Pointer and keyboard input | selectors, refs, locators, coordinates, trusted input | Aligned | UFO uses Chromium CDP and never moves the macOS pointer. |
+| Screenshots and fetch | page capture, browser fetch, server fetch | Aligned | The same fixture produces equal data and valid PNGs. |
+| Request/response waits | Not injected as flat globals in Ego 0.4.5.9 | `waitForRequest`, `waitForResponse` | Deliberate forward-compatible UFO extension. |
+| Flat download/screencast aliases | Not injected in either audited runtime | Structured UFO facades remain available | Not part of the shared installed contract. |
+
+## Latest measured workflow
+
+On the local parity fixture captured on 2026-08-07:
+
+| Runtime | In-script total | CLI process elapsed |
+|---|---:|---:|
+| Ego 0.4.5.9 | 1572.0 ms | 1712.7 ms |
+| UFO-Browser 0.1.0 | 859.3 ms | 1495.2 ms |
+
+The measured UFO in-script ratio was `0.547×` Ego. The gate also rejects a
+future UFO workflow that exceeds the bounded comparative budget. Timings are
+diagnostic rather than a universal benchmark; correctness, focus isolation,
+GPU parking, and live-preview tests remain separate hard gates.
 
 ## Deliberate differences
 
-- The executable and Skill name are `ufo-browser`; no `ego-lite` package or runtime is loaded.
-- The legacy `x-browser` executable remains as a compatibility alias during the rename.
-- Stable `EGO_*` error codes remain accepted for script compatibility even though the implementation is owned by UFO-Browser.
-- Profile/Cookie import is intentionally not implemented yet; normal Spaces share the UFO-Browser profile partition.
-- UFO-Browser adds bounded Overview renderer, preview-cache, and GPU cadence controls outside the CLI helper contract.
+- The executable and Skill name are `ufo-browser`; no Ego package or runtime is
+  loaded by the product.
+- The legacy `x-browser` executable remains as a compatibility alias.
+- Stable `EGO_*` error codes remain accepted for script compatibility.
+- Profile/Cookie import is intentionally deferred; normal Spaces share the
+  UFO-Browser profile partition.
+- UFO adds bounded Overview rendering, preview caching, and adaptive GPU
+  cadence outside the shared CLI contract.

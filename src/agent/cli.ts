@@ -3,8 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  assertEgoCreateTabUrl,
   createEgoCompatibilityContext,
   formatCliLogValue,
+  installEgoCompatibilityGlobals,
 } from "./compat.js";
 import * as runtime from "./runtime/helpers.js";
 
@@ -38,7 +40,10 @@ class AgentHost {
     this.rpc("claimTaskSpace", id, name);
   useTaskSpace = (id: number) => this.rpc("useTaskSpace", id);
   closeTaskSpace = () => this.rpc("closeTaskSpace");
-  createTab = (url?: string) => this.rpc("createTab", url);
+  createTab = (url?: string) => {
+    assertEgoCreateTabUrl(url);
+    return this.rpc("createTab", url);
+  };
   listTabs = () => this.rpc("listTabs");
   snapshot = (options?: unknown) => this.rpc("snapshot", options);
   handOffTaskSpace = () => this.rpc("handOffTaskSpace");
@@ -136,8 +141,13 @@ async function runCompatibleMain(harness: Record<string, any>) {
       ? await harness.loadAgentHelpers()
       : {};
   const modern = harness.helperContext(extra);
-  const context = createEgoCompatibilityContext(modern, harness, directLog);
-  Object.assign(globalThis, context);
+  const context = createEgoCompatibilityContext(
+    modern,
+    harness,
+    directLog,
+    host,
+  );
+  installEgoCompatibilityGlobals(globalThis, context);
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   // Ego installs helpers as globals instead of declaring one function
   // parameter per helper. Matching that execution model lets ordinary scripts

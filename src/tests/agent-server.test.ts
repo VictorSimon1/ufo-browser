@@ -83,30 +83,45 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
     const resumed = await rpc(socket, 4, "snapshot", []);
     assert.deepEqual(resumed.result, { content: "ok", refs: [] });
 
-    const labeled = await rpc(socket, 5, "setAgentTaskState", ["检查提交按钮"]);
+    const invalidTab = await rpc(socket, 5, "createTab", []);
+    assert.equal(invalidTab.type, "rpc-error");
+    assert.match(invalidTab.error, /expects a string URL/);
+
+    const labeled = await rpc(socket, 6, "setAgentTaskState", ["检查提交按钮"]);
     assert.deepEqual(labeled.result, { done: true });
     assert.equal(taskState, "检查提交按钮");
 
     const highlighted = await rpc(
       socket,
-      6,
+      7,
       "animationHighlightMouseToPosition",
       [320, 240],
     );
     assert.deepEqual(highlighted.result, { done: true });
     assert.deepEqual(pointer, { x: 320, y: 240 });
 
-    const created = await rpc(socket, 7, "createTab", ["https://example.com/"]);
-    assert.deepEqual(created.result, {
-      targetId: "page-1",
-      url: "https://example.com/",
-    });
+    const created = await rpc(socket, 8, "createTab", ["https://example.com/"]);
+    assert.deepEqual(created.result, { targetId: "page-1" });
     assert.deepEqual(agentTab, { id: space.id, url: "https://example.com/" });
 
-    const version = await rpc(socket, 8, "getBrowserVersion", []);
-    assert.deepEqual(version.result, { name: "UFO-Browser", version: "0.1.0" });
+    const version = await rpc(socket, 9, "getBrowserVersion", []);
+    assert.deepEqual(version.result, {
+      currentVersion: "0.1.0",
+      updateAvailable: false,
+    });
 
-    const handedOff = await rpc(socket, 9, "handOffTaskSpace", []);
+    const profiles = await rpc(socket, 10, "listProfiles", []);
+    assert.deepEqual(profiles.result, {
+      profiles: [
+        {
+          id: "Default",
+          isDefault: true,
+          name: "您的 UFO-Browser",
+        },
+      ],
+    });
+
+    const handedOff = await rpc(socket, 11, "handOffTaskSpace", []);
     assert.deepEqual(handedOff.result, { done: true });
     assert.deepEqual(agentConnectionStates, [true, false]);
   } finally {
@@ -127,6 +142,7 @@ function connectSocket(path: string) {
 function rpc(socket: Socket, id: number, method: string, args: unknown[]) {
   return new Promise<any>((resolve, reject) => {
     let buffer = "";
+    const onError = (error: Error) => reject(error);
     const onData = (chunk: Buffer | string) => {
       buffer += String(chunk);
       while (true) {
@@ -138,12 +154,13 @@ function rpc(socket: Socket, id: number, method: string, args: unknown[]) {
         const message = JSON.parse(line);
         if (message.id !== id) continue;
         socket.off("data", onData);
+        socket.off("error", onError);
         resolve(message);
         return;
       }
     };
     socket.on("data", onData);
-    socket.once("error", reject);
+    socket.once("error", onError);
     socket.write(`${JSON.stringify({ type: "rpc", id, method, args })}\n`);
   });
 }
