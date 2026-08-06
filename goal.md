@@ -369,7 +369,7 @@ Renderer 只能通过 `src/preload/contracts.ts` 和 `src/preload/bridge.ts` 的
 | UA/OOPIF/Turnstile | compat files、Broker | compat/OOPIF tests +真实点击回归 |
 | Chat/能力包 | Claude manager、Chat renderer、capability installer | Chat/layout/capability tests |
 | 公共 Agent API | binding、AgentServer、CLI、harness、Skill | harness tests + 打包后真实浏览器 E2E |
-| 打包、签名、安装 | `scripts/`、`docs/macos-build.md` | `dist:mac`、smoke、严格 codesign |
+| 打包、Skill 分发、安装 | `scripts/`、`docs/macos-build.md` | `dist:mac`、`package:mac:test`、`package:mac`、smoke |
 
 ### 10.1 标准开发流程
 
@@ -386,11 +386,10 @@ Renderer 只能通过 `src/preload/contracts.ts` 和 `src/preload/bridge.ts` 的
 ```bash
 cd /Users/a111/workspace/x-browser
 git diff --check
+npm run typecheck
 npm test
-npm run validate:site-skills
 npm run dist:mac
 npm run smoke
-codesign --verify --deep --strict --verbose=2 release/mac-arm64/UFO-Browser.app
 ```
 
 公共 Agent API 变化还要使用新打包 App 内 CLI 跑真实浏览器 E2E：
@@ -404,7 +403,8 @@ X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/UFO-Browser.app/Contents/Resource
 
 - 迭代使用 `npm run test:app` / `test:app:reuse` / `test:app:stop`，隔离 Profile 与 mock Keychain。
 - 测试期保持 `/Applications/UFO-Browser.app` 关闭且不变，只运行一个测试实例。
-- `npm run dist:mac` 只生成并签名 staging App，不代表已经安装。
+- `npm run dist:mac` 只生成临时 staging App；`npm run package:mac:test` 生成临时 DMG/ZIP。两者都不会同步用户级 Agent Skill，也不代表已经安装。
+- `npm run package:mac` 是低频正式内部发包入口：完整门禁通过后，才会原子更新已安装 Claude Code、Codex 等 Agent 的受管 `ufo-browser` Skill，并生成、校验 App、DMG 和 ZIP。
 - 只有用户在完整验证后的后续消息明确要求替换，才执行 `npm run install:mac:final`。
 - 替换前退出旧进程；替换后再次核对签名、bundle/hash、准确可执行路径与实例数。
 - 永远保留正式 `~/Library/Application Support/UFO-Browser/` 数据、安装脚本回滚副本和稳定本地 designated requirement。
@@ -676,24 +676,31 @@ Agent 控制期间只有网页 document-start 遮罩绘制底部“接管 / 终�
 ## 12. 构建与发布
 
 ```text
-agent harness: esbuild per-file + Rollup single bundle
 main/preload/renderer/cli: esbuild
 macOS bundle: electron-builder
-local signature: codesign ad-hoc + hardened runtime entitlements
+Skill distribution: managed atomic sync to installed Agent Skills roots
+current signing: unsigned internal/test artifact (identity: null)
 ```
 
-根目录命令：
+日常开发只使用不改动全局 Agent 目录的临时流程：
 
 ```bash
-npm test
-npm run validate:site-skills
-npm run verify:chrome-import
+npm run test:app
 npm run dist:mac
+npm run package:mac:test
 npm run smoke
-codesign --verify --deep --strict release/mac-arm64/UFO-Browser.app
 ```
 
-当前 `dist:mac` 生成 Apple Silicon 目录包并执行 ad-hoc 深度签名，适合本机开发验证。`package:mac` 从已构建 App 继续生成 DMG 与 ZIP。正式分发需要 Developer ID Application 签名、notarization 和 stapling；详见 macos-build.md。
+低频正式内部发包先预览同步目标，再运行完整流程：
+
+```bash
+npm run skills:sync:dry-run
+npm run package:mac
+```
+
+正式流程依次执行类型检查、完整单元测试、已安装 Agent 检测、受管 Skill 原子更新、重新构建、DMG/ZIP 生成和 App Bundle 资源校验。Claude Code、Codex、Cursor、Gemini CLI、GitHub Copilot CLI、OpenCode 与 `~/.agents` 标准目录只在检测为已安装时处理；现有同名目录没有 `.ufo-browser-managed.json` 时默认跳过，避免覆盖用户自有 Skill。`UFO_BROWSER_EXTRA_SKILL_ROOTS` 可增加其他 Agent 的 Skill 根目录。
+
+当前包用于本地和内部测试，`identity: null` 表示尚未配置 Developer ID 签名与 notarization。完整命令、目标路径、安全规则、临时包与正式包差异见 `docs/macos-build.md`。
 
 ## 13. 当前开发里程碑（2026-08-05）
 

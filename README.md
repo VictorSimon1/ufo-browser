@@ -125,6 +125,24 @@ npm run verify:janitor
 
 These suites cover Task Space leases, native input isolation, tab lifecycle, OOPIF routing, semantic snapshots, helper parity, Chromium fingerprint behavior, live page previews, GPU parking, and JanitorAI Turnstile completion.
 
+## macOS builds
+
+Day-to-day development builds never modify global Agent Skill folders:
+
+```bash
+npm run dist:mac
+npm run package:mac:test
+```
+
+The infrequently used formal packaging flow runs all checks, updates the managed `ufo-browser` Skill for installed Claude Code, Codex, and other supported Agent Skills clients, then produces and verifies the App, DMG, and ZIP:
+
+```bash
+npm run skills:sync:dry-run
+npm run package:mac
+```
+
+See [docs/macos-build.md](docs/macos-build.md) for target directories, ownership safeguards, temporary-build behavior, and signing limitations.
+
 ## Security and isolation
 
 - Agent transport is a current-user-only Unix socket with restrictive filesystem permissions.
