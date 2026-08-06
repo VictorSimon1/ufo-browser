@@ -122,10 +122,32 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   animation: space-card-close .16s cubic-bezier(.4,0,1,1) forwards;
 }
 .space-card[data-controlled="1"] .space-preview {
-  border-color: rgba(71, 119, 219, 0.28);
+  border-color: rgba(105, 141, 245, 0.96);
+  box-shadow:
+    0 0 0 3px rgba(105, 141, 245, 0.16),
+    0 19px 44px rgba(48, 76, 163, 0.16),
+    inset 0 1px rgba(255, 255, 255, 0.92);
+}
+.space-card[data-controlled="1"] .space-preview::before {
+  content: "";
+  position: absolute;
+  z-index: 7;
+  inset: 0;
+  display: block;
+  border: 2px solid rgba(128, 159, 255, 0.98);
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 239, 255, 0.58),
+    inset 0 0 22px rgba(88, 126, 237, 0.12);
+  pointer-events: none;
+  animation: agent-card-frame-breathe 2.8s ease-in-out infinite;
 }
 .space-card[data-controlled="1"]:hover .space-preview {
-  border-color: rgba(65, 113, 215, 0.38);
+  border-color: rgba(91, 130, 242, 1);
+  box-shadow:
+    0 0 0 4px rgba(94, 133, 244, 0.2),
+    0 23px 50px rgba(43, 70, 158, 0.2),
+    inset 0 1px rgba(255, 255, 255, 0.94);
 }
 .preview-browser-chrome {
   position: absolute;
@@ -509,6 +531,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 @keyframes page-loading { 0% { width: 4%; } 35% { width: 42%; } 70% { width: 74%; } 100% { width: 92%; } }
 @keyframes address-error { 0%, 100% { transform: translateX(0); } 35% { transform: translateX(-2px); } 70% { transform: translateX(2px); } }
 @keyframes space-card-close { to { opacity: 0; transform: scale(.975); } }
+@keyframes agent-card-frame-breathe { 0%, 100% { opacity: .76; } 50% { opacity: 1; } }
 @media (max-width: 1180px) {
   .space-chip { max-width: 118px; padding-right: 4px; }
   .tab { min-width: 82px; }

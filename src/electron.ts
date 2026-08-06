@@ -1503,6 +1503,11 @@ async function runSpaceUiAudit(context: {
     true,
   );
   const storedName = manager.getSpaceOrThrow(initial.id).name;
+  const originalState = manager.getSpaceOrThrow(initial.id);
+  const originalOwnership = originalState.ownership;
+  const originalLifecycle = originalState.lifecycle;
+  await manager.setOwnership(initial.id, "user", "active");
+  await wait(120);
   const visualBefore = await overviewView.webContents.executeJavaScript(
     `(() => {
       const card = document.querySelector('[data-space-id="${initial.id}"]');
@@ -1520,7 +1525,6 @@ async function runSpaceUiAudit(context: {
     })()`,
     true,
   );
-  const originalState = manager.getSpaceOrThrow(initial.id);
   await manager.setOwnership(initial.id, "agent", "active");
   await wait(120);
   const controlledVisual = await overviewView.webContents.executeJavaScript(
@@ -1530,21 +1534,30 @@ async function runSpaceUiAudit(context: {
       const title = card?.querySelector('.space-title-line strong');
       const detail = card?.querySelector('.space-meta span:first-child');
       const dot = detail ? getComputedStyle(detail, '::before') : null;
+      const frame = preview ? getComputedStyle(preview, '::before') : null;
       return {
         controlled: card?.getAttribute('data-controlled'),
         titleX: title?.getBoundingClientRect().x || 0,
+        previewBorderColor: preview ? getComputedStyle(preview).borderColor : '',
         previewShadow: preview ? getComputedStyle(preview).boxShadow : '',
         runningChipPresent: Boolean(card?.querySelector('.running-chip')),
         dotWidth: dot?.width || '',
         dotDisplay: dot?.display || '',
+        frameDisplay: frame?.display || '',
+        frameBorderWidth: frame?.borderTopWidth || '',
+        frameAnimation: frame?.animationName || '',
       };
     })()`,
     true,
   );
+  await writeFile(
+    join(testRoot, "space-controlled.png"),
+    await captureWebContentsPng(overviewView),
+  );
   await manager.setOwnership(
     initial.id,
-    originalState.ownership,
-    originalState.lifecycle,
+    originalOwnership,
+    originalLifecycle,
   );
   const ok =
     menu.card === true &&
@@ -1565,8 +1578,11 @@ async function runSpaceUiAudit(context: {
     controlledVisual.runningChipPresent === false &&
     controlledVisual.dotWidth === "5px" &&
     controlledVisual.dotDisplay === "inline-block" &&
+    controlledVisual.frameDisplay === "block" &&
+    controlledVisual.frameBorderWidth === "2px" &&
+    controlledVisual.frameAnimation === "agent-card-frame-breathe" &&
     Math.abs(controlledVisual.titleX - visualBefore.titleX) < 0.5 &&
-    controlledVisual.previewShadow === visualBefore.previewShadow;
+    controlledVisual.previewShadow !== visualBefore.previewShadow;
   await manager.renameSpace(initial.id, initial.name);
   await writeFile(
     join(testRoot, "space-ui-audit.json"),
