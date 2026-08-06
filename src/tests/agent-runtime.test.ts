@@ -6,7 +6,7 @@ import {
 } from "../agent/compat.js";
 import * as runtime from "../agent/runtime/helpers.js";
 
-test("the bundled X-Browser runtime owns the complete flat helper surface", () => {
+test("the bundled UFO-Browser runtime owns the complete flat helper surface", () => {
   const context = createEgoCompatibilityContext(
     runtime.helperContext(),
     runtime,

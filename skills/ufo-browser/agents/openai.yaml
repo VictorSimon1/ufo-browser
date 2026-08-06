@@ -1,0 +1,4 @@
+interface:
+  display_name: "UFO-Browser"
+  short_description: "Drive isolated UFO-Browser spaces with JavaScript"
+  default_prompt: "Use $ufo-browser to open a site in an isolated Space and complete the browser task."

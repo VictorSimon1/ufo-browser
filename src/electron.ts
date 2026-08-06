@@ -23,7 +23,9 @@ import {
   reducedChromiumUserAgent,
 } from "./main/chromium-identity.js";
 
-const isTestApp = process.env.X_BROWSER_TEST_APP === "1";
+const isTestApp =
+  process.env.UFO_BROWSER_TEST_APP === "1" ||
+  process.env.X_BROWSER_TEST_APP === "1";
 let appIsQuitting = false;
 app.on("before-quit", () => {
   appIsQuitting = true;
@@ -37,7 +39,7 @@ const testRoot = testNamespace
   : join(projectRoot, ".x-browser-test");
 if (isTestApp) app.setPath("userData", join(testRoot, "user-data"));
 
-app.setName("X-Browser");
+app.setName("UFO-Browser");
 app.userAgentFallback = reducedChromiumUserAgent(process.versions.chrome);
 app.commandLine.appendSwitch("lang", "zh-CN");
 app.commandLine.appendSwitch("accept-lang", chromiumAcceptLanguages);
@@ -59,14 +61,14 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(start)
     .catch((error) => {
-      console.error("X-Browser failed to start", error);
+      console.error("UFO-Browser failed to start", error);
       app.quit();
     });
 }
 
 async function start() {
   const traceStart = (stage: string) => {
-    if (isTestApp) console.error(`[X-Browser start] ${stage}`);
+    if (isTestApp) console.error(`[UFO-Browser start] ${stage}`);
   };
   traceStart("begin");
   const renderer = (name: string) => join(projectRoot, "dist/renderer", name);
@@ -87,7 +89,7 @@ async function start() {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    title: "X-Browser",
+    title: "UFO-Browser",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
     backgroundColor: "#f6f9f8",
@@ -164,23 +166,26 @@ async function start() {
   const broker = new CdpBroker(manager, leases);
   const socketPath = isTestApp
     ? join(testRoot, "x-browser.sock")
-    : join(app.getPath("userData"), "x-browser.sock");
+    : join(app.getPath("userData"), "ufo-browser.sock");
   const server = new AgentServer(socketPath, manager, leases, snapshot, broker);
   const assistantWorkspace = join(app.getPath("userData"), "Assistant Workspace");
   const skillSource = app.isPackaged
-    ? join(process.resourcesPath, "skills/x-browser")
-    : join(projectRoot, "skills/x-browser");
+    ? join(process.resourcesPath, "skills/ufo-browser")
+    : join(projectRoot, "skills/ufo-browser");
   await mkdir(join(assistantWorkspace, ".claude/skills"), {
     recursive: true,
     mode: 0o700,
   });
-  await cp(skillSource, join(assistantWorkspace, ".claude/skills/x-browser"), {
+  await cp(skillSource, join(assistantWorkspace, ".claude/skills/ufo-browser"), {
     recursive: true,
     force: true,
   });
   traceStart("skill-synced");
   const claude = new ClaudeSessionManager({
-    claudePath: process.env.X_BROWSER_CLAUDE_PATH || "claude",
+    claudePath:
+      process.env.UFO_BROWSER_CLAUDE_PATH ||
+      process.env.X_BROWSER_CLAUDE_PATH ||
+      "claude",
     workspace: assistantWorkspace,
     cliDirectory: app.isPackaged
       ? join(process.resourcesPath, "app.asar.unpacked/dist/bin")
@@ -1251,7 +1256,7 @@ async function runControlUiAudit(context: {
       `data:text/html;charset=utf-8,${encodeURIComponent(`
         <!doctype html><meta charset="utf-8"><title>Agent UI Audit</title>
         <style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#f4f5f3;color:#2d3532;font:16px -apple-system}.card{width:420px;padding:38px;border:1px solid #dce2df;border-radius:24px;background:#fff;box-shadow:0 24px 70px rgba(36,52,45,.1)}button{padding:12px 18px;border:0;border-radius:12px;background:#173d32;color:#fff}</style>
-        <main class="card"><h1>Agent is browsing</h1><p>The page remains visible while X-Browser protects user input.</p><button onclick="window.clickCount=(window.clickCount||0)+1">Continue</button></main>
+        <main class="card"><h1>Agent is browsing</h1><p>The page remains visible while UFO-Browser protects user input.</p><button onclick="window.clickCount=(window.clickCount||0)+1">Continue</button></main>
       `)}`,
     );
     const view = manager.getView(manager.getActiveTab(space.id).targetId)!;
@@ -1516,6 +1521,8 @@ async function runSpaceUiAudit(context: {
       const create = document.querySelector('.create-space-card');
       const plus = create?.querySelector(':scope > span');
       return {
+        brandName: document.querySelector('.overview-brand strong')?.textContent || '',
+        brandMark: document.querySelector('.overview-brand .brand-mark')?.textContent || '',
         titleX: title?.getBoundingClientRect().x || 0,
         previewRadius: preview ? getComputedStyle(preview).borderRadius : '',
         previewShadow: preview ? getComputedStyle(preview).boxShadow : '',
@@ -1571,6 +1578,8 @@ async function runSpaceUiAudit(context: {
     finalDom.renaming === false &&
     finalDom.title === renamedValue &&
     finalDom.menuHidden === true &&
+    visualBefore.brandName === "UFO-Browser" &&
+    visualBefore.brandMark === "U" &&
     visualBefore.previewRadius === "18px" &&
     visualBefore.createRadius === "18px" &&
     visualBefore.plusBorder === "none" &&

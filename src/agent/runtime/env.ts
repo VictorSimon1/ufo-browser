@@ -7,6 +7,9 @@ export const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SRC_DIR, "..");
 
 export function agentWorkspace() {
+  if (process.env.UFO_BROWSER_AGENT_WORKSPACE) {
+    return resolvePath(process.env.UFO_BROWSER_AGENT_WORKSPACE);
+  }
   if (process.env.X_BROWSER_AGENT_WORKSPACE) {
     return resolvePath(process.env.X_BROWSER_AGENT_WORKSPACE);
   }
@@ -15,6 +18,9 @@ export function agentWorkspace() {
   }
 
   const candidates = [
+    resolve(process.cwd(), "skills", "ufo-browser"),
+    resolve(REPO_ROOT, "..", "skills", "ufo-browser"),
+    resolve(REPO_ROOT, "..", "..", "skills", "ufo-browser"),
     resolve(process.cwd(), "skills", "x-browser"),
     resolve(REPO_ROOT, "..", "skills", "x-browser"),
     resolve(REPO_ROOT, "..", "..", "skills", "x-browser"),

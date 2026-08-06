@@ -11,7 +11,7 @@ const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 const egoScreenshot = join(testRoot, "ego-helper-parity.png");
 const xBrowserScreenshot = join(testRoot, "x-browser-helper-parity.png");
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 
 let electron;
 let server;
@@ -99,7 +99,7 @@ try {
     `x-browser helper parity ${Date.now()}`,
     fixtureUrl,
     xBrowserScreenshot,
-    "X-Browser",
+    "UFO-Browser",
   );
   xBrowserTaskId = xBrowser.taskId;
 
@@ -267,7 +267,7 @@ function connectOnce(socketPath) {
 }
 
 function runCli(source) {
-  return runProcess(join(root, "dist/bin/x-browser"), ["nodejs"], source);
+  return runProcess(join(root, "dist/bin/ufo-browser"), ["nodejs"], source);
 }
 
 function runEgoCli(source) {

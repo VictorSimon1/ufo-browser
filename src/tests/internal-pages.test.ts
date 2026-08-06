@@ -11,7 +11,7 @@ test("an empty navigation opens the local new-tab page", () => {
   assert.equal(normalizeNavigationUrl(""), X_BROWSER_DEFAULT_NEW_TAB_URL);
   assert.equal(isInternalNewTabUrl("x-browser://newtab/"), true);
   assert.equal(
-    isInternalNewTabUrl("file:///Applications/X-Browser/dist/renderer/newtab.html"),
+    isInternalNewTabUrl("file:///Applications/UFO-Browser/dist/renderer/newtab.html"),
     true,
   );
 });
@@ -19,7 +19,7 @@ test("an empty navigation opens the local new-tab page", () => {
 test("the persisted URL hides the physical new-tab file without masking navigation", () => {
   assert.equal(
     logicalNavigationUrl(
-      "file:///Applications/X-Browser/dist/renderer/newtab.html",
+      "file:///Applications/UFO-Browser/dist/renderer/newtab.html",
       X_BROWSER_DEFAULT_NEW_TAB_URL,
     ),
     X_BROWSER_DEFAULT_NEW_TAB_URL,

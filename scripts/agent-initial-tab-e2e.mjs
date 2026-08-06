@@ -9,7 +9,7 @@ const root = process.cwd();
 const testNamespace = "agent-initial-tab";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 let electron;
 let taskId;
 
@@ -120,7 +120,7 @@ function connectOnce(socketPath) {
 }
 
 function runCli(source) {
-  return runProcess(join(root, "dist/bin/x-browser"), ["nodejs"], source);
+  return runProcess(join(root, "dist/bin/ufo-browser"), ["nodejs"], source);
 }
 
 function runProcess(command, args, stdin = "") {

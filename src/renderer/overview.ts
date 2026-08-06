@@ -139,7 +139,7 @@ function spaceCard(spaceId: number) {
         <div class="placeholder-page">
           <span class="placeholder-mark">X</span>
           <strong>New Tab</strong>
-          <small>X-Browser Space</small>
+          <small>UFO-Browser Space</small>
           <b></b><b></b><b></b>
         </div>
       </div>
@@ -405,7 +405,7 @@ function previewAddress(value: unknown, fallback: string) {
 }
 
 function previewHost(value?: string) {
-  let label = "X-Browser Space";
+  let label = "UFO-Browser Space";
   try {
     const url = new URL(value || "");
     label = url.hostname || (url.protocol === "data:" ? "Local page" : label);

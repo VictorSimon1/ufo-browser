@@ -9,7 +9,7 @@ const root = process.cwd();
 const testNamespace = "fingerprint-parity";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 const frameServer = createServer((_request, response) => {
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.end("<!doctype html><title>Fingerprint Frame</title><main>frame</main>");
@@ -169,7 +169,7 @@ const graphicsProbeExpression = String.raw`(async () => {
   context.fillRect(0, 0, canvas.width, canvas.height)
   context.fillStyle = '#183c32'
   context.font = '17px Arial'
-  context.fillText('X-Browser / Ego fingerprint 🧭', 12, 34)
+  context.fillText('UFO-Browser / Ego fingerprint 🛸', 12, 34)
   context.fillStyle = 'rgba(73, 133, 239, .68)'
   context.beginPath()
   context.arc(84, 78, 26, 0, Math.PI * 2)
@@ -294,7 +294,7 @@ try {
     runCli,
     `x-browser fingerprint parity ${Date.now()}`,
     pagePort,
-    "X-Browser",
+    "UFO-Browser",
   );
   taskId = audit.taskId;
   verifyFingerprint(audit.root, true);
@@ -337,9 +337,9 @@ try {
     egoBaselineVersion: "0.4.5.9",
     deliberateDifferences: {
       chromiumPatch:
-        "X-Browser keeps its embedded Chromium patch version instead of overriding UAData, because a page-level override regressed JanitorAI Turnstile.",
+        "UFO-Browser keeps its embedded Chromium patch version instead of overriding UAData, because a page-level override regressed JanitorAI Turnstile.",
       viewport:
-        "X-Browser keeps outerHeight greater than innerHeight to model ordinary browser chrome, while the audited Ego background surface reported equal values.",
+        "UFO-Browser keeps outerHeight greater than innerHeight to model ordinary browser chrome, while the audited Ego background surface reported equal values.",
       connection:
         "NetworkInformation downlink and RTT are live connection estimates and are expected to vary between processes and sampling moments.",
       windowLifecycle:
@@ -656,7 +656,7 @@ function connectOnce(socketPath) {
 }
 
 function runCli(source) {
-  return runProcess(join(root, "dist/bin/x-browser"), ["nodejs"], source);
+  return runProcess(join(root, "dist/bin/ufo-browser"), ["nodejs"], source);
 }
 
 function runEgoCli(source) {

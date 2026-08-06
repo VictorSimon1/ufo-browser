@@ -8,7 +8,7 @@ const root = process.cwd();
 const testNamespace = "janitor-turnstile";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 const screenshotPath = join(testRoot, "janitor-turnstile-e2e.png");
 let electron;
 let taskId;
@@ -104,11 +104,11 @@ async function waitForTestSocket(timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
-  throw new Error("timed out waiting for X-Browser test socket");
+  throw new Error("timed out waiting for UFO-Browser test socket");
 }
 
 function runCli(code) {
-  return runProcess(join(root, "dist/bin/x-browser"), ["nodejs"], code);
+  return runProcess(join(root, "dist/bin/ufo-browser"), ["nodejs"], code);
 }
 
 function runProcess(command, args, input) {

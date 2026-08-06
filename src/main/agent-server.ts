@@ -214,7 +214,7 @@ export class AgentServer {
         return { done: true };
       }
       case "getBrowserVersion":
-        return { name: "X-Browser", version: "0.1.0" };
+        return { name: "UFO-Browser", version: "0.1.0" };
       default:
         throw new Error(`EGO_INVALID_ARGUMENT: unknown method ${method}`);
     }

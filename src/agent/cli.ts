@@ -116,17 +116,17 @@ async function runCompatibleMain(harness: Record<string, any>) {
   const argv = process.argv.slice(2).filter((arg: string) => arg !== "nodejs");
   if (argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(
-      "x-browser nodejs <<'EOF'\nconst task = await useOrCreateTaskSpace('task')\ncliLog(task)\nEOF\n",
+      "ufo-browser nodejs <<'EOF'\nconst task = await useOrCreateTaskSpace('task')\ncliLog(task)\nEOF\n",
     );
     return 0;
   }
   if (argv.length > 0) {
-    process.stderr.write("Usage: x-browser nodejs <<'EOF' ... EOF\n");
+    process.stderr.write("Usage: ufo-browser nodejs <<'EOF' ... EOF\n");
     return 2;
   }
   const code = await readStdin();
   if (!code.trim()) {
-    process.stderr.write("Usage: x-browser nodejs <<'EOF' ... EOF\n");
+    process.stderr.write("Usage: ufo-browser nodejs <<'EOF' ... EOF\n");
     return 2;
   }
   const directLog = (...values: unknown[]) => consoleOutput(...values);
@@ -166,10 +166,23 @@ function consoleOutput(...values: unknown[]) {
 }
 
 function resolveSocketPath() {
+  if (process.env.UFO_BROWSER_SOCKET) return process.env.UFO_BROWSER_SOCKET;
   if (process.env.X_BROWSER_SOCKET) return process.env.X_BROWSER_SOCKET;
-  const marker = join(process.cwd(), ".x-browser-test/socket-path");
-  if (existsSync(marker)) return readFileSync(marker, "utf8").trim();
-  return join(homedir(), "Library/Application Support/X-Browser/x-browser.sock");
+  for (const marker of [
+    join(process.cwd(), ".ufo-browser-test/socket-path"),
+    join(process.cwd(), ".x-browser-test/socket-path"),
+  ]) {
+    if (existsSync(marker)) return readFileSync(marker, "utf8").trim();
+  }
+  const primary = join(
+    homedir(),
+    "Library/Application Support/UFO-Browser/ufo-browser.sock",
+  );
+  const legacy = join(
+    homedir(),
+    "Library/Application Support/X-Browser/x-browser.sock",
+  );
+  return existsSync(primary) || !existsSync(legacy) ? primary : legacy;
 }
 
 function connect(path: string) {

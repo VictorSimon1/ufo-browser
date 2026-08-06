@@ -1,4 +1,4 @@
-# X-Browser Agent API
+# UFO-Browser Agent API
 
 ## Contents
 
@@ -9,7 +9,7 @@
 
 ## Facades
 
-The installed ego Skill flat API is also first-class. Existing scripts can call
+The installed Ego-compatible Skill flat API is also first-class. Existing scripts can call
 `useOrCreateTaskSpace`, `openOrReuseTab`, `snapshotText`, `fillInput`,
 `pressKey`, `click`, `doubleClick`, `hover`, `scrollBy`, `js`, `cdp`,
 `captureScreenshot`, `wait`, and `cliLog` without rewriting them to facades.
@@ -36,7 +36,7 @@ One connection holds at most one Space lease. A Space lease contains a generatio
 
 ## Host bindings
 
-The X-Browser-owned runtime talks to these App host methods over newline-delimited JSON on a current-user-only Unix socket:
+The UFO-Browser-owned runtime talks to these App host methods over newline-delimited JSON on a current-user-only Unix socket:
 
 ```text
 createTab                   listTabs
@@ -51,7 +51,7 @@ sendCDPMessage
 onCDPMessage                onSendCDPMessageError
 ```
 
-CDP page sessions are synthetic. `Target.attachToTarget({ flatten: true })` returns an X-Browser session id that routes commands to the selected Space and tab's in-process Electron debugger.
+CDP page sessions are synthetic. `Target.attachToTarget({ flatten: true })` returns a UFO-Browser session id that routes commands to the selected Space and tab's in-process Electron debugger.
 
 Cross-site iframe targets are scoped to the selected page using frame-owner DOM
 ids. Attaching one returns another synthetic session that forwards commands to

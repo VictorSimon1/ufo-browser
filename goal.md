@@ -2,7 +2,7 @@
 
 ---
 
-# X-Browser 当前核心架构与开发指南
+# UFO-Browser 当前核心架构与开发指南
 
 > 本文只保留开发时必须理解的系统模型、不可破坏契约、代码入口和验证门禁。Electron、TypeScript、HTML/CSS、CDP 基础等通用知识不展开。
 >
@@ -18,15 +18,15 @@
 7. **ownership 与 lease 分离。** ownership 可持久化；lease 只属于一个活跃 socket，并用 generation 阻止过期命令。
 8. **只允许显式接管。** 点击网页、滚动或碰触浏览器控件不会转移控制；只有“接管”和“终止任务”改变状态。
 9. **Agent 只走本地 Unix socket 与进程内 `webContents.debugger`。** 不开放远程调试端口，不使用 `-enable-automation`，不使用 OS 鼠标键盘兜底。
-10. **Chrome 导入是一次性复制到独立 X-Browser Profile。** 不修改源 Chrome，也不在用户登出后恢复旧 Cookie。
+10. **Chrome 导入是一次性复制到独立 UFO-Browser Profile。** 不修改源 Chrome，也不在用户登出后恢复旧 Cookie。
 11. **Overview 预览有界、内存态、不可交互。** 不落盘，不在启动时唤醒全部 Space，不改变 Presentation。
 12. **左侧 Claude 工作台复用同一 Agent 链路。** 它不能直接控制 page debugger，也不能成为第二套 ownership/lease 系统。
-13. **迭代只用隔离测试 App。** 完整验证后，只有用户再次明确要求替换，才能覆盖 `/Applications/X-Browser.app`。
+13. **迭代只用隔离测试 App。** 完整验证后，只有用户再次明确要求替换，才能覆盖 `/Applications/UFO-Browser.app`。
 
 修改这些契约前必须阅读：
 
-- `.codex/skills/x-browser-development/SKILL.md`
-- `.codex/skills/x-browser-development/references/protected-contracts.md`
+- `.codex/skills/ufo-browser-development/SKILL.md`
+- `.codex/skills/ufo-browser-development/references/protected-contracts.md`
 
 契约变更必须先向用户说明当前行为、拟议行为、影响、回滚和测试，获得明确确认后再改代码。
 
@@ -34,7 +34,7 @@
 
 ```mermaid
 flowchart LR
-  Agent["Agent / Claude"] --> CLI["x-browser CLI"]
+  Agent["Agent / Claude"] --> CLI["ufo-browser CLI"]
   CLI -->|"NDJSON / Unix socket"| Server["AgentServer"]
   Server --> Lease["SpaceLeaseRegistry"]
   Server --> Manager["TaskSpaceManager"]
@@ -43,7 +43,7 @@ flowchart LR
   Broker -->|"webContents.debugger"| Target["受管页面 target"]
   Snapshot --> Broker
 
-  subgraph App["单实例 X-Browser App"]
+  subgraph App["单实例 UFO-Browser App"]
     Main["src/electron.ts"]
     Presentation["PresentationCoordinator"]
     ChatManager["ClaudeSessionManager"]
@@ -98,7 +98,7 @@ flowchart LR
 主要持久位置：
 
 ```
-~/Library/Application Support/X-Browser/
+~/Library/Application Support/UFO-Browser/
 ├── browser-state.json / browser-library.json / downloads.json / profiles.json
 ├── site-permissions/*.json
 ├── Chrome Import/
@@ -106,7 +106,7 @@ flowchart LR
 ├── Claude Chat/index.json
 ├── Claude Chat/conversations/*.jsonl.enc
 ├── Assistant Workspace/
-└── x-browser.sock
+└── ufo-browser.sock
 ```
 
 ## 3. 单窗口 Presentation、View 栈与页面坐标
@@ -205,7 +205,7 @@ Space 持久记录包括 id/name、createdBy、ownership、lifecycle、profileId
 
 ```
 Agent JavaScript
-  → 短命 x-browser CLI
+  → 短命 ufo-browser CLI
   → 本地 Unix socket
   → AgentServer 选择 Space 并获取 lease
   → CdpBroker synthetic session
@@ -253,10 +253,10 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 - generation fence 阻止旧 snapshot 回填新页面。
 - 跨轮次优先 `loc=href:`、`loc=role:`、`loc=css:`、XPath 或稳定 CSS。
 - 内存 revision cache 最多覆盖 24 个标签，revision 来自 DOM、URL/readyState、表单值和 viewport scroll。
-- X-Browser 自己的遮罩变化不应使页面 snapshot 失效；iframe 和页面自有 shadow tree 保持保守 uncached 路径。
+- UFO-Browser 自己的遮罩变化不应使页面 snapshot 失效；iframe 和页面自有 shadow tree 保持保守 uncached 路径。
 - cache 不落盘、不跨 App 重启，返回前复制 refs。
 
-公共 Agent API 变化必须同步 binding、AgentServer、CLI、harness `helperContext()`/JSDoc/`help()`、`docs/agent-cli.md`、README 与 `skills/x-browser/SKILL.md`。
+公共 Agent API 变化必须同步 binding、AgentServer、CLI、harness `helperContext()`/JSDoc/`help()`、`docs/agent-cli.md`、README 与 `skills/ufo-browser/SKILL.md`。
 
 ## 6. Overview 实时预览
 
@@ -294,7 +294,7 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 ```
 检测 Profile
   → 复制到受保护 staging
-  → Keychain 解密 Cookie，并立即用 X-Browser safeStorage 重加密
+  → Keychain 解密 Cookie，并立即用 UFO-Browser safeStorage 重加密
   → 下次启动、session.fromPartition 前原子激活
   → 普通 Cookie / CHIPS 分别写入
   → 按 domain + name + path + value + partition key 精确验证
@@ -322,7 +322,7 @@ Chat renderer
   → Chat preload
   → ClaudeSessionManager
   → Claude CLI stream-json
-  → 受管 x-browser / xemail Skill 与 CLI
+  → 受管 ufo-browser / xemail Skill 与 CLI
   → 现有 Agent socket
 ```
 
@@ -333,7 +333,7 @@ Chat renderer
 - Tool 调用按稳定 `toolUseId` 更新同一 transcript message；Assistant streaming 与最终事件复用 message id，进程结束必须收口 pending 状态，避免重复对话和永久光标。
 - 历史会话使用 `-resume claudeSessionId` 恢复模型记忆。
 - transcript 写盘前加密，Tool 输入/结果进入 Renderer 前脱敏。
-- App bundle manifest 是受管能力 source of truth；只更新带 X-Browser 管理标记的 Skill/CLI，保留用户自有同名内容。
+- App bundle manifest 是受管能力 source of truth；只更新带 UFO-Browser 管理标记的 Skill/CLI，保留用户自有同名内容。
 - Chat 发出的浏览器操作继续遵守 ownership、lease、后台不聚焦与显式接管。
 
 核心入口：`src/main/claude-chat/`、`src/main/assistant-capabilities.ts`、`src/renderer/chat/`、`scripts/build-assistant-bundle.mjs`。
@@ -384,30 +384,30 @@ Renderer 只能通过 `src/preload/contracts.ts` 和 `src/preload/bridge.ts` 的
 ### 10.2 完成与发布门禁
 
 ```bash
-cd /Users/mac011/workspace/x-browser
+cd /Users/a111/workspace/x-browser
 git diff --check
 npm test
 npm run validate:site-skills
 npm run dist:mac
 npm run smoke
-codesign --verify --deep --strict --verbose=2 release/mac-arm64/X-Browser.app
+codesign --verify --deep --strict --verbose=2 release/mac-arm64/UFO-Browser.app
 ```
 
 公共 Agent API 变化还要使用新打包 App 内 CLI 跑真实浏览器 E2E：
 
 ```bash
-X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/X-Browser.app/Contents/Resources/bin/x-browser" \
-  npm run e2e --workspace @x-browser/agent-harness
+X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/UFO-Browser.app/Contents/Resources/bin/ufo-browser" \
+  npm run e2e --workspace @ufo-browser/agent-harness
 ```
 
 ### 10.3 测试 App 与正式替换
 
 - 迭代使用 `npm run test:app` / `test:app:reuse` / `test:app:stop`，隔离 Profile 与 mock Keychain。
-- 测试期保持 `/Applications/X-Browser.app` 关闭且不变，只运行一个测试实例。
+- 测试期保持 `/Applications/UFO-Browser.app` 关闭且不变，只运行一个测试实例。
 - `npm run dist:mac` 只生成并签名 staging App，不代表已经安装。
 - 只有用户在完整验证后的后续消息明确要求替换，才执行 `npm run install:mac:final`。
 - 替换前退出旧进程；替换后再次核对签名、bundle/hash、准确可执行路径与实例数。
-- 永远保留正式 `~/Library/Application Support/X-Browser/` 数据、安装脚本回滚副本和稳定本地 designated requirement。
+- 永远保留正式 `~/Library/Application Support/UFO-Browser/` 数据、安装脚本回滚副本和稳定本地 designated requirement。
 - 本地 ad-hoc 签名用于当前机器开发验证；正式对外分发仍需要 Developer ID、notarization 和 stapling。
 
 ## 11. 事实来源与延伸文档
@@ -415,7 +415,7 @@ X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/X-Browser.app/Contents/Resources/
 发生冲突时按以下顺序判断：
 
 1. 当前代码与可重复测试结果；
-2. `.codex/skills/x-browser-development/` 的开发与保护契约；
+2. `.codex/skills/ufo-browser-development/` 的开发与保护契约；
 3. `docs/architecture.md`；
 4. 对应专项文档；
 5. 本文。
@@ -429,17 +429,17 @@ X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/X-Browser.app/Contents/Resources/
 - `docs/ego-runtime-parity-audit.md`
 - `docs/macos-build.md`
 
-架构行为改变后，应在同一个提交中同步相关源码测试、`x-browser/docs/architecture.md`、专项文档、开发 Skill 和本文，避免本文再次退化为历史调研稿。
+架构行为改变后，应在同一个提交中同步相关源码测试、`ufo-browser/docs/architecture.md`、专项文档、开发 Skill 和本文，避免本文再次退化为历史调研稿。
 
 ```markdown
-# X-Browser 技术架构
+# UFO-Browser 技术架构
 
 ## 1. 产品目标
 
-X-Browser 把可见浏览器、持久本地 Profile、隔离 Task Space、人机控制权和 Agent 代码运行时放在同一个 macOS App 中：
+UFO-Browser 把可见浏览器、持久本地 Profile、隔离 Task Space、人机控制权和 Agent 代码运行时放在同一个 macOS App 中：
 
 - 用户使用 Spaces 总览、标签页和地址栏。
-- Agent 通过 `x-browser nodejs` 发送一段完整 JavaScript。
+- Agent 通过 `ufo-browser nodejs` 发送一段完整 JavaScript。
 - CLI 每轮执行后退出，页面与登录态继续保存在 App 中。
 - 所有自动化通过内部 CDP bridge 进入当前 Agent 所属的 Task Space。
 
@@ -449,7 +449,7 @@ X-Browser 把可见浏览器、持久本地 Profile、隔离 Task Space、人机
 
 ```mermaid
 flowchart TD
-  A["Agent heredoc"] --> B["x-browser launcher"]
+  A["Agent heredoc"] --> B["ufo-browser launcher"]
   B --> C["Agent CLI"]
   C -->|"NDJSON over Unix socket"| D["AgentServer"]
   D --> E["TaskSpaceManager"]
@@ -468,20 +468,20 @@ flowchart TD
 
 | 组件                      | 生命周期                | 职责                                             |
 | ------------------------- | ----------------------- | ------------------------------------------------ |
-| X-Browser App             | 长命、单实例            | 窗口、页面、Profile、Task Space、CDP、socket     |
-| `x-browser` CLI           | 每个 heredoc 一个短进程 | 连接 App、注入 helper、执行 Agent 脚本、输出结果 |
+| UFO-Browser App             | 长命、单实例            | 窗口、页面、Profile、Task Space、CDP、socket     |
+| `ufo-browser` CLI           | 每个 heredoc 一个短进程 | 连接 App、注入 helper、执行 Agent 脚本、输出结果 |
 | 页面 renderer             | 标签页级                | 承载网站；无 Node integration                    |
 | Overview/browser renderer | App 页面级              | 通过 contextBridge 白名单 IPC 管理 UI            |
 
 默认持久目录：
 
 ```text
-~/Library/Application Support/X-Browser/
+~/Library/Application Support/UFO-Browser/
 ├── browser-state.json
 ├── profiles.json
 ├── Chrome Import/
 ├── Partitions/
-├── x-browser.sock
+├── ufo-browser.sock
 └── Chromium profile data
 ```
 
@@ -494,7 +494,7 @@ flowchart TD
 打包启动器使用 App 自带 Electron/Node 运行 `agent/cli/index.js`，因此最终用户不需要为 CLI 单独安装运行时。CLI 的步骤是：
 
 1. 解析 host 参数；`nodejs` 是兼容入口，`--sdk-path SDK` 可指定精确 SDK 构建用于 E2E。
-2. 连接 `x-browser.sock`；连接失败时启动 X-Browser 的 `--agent-background` 模式并等待就绪。
+2. 连接 `ufo-browser.sock`；连接失败时启动 UFO-Browser 的 `--agent-background` 模式并等待就绪。
 3. 构造兼容的 `globalThis.ego` host bridge。
 4. 私有加载 Agent harness，安装 facade 与 host 包装器。
 5. 读取 stdin，将 helper 作为 `AsyncFunction` 的词法参数注入后执行。
@@ -622,7 +622,7 @@ type SnapshotResult = {
 - generation 标记阻止旧页面的异步 snapshot 在失效后回填 ref map。
 - 新 CLI 轮次中的 ref map 初始为空；第一次使用 `@N` 会自动重新 snapshot。只有当前页面上下文未改变且同一个 backend node 仍存在时，旧数字才可能继续使用；跨轮次优先稳定 `loc=` 或 CSS。
 
-完整 AX/DOM 捕获在超大页面上成本较高，因此 `SnapshotService` 还维护一个最多 24 个标签的内存 revision cache。每个页面在 Electron 隔离 world 中使用 `MutationObserver`、URL/readyState、表单值签名以及 viewport scope 的滚动坐标生成版本标记；版本和 snapshot options 完全一致时，后续 CLI 轮次直接复用相同语义结果，不再重复 `Accessibility.getFullAXTree` 与 `DOMSnapshot.captureSnapshot`。Agent 接管遮罩自身的 host 更新不计入页面 revision，避免连接/断连把未变化页面错误失效；真实 DOM、文本、属性、表单值、导航或滚动变化会立即重捕获。iframe 和页面自有 shadow tree 不能由主文档 observer 完整覆盖，因此保持保守的 uncached 路径；X-Browser 自己 aria-hidden 的 closed-shadow 控制遮罩是唯一例外。缓存不落盘、不保存截图、不跨 App 重启，并复制 refs 后再返回，调用方不能污染缓存内容。
+完整 AX/DOM 捕获在超大页面上成本较高，因此 `SnapshotService` 还维护一个最多 24 个标签的内存 revision cache。每个页面在 Electron 隔离 world 中使用 `MutationObserver`、URL/readyState、表单值签名以及 viewport scope 的滚动坐标生成版本标记；版本和 snapshot options 完全一致时，后续 CLI 轮次直接复用相同语义结果，不再重复 `Accessibility.getFullAXTree` 与 `DOMSnapshot.captureSnapshot`。Agent 接管遮罩自身的 host 更新不计入页面 revision，避免连接/断连把未变化页面错误失效；真实 DOM、文本、属性、表单值、导航或滚动变化会立即重捕获。iframe 和页面自有 shadow tree 不能由主文档 observer 完整覆盖，因此保持保守的 uncached 路径；UFO-Browser 自己 aria-hidden 的 closed-shadow 控制遮罩是唯一例外。缓存不落盘、不保存截图、不跨 App 重启，并复制 refs 后再返回，调用方不能污染缓存内容。
 
 ## 9. 浏览器输入、观察与反自动化表面
 
@@ -630,7 +630,7 @@ type SnapshotResult = {
 
 页面触发 `window.open()`、`target=_blank` 或命名 popup 时，Manager 不再拒绝原生 child 后另建一个无关联标签。它通过 Electron `setWindowOpenHandler({ action: "allow", createWindow })` 将 Chromium 传入的完整 constructor options 原样交给受管 `WebContentsView`，从而保留真实 `WindowProxy`、`window.opener`、`postMessage`、命名窗口复用和 `popup.close()/closed` 语义。child 同步登记为同一 Space 的 managed tab，继承原 Profile/沙箱/ownership/overlay/CDP 边界；后台 Agent popup 不改变 Presentation，也不会创建第二个 macOS 产品窗口。popup 自身或 opener 关闭 child 时，native WebContents 销毁会关闭对应标签并清理 CDP session。
 
-X-Browser 不启用 Electron 远程调试或常见自动化启动参数。浏览器启动时同时设置全局 `app.userAgentFallback` 和每个 Profile Session 的 reduced Chromium UA；两处都必须设置，因为 Electron 的 Session UA 不会覆盖跨站 OOPIF，而 Cloudflare Turnstile 等挑战正运行在这种独立 renderer iframe 中。页面保持 Chromium 原生 `navigator.userAgentData`、locale 和语言列表，不发送页面级 `Network.setUserAgentOverride`：同 Profile 克隆 A/B 证明其中的 `acceptLanguage` override 会让 JanitorAI Turnstile 从自动通过稳定退化为失败，而无 override 的 OOPIF 语义拼接与可信输入仍正常。HTTPS 与可信 localhost 请求继续补齐与原生 `navigator.userAgentData` 一致的低熵 `Sec-CH-UA`、`Sec-CH-UA-Mobile` 和 `Sec-CH-UA-Platform`。
+UFO-Browser 不启用 Electron 远程调试或常见自动化启动参数。浏览器启动时同时设置全局 `app.userAgentFallback` 和每个 Profile Session 的 reduced Chromium UA；两处都必须设置，因为 Electron 的 Session UA 不会覆盖跨站 OOPIF，而 Cloudflare Turnstile 等挑战正运行在这种独立 renderer iframe 中。页面保持 Chromium 原生 `navigator.userAgentData`、locale 和语言列表，不发送页面级 `Network.setUserAgentOverride`：同 Profile 克隆 A/B 证明其中的 `acceptLanguage` override 会让 JanitorAI Turnstile 从自动通过稳定退化为失败，而无 override 的 OOPIF 语义拼接与可信输入仍正常。HTTPS 与可信 localhost 请求继续补齐与原生 `navigator.userAgentData` 一致的低熵 `Sec-CH-UA`、`Sec-CH-UA-Mobile` 和 `Sec-CH-UA-Platform`。
 
 页面加载前的隔离 preload 为普通网页补齐 Chromium 的 `window.chrome.loadTimes()`、`chrome.csi()` 和 `chrome.app` 表面，不暴露 Node、Electron IPC 或 Agent API。smoke 测试同时检查 reduced UA、UAData、`window.chrome` shape、`navigator.webdriver === false` 和常见异常自动化全局不存在；Cloudflare demo 另保留一次人工点击回归，因为挑战结果不能由 DOM 状态替代。
 
@@ -639,13 +639,13 @@ X-Browser 不启用 Electron 远程调试或常见自动化启动参数。浏览
 Chrome 导入采用“准备 → 重启前切换 → Chromium 写入 → 精确验证”四阶段：
 
 1. 检测 `Default` / `Profile N`；Chrome 运行时要求用户确认后正常退出。
-2. 从 macOS Keychain 读取 `Chrome Safe Storage`，支持 Cookie DB v24 host digest 与 AES-CBC 解密；明文 Cookie 立即通过 X-Browser `safeStorage` 重新加密后写入权限受限的 pending 文件。
+2. 从 macOS Keychain 读取 `Chrome Safe Storage`，支持 Cookie DB v24 host digest 与 AES-CBC 解密；明文 Cookie 立即通过 UFO-Browser `safeStorage` 重新加密后写入权限受限的 pending 文件。
 3. Local Storage、IndexedDB、Session Storage、Service Worker、Bookmarks、History 和 Favicons 等优先通过 APFS clone 复制到 staging；下载历史随 History 数据库迁移。
 4. 下一次启动、任何 `session.fromPartition()` 之前，重新解析 staging 中的书签和 SQLite 数据并核对计数，然后原子切换目标 Profile 目录并保留导入前备份。
 5. 普通 Cookie 通过 Electron Cookie API 写入；CHIPS/分区 Cookie 通过同一 Profile 的隐藏 WebContents 与 `Network.setCookie` 写入。
 6. 以 `domain + name + path + value + partition key` 精确验证 Cookie，并分别记录书签、历史、下载历史和 Favicons 的导入及验证计数。
 
-Chrome session Cookie 导入时获得 30 天有效期，使其跨 X-Browser 重启保留。导入是一次性复制，站点后续删除 Cookie 或用户退出登录后不会从快照重复注入。当前 Sessions/窗口/标签组、密码与扩展明确不导入；History 最近记录不会被冒充为当前会话。详见 chrome-profile-import.md。
+Chrome session Cookie 导入时获得 30 天有效期，使其跨 UFO-Browser 重启保留。导入是一次性复制，站点后续删除 Cookie 或用户退出登录后不会从快照重复注入。当前 Sessions/窗口/标签组、密码与扩展明确不导入；History 最近记录不会被冒充为当前会话。详见 chrome-profile-import.md。
 
 ## 11. UI IPC 与安全边界
 
@@ -661,7 +661,7 @@ renderer 只能通过 contextBridge 白名单调用 `x-browser:*` channel：
 - 页面 renderer 开启 sandbox 与 context isolation，关闭 Node integration。
 - Agent socket 与状态文件只允许当前用户访问；不监听 TCP/WebSocket。
 - 主窗口使用单实例锁，第二次打开请求只显示并聚焦现有窗口。
-- Agent Skill/CLI 安装只覆盖带 X-Browser 管理标记的目标，保留用户自有同名内容。
+- Agent Skill/CLI 安装只覆盖带 UFO-Browser 管理标记的目标，保留用户自有同名内容。
 
 Presentation 与实时预览遵循单一 View 不变量：Overview 的主窗口子树中页面 `WebContentsView` 数量恒为 0；Space 模式只 attach 用户明确打开的当前页面，后台 Agent 页面不会加入主窗口。Overview renderer 使用 `IntersectionObserver` 触发观察更新，但每次发布都以卡片当前 DOM rectangle 重新计算真正可见的卡片（最多 8 个）；这样 App 冷启动时即使原生 `WebContentsView` 的显示切换没有产生新的 observer entry，也会在首帧及两次短延迟复核中主动上报，不再一直停在 `Updating`。Manager 为后台页面提供一个共享、与真实浏览器页面区域同尺寸同屏幕位置、`opacity: 0`、不可聚焦、忽略鼠标且隐藏于 Mission Control 的内部 `BaseWindow` compositor surface。该 surface 只有在实际持有页面 View 时才保持 visible；最后一个页面 detach、预览停流或 View 迁入主窗口后立即 `hide()`，避免一个空的全透明原生窗口继续覆盖 Space 页面区域并触发 macOS 额外合成或闪烁。页面只需在该 surface 上完成一次原生挂载，就能在 detach 后继续保留真实 Retina DPR 和物理 `screen`/`outer` geometry；Agent-owned 页面额外尝试 CDP focus emulation，以维持 `visibilityState: visible` 和可运行的 `requestAnimationFrame`，但 focus 是兼容优化而不是输入门禁：只要几何、DPR 和 compositor visibility 已收敛，即使 `document.hasFocus()` 仍为 `false` 也必须发送 CDP 输入，这与 ego lite 的后台 Agent 行为一致。用户接管、handoff、complete 或 error 时立即关闭该 emulation。多个同尺寸 `WebContentsView` 重叠挂在同一个 surface 时只有最上层能稳定提交 compositor damage，因此 Manager 只为一个主要的可见 Agent Space 保留进程内 `Page.startScreencast`；其余可见且仍有 live renderer 的 Agent/user/completed Space 使用约 1.8 秒一轮、按卡片错峰的有界 JPEG capture，避免卡片永久停在旧图。仅为历史卡片首张缩略图临时创建的 renderer 在成功 capture 后立即释放；不可见卡片只显示 metadata/fallback 和最后缓存，不会在重启时被批量唤醒。实时卡片通常直接使用首个 screencast frame；若完全空闲的 compositor 没有提交初始 damage，则延迟执行一次静态 fallback，首个实时帧到达时会取消该 fallback。JPEG 帧以二进制 IPC 发送，renderer 在每张卡片的持久 Canvas 上绘制，解码期间只保留一个最新 pending frame，旧 Canvas 帧会一直保留到新帧完整解码并完成绘制，因此不会出现每秒替换 `<img>` 产生的白闪或追赶陈旧帧队列。主实时卡片上限约 2 FPS，其他页面截图继续经过共享 surface 的串行原生挂载和最多两个业务 capture 的有界队列；失败且已有旧图的卡片也会执行有限重试，不再永久显示 `Updating`。卡片移出视口、Overview 隐藏、主窗口最小化/隐藏、关闭或 Agent 自己开始 screencast 时立即停流并释放挂载；重新可见时自动恢复。Agent screencast 与 Overview screencast 使用显式 suspend/resume 仲裁，内部预览帧不会泄漏到 Agent CDP 事件流。
 
@@ -671,7 +671,7 @@ Presentation 与实时预览遵循单一 View 不变量：Overview 的主窗口�
 
 Agent 控制期间只有网页 document-start 遮罩绘制底部“接管 / 终止任务”栏；持久 Browser Shell 只负责锁定标签栏、地址栏和工具栏，并保留右上角 Spaces 观察按钮，不再绘制第二个底部控制栏。页面填满真实可用区域后，接管遮罩连续覆盖网页，Shell 的 Chrome 锁定层连续覆盖浏览器控件。
 
-左侧 Claude CLI 聊天工作台采用独立持久 `WebContentsView`、主进程 `spawn + NDJSON` 适配和严格 Chat preload 白名单；它不成为新的 Presentation 路由，也不旁路 Space ownership/lease。代码层已经保留 `AssistantChatProvider` provider registry：当前可运行 provider 是 `claude`，`codex` 作为 reserved provider 暴露在状态和会话 metadata 中，后续 Codex CLI adapter 必须复用同一个 Chat 面板、workspace 校验、受管能力包、日志脱敏和 Agent socket 路径。App 使用受管 capability manifest 自动把随包 `x-browser`、Cloudflare/Turnstile、一次性邮箱 Skill 以及 `x-browser`、`xemail` CLI 同步到 Claude 用户目录和 `~/Library/Application Support/X-Browser/Assistant Workspace/.claude/skills`；同时把通用 `x-browser` Skill 同步到 Codex/Agents skill 根目录。Browser Agent 与纯 Chat 从这个 App 托管工作目录启动，显式启用 Claude `Skill` tool，并使用 strict empty MCP config 阻止用户配置中的第二浏览器控制路径；Workspace Work 保持用户项目 cwd，并通过 `--add-dir` 读取受管工作目录。该同步在 Claude 会话创建前完成，以当前 App bundle 的版本、架构和 SHA-256 为 source of truth，只更新带 X-Browser 管理标记的目标，运行时不从外部工作区或网络执行未校验 Skill/CLI；用户自有同名 CLI 被保留时，Chat 仍优先使用 App 内已校验 CLI，并在能力面板标记为“内置可用”。Claude 第一版即可通过现有 Agent socket 驱动后台 Space。Tool 调用以稳定 `toolUseId` 映射为一条可更新、可加密持久化的 transcript message，Assistant 流式块和最终 `assistant` 事件也复用同一 message id，`result` 或异常退出会收口 pending 状态，避免重复消息和永久流式光标；重新打开已有会话时使用 `--resume claudeSessionId` 恢复 Claude 记忆。输入/结果进入 renderer 前先脱敏；前端只展示一行 X-Browser 语义摘要，按需展开详情，并通过 keyed reconciliation 保持流式内容、滚动和展开状态。当前实现将聊天面板作为窗口布局状态：右侧 Overview/Browser Shell 根据 `shellLayoutChanged` IPC 调整 traffic-light safe area 和页面相对坐标；主进程先在内存中同步更新 chat/content bounds，再合并持久化 resize 事件，避免原子写队列导致左右面板之间出现延迟空白条。主进程保留 renderer 上报的相对页面矩形和产生该矩形时的 native content 尺寸；只有当前 content 尺寸仍匹配时才复用缓存并叠加最新 `contentBounds.x`，窗口、聊天栏或解锁恢复改变可用区域时立即回退到完整页面矩形，避免等待 renderer 下一帧期间出现右侧空白条。页面 `WebContentsView` 始终位于聊天栏右侧，切换和拖动都不 detach、不 `loadFile()`、不刷新网页。完整架构、坐标转换、能力安装、进程协议、权限模式、存储和测试计划见 claude-chat-sidebar.md。
+左侧 Claude CLI 聊天工作台采用独立持久 `WebContentsView`、主进程 `spawn + NDJSON` 适配和严格 Chat preload 白名单；它不成为新的 Presentation 路由，也不旁路 Space ownership/lease。代码层已经保留 `AssistantChatProvider` provider registry：当前可运行 provider 是 `claude`，`codex` 作为 reserved provider 暴露在状态和会话 metadata 中，后续 Codex CLI adapter 必须复用同一个 Chat 面板、workspace 校验、受管能力包、日志脱敏和 Agent socket 路径。App 使用受管 capability manifest 自动把随包 `ufo-browser`、Cloudflare/Turnstile、一次性邮箱 Skill 以及 `ufo-browser`、`xemail` CLI 同步到 Claude 用户目录和 `~/Library/Application Support/UFO-Browser/Assistant Workspace/.claude/skills`；同时把通用 `ufo-browser` Skill 同步到 Codex/Agents skill 根目录。Browser Agent 与纯 Chat 从这个 App 托管工作目录启动，显式启用 Claude `Skill` tool，并使用 strict empty MCP config 阻止用户配置中的第二浏览器控制路径；Workspace Work 保持用户项目 cwd，并通过 `--add-dir` 读取受管工作目录。该同步在 Claude 会话创建前完成，以当前 App bundle 的版本、架构和 SHA-256 为 source of truth，只更新带 UFO-Browser 管理标记的目标，运行时不从外部工作区或网络执行未校验 Skill/CLI；用户自有同名 CLI 被保留时，Chat 仍优先使用 App 内已校验 CLI，并在能力面板标记为“内置可用”。Claude 第一版即可通过现有 Agent socket 驱动后台 Space。Tool 调用以稳定 `toolUseId` 映射为一条可更新、可加密持久化的 transcript message，Assistant 流式块和最终 `assistant` 事件也复用同一 message id，`result` 或异常退出会收口 pending 状态，避免重复消息和永久流式光标；重新打开已有会话时使用 `--resume claudeSessionId` 恢复 Claude 记忆。输入/结果进入 renderer 前先脱敏；前端只展示一行 UFO-Browser 语义摘要，按需展开详情，并通过 keyed reconciliation 保持流式内容、滚动和展开状态。当前实现将聊天面板作为窗口布局状态：右侧 Overview/Browser Shell 根据 `shellLayoutChanged` IPC 调整 traffic-light safe area 和页面相对坐标；主进程先在内存中同步更新 chat/content bounds，再合并持久化 resize 事件，避免原子写队列导致左右面板之间出现延迟空白条。主进程保留 renderer 上报的相对页面矩形和产生该矩形时的 native content 尺寸；只有当前 content 尺寸仍匹配时才复用缓存并叠加最新 `contentBounds.x`，窗口、聊天栏或解锁恢复改变可用区域时立即回退到完整页面矩形，避免等待 renderer 下一帧期间出现右侧空白条。页面 `WebContentsView` 始终位于聊天栏右侧，切换和拖动都不 detach、不 `loadFile()`、不刷新网页。完整架构、坐标转换、能力安装、进程协议、权限模式、存储和测试计划见 claude-chat-sidebar.md。
 
 ## 12. 构建与发布
 
@@ -690,7 +690,7 @@ npm run validate:site-skills
 npm run verify:chrome-import
 npm run dist:mac
 npm run smoke
-codesign --verify --deep --strict release/mac-arm64/X-Browser.app
+codesign --verify --deep --strict release/mac-arm64/UFO-Browser.app
 ```
 
 当前 `dist:mac` 生成 Apple Silicon 目录包并执行 ad-hoc 深度签名，适合本机开发验证。`package:mac` 从已构建 App 继续生成 DMG 与 ZIP。正式分发需要 Developer ID Application 签名、notarization 和 stapling；详见 macos-build.md。
@@ -701,16 +701,16 @@ codesign --verify --deep --strict release/mac-arm64/X-Browser.app
 - Ego-compatible Skill/helper、Agent Space ownership、JanitorAI Turnstile 与 fingerprint/OOPIF 回归已经建立独立验证路径。
 - Overview 卡片使用真实页面缩略图与一个有界主 screencast；Space 打开后再返回 Overview 时复用同一 WebContents，动态页面继续更新，不以重载或替换 renderer 伪造连续性。
 - Space 卡片右上角使用 macOS 风格省略号菜单，支持鼠标、右键、Shift+F10、F2、Escape 与内联重命名；关闭动作收敛到同一菜单，避免悬浮关闭按钮误触。
-- 所有 E2E 使用 `.x-browser-test/runs/<suite>` 独立 userData、PID 与 Unix socket。常驻临时 App 继续使用 `.x-browser-test` 根目录；测试清理只能终止自己 marker 中的 PID，不能再通过 `pgrep` 关闭用户正在看的预览窗口。
+- 所有 E2E 继续使用兼容目录 `.x-browser-test/runs/<suite>` 隔离 userData、PID 与 Unix socket。常驻临时 App 使用 `.x-browser-test` 根目录；测试清理只能终止自己 marker 中的 PID，不能再通过 `pgrep` 关闭用户正在看的预览窗口。
 - 对应回归命令新增 `npm run verify:space-ui`；`verify:preview-startup` 与 `verify:live-preview` 也在隔离实例中运行，后者要求打开/返回前后的 `webContentsId` 保持一致。
 - 新 Space 默认打开本地 `x-browser://newtab/`，物理 `newtab.html` 路径不会进入地址栏或持久状态。`verify:preview-startup` 每轮先清理自己独立的测试 Profile，连续冷启动均在约 2.8 秒采样前得到 ready canvas 与首帧，不再被旧 Google 状态或代理网络掩盖。
 - 当前回归为 38/38 单元测试通过；Space 菜单、冷启动、实时预览往返、fingerprint/OOPIF 和 JanitorAI Turnstile 均通过。常驻临时 App 已更新到本轮构建，纯浏览器 Overview 全宽运行，12 秒 settled 采样中首屏 8 张可见卡片全部 ready、无 preview error。
-- X-Browser CLI 现在完整暴露 Ego `LEGACY_GLOBAL_HELPERS` 调用表面，包括 `check`、`selectOption`、`textContent`、`waitForURL`、`waitForRequest/Response` 等，不再只覆盖 Skill 常用别名。脚本执行也改为与 Ego 一致的全局 helper 绑定，用户可正常声明 `const screenshot`、`const count` 等同名局部变量；真实表单 helper 审计与 Janitor 回归均已验证。
+- UFO-Browser CLI 现在完整暴露 Ego `LEGACY_GLOBAL_HELPERS` 调用表面，包括 `check`、`selectOption`、`textContent`、`waitForURL`、`waitForRequest/Response` 等，不再只覆盖 Skill 常用别名。脚本执行也改为与 Ego 一致的全局 helper 绑定，用户可正常声明 `const screenshot`、`const count` 等同名局部变量；真实表单 helper 审计与 Janitor 回归均已验证。
 - Overview 预览缓存采用 24 项与 8 MiB 双上限 LRU，保护当前可见卡片、正在 Presentation/预留的页面、pending capture 与主 screencast；本地 New Tab 冷捕获使用短提交预算。新增 `npm run verify:restart-scale`：64 个持久 Space 冷启动在 2.8 秒采样前首屏 8 张全部 ready，滚动到 Space 64 时仍保持 renderer ≤ 1、隐藏 surface ≤ 1、业务 capture ≤ 2、冷 capture ≤ 1，缓存严格停在 24 项并发生真实 LRU 淘汰，证明总 Space 数不会线性扩大后台页面与预览内存。
 - Agent 控制态的页面反馈已按 Ego Lite 收敛：只有用户真正进入受控 Space 后才创建点阵保护层，Overview 卡片与后台 Agent 页面不绘制遮罩或运行其动画；前台保护层使用静态高密度点阵、冷色边缘光和仅由 transform/opacity 驱动的低成本流动高光，无全屏模糊。底部只保留一套接近 macOS 原生质感的深色控制胶囊；Agent 的鼠标移动/点击会显示带“正在浏览网页”标签的可见指针反馈，坐标经过页面视口约束，不再从左上角闪入或落到页面外。遮罩宿主始终允许网页命中，只有胶囊按钮自身接收用户点击。
 - Browser Chrome 的右上角 Overview 按钮显示当前 Space 总数，并以“返回 Spaces，共 N 个”的可访问标签说明动作；点击后只切换 Presentation，不释放 Agent ownership、不销毁或重载当前页面 runtime。新增 `npm run verify:control-ui` 同时验证 Chrome 锁定、遮罩视觉/输入隔离、Space 数量按钮以及返回 Overview 后 `webContentsId` 保持不变。
 - 本轮完整回归保持 38/38 单元测试通过；最终 Agent 控制截图指针位于目标附近。fingerprint 根页面与跨域 OOPIF 均保持 `navigator.webdriver === false`、无自动化全局且指纹表面一致；JanitorAI `/register` 自动获得 837 字符 Turnstile token。冷启动首帧、64-Space 有界恢复、Space UI 与 live preview 往返继续通过，没有依赖冻结最后一帧掩盖加载或切换闪烁。
-- 真实 Ego 0.4.5.8 与 X-Browser 使用同一段 `useOrCreateTaskSpace → openOrReuseTab` 脚本对照后，修复了 Agent Space 首次导航残留一个无用 New Tab 的差距。Agent RPC 现在只在 Space 仍然只有唯一内部 New Tab 时复用原 target 并直接导航；用户点击浏览器“+”仍走普通 `createTab`，已有真实页面时 Agent 再打开不同 URL 也会正常增加标签。新增 `npm run verify:agent-initial-tab`：首次打开前后 targetId 相同且标签数保持 1，第二个不同 URL 后标签数才变为 2。该变化减少 Agent Space 的持久标签状态和总览卡片噪声，也避免多 Space 重启时恢复无业务价值的初始页。
+- 真实 Ego 0.4.5.8 与 UFO-Browser 使用同一段 `useOrCreateTaskSpace → openOrReuseTab` 脚本对照后，修复了 Agent Space 首次导航残留一个无用 New Tab 的差距。Agent RPC 现在只在 Space 仍然只有唯一内部 New Tab 时复用原 target 并直接导航；用户点击浏览器“+”仍走普通 `createTab`，已有真实页面时 Agent 再打开不同 URL 也会正常增加标签。新增 `npm run verify:agent-initial-tab`：首次打开前后 targetId 相同且标签数保持 1，第二个不同 URL 后标签数才变为 2。该变化减少 Agent Space 的持久标签状态和总览卡片噪声，也避免多 Space 重启时恢复无业务价值的初始页。
 - 首次标签复用路径启用后，JanitorAI `/register` 仍自动生成 816 字符 Turnstile token；fingerprint/OOPIF、live preview 往返和 64-Space 冷启动均重新通过。64-Space 回归在与三个独立 Electron 核心回归争用 CPU/GPU 时曾错过固定采样窗，独立运行后首屏 8 张全部 ready、runtime=1、cold capture=1、缓存 24 项并发生 28 次 LRU 淘汰，确认调度本身未回退。
 - 按用户新增要求，总览从 4 列 `16:9` 小缩略卡改为更接近目标图的 3 列 `3:2` 大浏览器卡。在 1470 CSS px 桌面内容宽度下，卡片从约 322px 扩大到约 436px；扣除 47px 预览 Chrome 后，页面区域宽高比更接近真实 1470×754 页面视口，减少旧布局对网页内容的纵向压扁。新建 Space 卡片使用同一比例，菜单、重命名与 hover/press 动效保持一致。
 - `live-preview-e2e` 不再只以主进程收到 screencast 帧作为“外面能看到变化”的间接证据。测试诊断现在对 Overview renderer 中每张 ready Canvas 生成 16×16 像素签名并记录实际 CSS 尺寸；最新动态页面测试的签名从 `303866b0` 变为 `97a1ce99`、`canvasPixelsChanged=true`，实测预览比例 `1.50002687`，同时页面数值推进到 74、往返 `webContentsId` 不变且清理完成，直接证明内页变化已经绘制到外层卡片而不是停在旧缩略图。
@@ -720,8 +720,8 @@ codesign --verify --deep --strict release/mac-arm64/X-Browser.app
 - macOS 主窗口生命周期改为浏览器式保活：点击红色关闭按钮只隐藏窗口并同步停止 Overview 预览捕获，不销毁窗口、shell renderer 或内存缩略图；Dock 再激活或第二次启动会显示并聚焦原窗口，Cmd+Q 才真正退出。新增 `npm run verify:window-lifecycle`，实测隐藏态 `visible=false`、`previewActive=false`、renderer 未销毁；重新激活后 `overviewWebContentsId` 与写入 DOM 的生命周期 token 均保持不变。补丁后 38/38 单元测试、动态 Canvas 像素变化和 64-Space 有界恢复继续通过。
 - 新一轮目标图/Ego 对照收敛了纯浏览器 UI 的状态噪声：Agent 卡片不再插入会让标题横向跳动的“运行中”胶囊，也不再使用大面积蓝色外发光；页面内真实控制遮罩继续作为主要反馈，卡片信息行只保留固定 5px 状态点。预览/新建卡片圆角统一为 18px，悬浮位移与阴影减弱，新建卡改为目标图中的裸 `+`，背景和 sticky header 更中性。`space-ui-e2e` 现在验证 user→agent 状态切换前后标题 x 坐标完全一致、没有旧 chip、预览阴影不变且新圆角/状态点准确生效。
 - Browser Chrome 补齐常用 macOS 浏览器交互：点击 `+` 或 `⌘T` 创建本地 New Tab 后，主进程在页面 native attach 完成后把 first responder 交还持久 Chrome，并二次确认聚焦/全选地址栏；`⌘1…⌘9`、`Ctrl+Tab`、`Ctrl+Shift+Tab`、`⌘⌥←/→` 串行读取最新 tab 状态后切换，`⌘[/]` 执行前进后退，`⌘⇧T` 不再被误当成普通新标签。新增 `npm run verify:browser-interaction`，真实 Electron 验证新标签地址栏焦点、数字定位、循环切换、快速连续指令和 Presentation 往返 renderer 保活。最终 38/38 单测、Space UI、Browser interaction、窗口生命周期、动态预览与 64-Space 稳定态全部通过；动态 Canvas 签名 `5349c2d4 → bd4d15c5`，64-Space 仍为 runtime=1、hidden surface=1、空 capture 队列、24 项缓存与 30 次 LRU 淘汰。
-- 使用真实 Ego 0.4.5.8 创建三个标签并逐个选择/关闭后确认其顺序语义：新标签追加到末尾，关闭当前中间标签时激活原右邻，只有关闭末尾时才退回左邻。X-Browser 已修正此前无条件选左侧的差距，并新增持久化 tab reorder mutation：拖拽只重排 `TabRecord` 和现有 button 节点，不 detach 当前页面、不改变 active target、不创建或重载 `WebContents`。Browser Chrome 同时支持中键关闭、双击标签栏空白新建、`⌘⇧[` / `⌘⇧]` 前后切标签，拖拽期间使用克制的插入线和透明度反馈；右上角 Spaces 返回按钮现在显示明确的 2×2 网格图标与数量。`verify:browser-interaction` 通过真实 DragEvent 验证按钮节点、active target 和 `webContentsId` 在排序前后保持不变，并验证中键关闭当前中间标签后选择右邻、释放被关 runtime 而保留右邻 renderer。补丁后 38/38 单测、窗口保活、动态 Canvas `12739ad6 → 5a236623` 和 64-Space 有界恢复继续通过。
-- 指纹验证现已在同一轮分别启动真实 Ego 0.4.5.8 与 X-Browser，对同一 localhost 顶层页面和跨域 OOPIF 分两轮采集 Navigator、权限、原生描述符、Canvas/WebGL、Web Audio、编解码器、字体与媒体查询。修复了 Session 全局 permission check 把 `Notification.permission` 强制成 `denied` 的矛盾：真实权限请求仍默认拒绝，但页面初始权限状态按 Ego 的顶层/iframe 语义保持一致；`payment-handler`、`persistent-storage`、`local-fonts` 等扩展查询也已纳入门禁。Manager 的 viewport 与预览内容探针不再以 `userGesture=true` 执行，避免页面刚加载就污染 `navigator.userActivation`；Electron 特有的初始 AudioContext running 表面按未交互 Chrome 语义显示为 suspended。审计只允许实时 `navigator.connection` 估值、嵌入 Chromium patch 版本与普通浏览器 Chrome 高度三类差异，其余漂移直接失败；完整证据写入 `.x-browser-test/runs/fingerprint-parity/fingerprint-parity-audit.json`，终端只输出摘要。本轮 38/38 单测、严格 Ego 指纹、JanitorAI 816 字符 Turnstile token、动态 Canvas 像素变化与 64-Space 有界恢复全部通过。
-- 新增 `npm run verify:helper-parity`，把完全相同的公共 Skill 脚本分别交给真实 Ego 0.4.5.8 和隔离 X-Browser App。fixture 覆盖 `useOrCreateTaskSpace`、首次导航、`snapshotText`、`fillInput`、真实 checkbox/button 点击、`js`、动态元素等待、截图、页面导航、`pageInfo`、`browserFetch` 与 `serverFetch`；两边逐字段得到相同的表单状态、三项动态列表、最终 `/done` URL、页面结果文本和网络响应，并分别生成有效 PNG。审计同时确认当前 Ego 0.4.5.8 的文档公共表面比 X-Browser 内置的新 harness 小：`check`、`selectOption`、`waitForURL` 等在 Ego 当前版本中未定义，X-Browser 继续保留这些向前兼容扩展，但同脚本硬门禁只使用双方真实共有 API。完整证据保存在 `.x-browser-test/runs/helper-parity/helper-parity-audit.json`；本轮 38/38 单测继续通过。
+- 使用真实 Ego 0.4.5.8 创建三个标签并逐个选择/关闭后确认其顺序语义：新标签追加到末尾，关闭当前中间标签时激活原右邻，只有关闭末尾时才退回左邻。UFO-Browser 已修正此前无条件选左侧的差距，并新增持久化 tab reorder mutation：拖拽只重排 `TabRecord` 和现有 button 节点，不 detach 当前页面、不改变 active target、不创建或重载 `WebContents`。Browser Chrome 同时支持中键关闭、双击标签栏空白新建、`⌘⇧[` / `⌘⇧]` 前后切标签，拖拽期间使用克制的插入线和透明度反馈；右上角 Spaces 返回按钮现在显示明确的 2×2 网格图标与数量。`verify:browser-interaction` 通过真实 DragEvent 验证按钮节点、active target 和 `webContentsId` 在排序前后保持不变，并验证中键关闭当前中间标签后选择右邻、释放被关 runtime 而保留右邻 renderer。补丁后 38/38 单测、窗口保活、动态 Canvas `12739ad6 → 5a236623` 和 64-Space 有界恢复继续通过。
+- 指纹验证现已在同一轮分别启动真实 Ego 0.4.5.8 与 UFO-Browser，对同一 localhost 顶层页面和跨域 OOPIF 分两轮采集 Navigator、权限、原生描述符、Canvas/WebGL、Web Audio、编解码器、字体与媒体查询。修复了 Session 全局 permission check 把 `Notification.permission` 强制成 `denied` 的矛盾：真实权限请求仍默认拒绝，但页面初始权限状态按 Ego 的顶层/iframe 语义保持一致；`payment-handler`、`persistent-storage`、`local-fonts` 等扩展查询也已纳入门禁。Manager 的 viewport 与预览内容探针不再以 `userGesture=true` 执行，避免页面刚加载就污染 `navigator.userActivation`；Electron 特有的初始 AudioContext running 表面按未交互 Chrome 语义显示为 suspended。审计只允许实时 `navigator.connection` 估值、嵌入 Chromium patch 版本与普通浏览器 Chrome 高度三类差异，其余漂移直接失败；完整证据写入 `.x-browser-test/runs/fingerprint-parity/fingerprint-parity-audit.json`，终端只输出摘要。本轮 38/38 单测、严格 Ego 指纹、JanitorAI 816 字符 Turnstile token、动态 Canvas 像素变化与 64-Space 有界恢复全部通过。
+- 新增 `npm run verify:helper-parity`，把完全相同的公共 Skill 脚本分别交给真实 Ego 0.4.5.8 和隔离 UFO-Browser App。fixture 覆盖 `useOrCreateTaskSpace`、首次导航、`snapshotText`、`fillInput`、真实 checkbox/button 点击、`js`、动态元素等待、截图、页面导航、`pageInfo`、`browserFetch` 与 `serverFetch`；两边逐字段得到相同的表单状态、三项动态列表、最终 `/done` URL、页面结果文本和网络响应，并分别生成有效 PNG。审计同时确认当前 Ego 0.4.5.8 的文档公共表面比 UFO-Browser 内置的新 harness 小：`check`、`selectOption`、`waitForURL` 等在 Ego 当前版本中未定义，UFO-Browser 继续保留这些向前兼容扩展，但同脚本硬门禁只使用双方真实共有 API。完整证据保存在 `.x-browser-test/runs/helper-parity/helper-parity-audit.json`；本轮 38/38 单测继续通过。
 
 ```

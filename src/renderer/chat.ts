@@ -31,7 +31,7 @@ async function submit() {
 function append(role: "user" | "assistant", text: string) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
-  article.innerHTML = `<div class="message-label">${role === "user" ? "你" : "X-Browser"}</div><p></p>`;
+  article.innerHTML = `<div class="message-label">${role === "user" ? "你" : "UFO-Browser"}</div><p></p>`;
   article.querySelector("p")!.textContent = text;
   conversation.append(article);
   conversation.scrollTop = conversation.scrollHeight;

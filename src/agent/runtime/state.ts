@@ -7,7 +7,10 @@ import { browserCdp } from "./browser-runtime.js";
 loadEnv();
 
 export const NAME =
-  process.env.X_BROWSER_NAME || process.env.EGO_BROWSER_NAME || "default";
+  process.env.UFO_BROWSER_NAME ||
+  process.env.X_BROWSER_NAME ||
+  process.env.EGO_BROWSER_NAME ||
+  "default";
 
 async function defaultSend(req) {
   if (!req || typeof req !== "object" || !req.method) {

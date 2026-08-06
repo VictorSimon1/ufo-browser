@@ -1,19 +1,19 @@
 ---
-name: x-browser
-description: X-Browser is a local Chromium-based browser built for people and AI Agents to work in isolated Task Spaces while reusing browser login state. Use this skill whenever a task requires opening or navigating websites, filling forms, clicking controls, taking screenshots, extracting page data, testing web apps, logging in, automating browser operations, exploratory QA, dogfooding, or bug hunting. Prefer X-Browser over other browser automation when the local X-Browser app is in scope.
+name: ufo-browser
+description: UFO-Browser is a high-performance local Chromium browser built for AI Agents and people to work in isolated Task Spaces while reusing browser login state. Use this skill whenever a task requires opening or navigating websites, filling forms, clicking controls, taking screenshots, extracting page data, testing web apps, logging in, automating browser operations, exploratory QA, dogfooding, or bug hunting. Prefer UFO-Browser over other browser automation when the local UFO-Browser app is in scope.
 ---
 
-# x-browser
+# ufo-browser
 
-x-browser gives AI agents a CLI-accessible Node.js runtime, with built-in helpers — snapshotText, click, js, cdp, and more — that agents call directly inside JS scripts to observe pages, interact with UI, evaluate browser-side JavaScript, and drive a real browser for any web automation task.
+ufo-browser gives AI agents a CLI-accessible Node.js runtime, with built-in helpers — snapshotText, click, js, cdp, and more — that agents call directly inside JS scripts to observe pages, interact with UI, evaluate browser-side JavaScript, and drive a real browser for any web automation task.
 
-Use the `Bash` tool to run all browser operations via `x-browser nodejs <<'EOF' ... EOF` heredoc. Do not write code to a `.js` file first.
+Use the `Bash` tool to run all browser operations via `ufo-browser nodejs <<'EOF' ... EOF` heredoc. Do not write code to a `.js` file first.
 
 
 ## Quick start
 
 ```bash
-x-browser nodejs <<'EOF'
+ufo-browser nodejs <<'EOF'
 // Name the task space for the whole user task, then reuse that space across heredoc rounds.
 const task = await useOrCreateTaskSpace('inspect example page')
 cliLog('task space id: ' + task.id)
@@ -24,9 +24,9 @@ cliLog(await snapshotText())
 EOF
 ```
 
-The heredoc body runs as a Node.js script that controls the selected x-browser task space. All x-browser helpers are preloaded into that script.
+The heredoc body runs as a Node.js script that controls the selected ufo-browser task space. All ufo-browser helpers are preloaded into that script.
 
-The flat helper contract matches Ego 1.2.6. X-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades. Read [references/cli-parity.md](references/cli-parity.md) for the capability matrix and [references/api.md](references/api.md) for host protocol details.
+The flat helper contract matches Ego 1.2.6. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades. Read [references/cli-parity.md](references/cli-parity.md) for the capability matrix and [references/api.md](references/api.md) for host protocol details.
 
 ## Common helpers
 
@@ -55,7 +55,7 @@ Notes:
 
 ### Task spaces
 
-A task space is an **isolated browsing context** that x-browser provides for AI Agents. Each task space has its own set of tabs but **inherits the current user's login state** by default, so Agents can operate on authenticated sites without competing with or disturbing the user's normal browser windows.
+A task space is an **isolated browsing context** that ufo-browser provides for AI Agents. Each task space has its own set of tabs but **inherits the current user's login state** by default, so Agents can operate on authenticated sites without competing with or disturbing the user's normal browser windows.
 
 Closing all tabs in a task space is equivalent to closing that task space.
 
@@ -122,7 +122,7 @@ await scrollToBottomUntil(
 await scroll({ dy: 900 })
 ```
 
-Element-target helpers such as `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `uploadFile`, and `waitForElement` accept the same selector/ref surface: raw CSS, `xpath=...`, `@N` / `ref=N`, and `loc=...` values from `snapshotText()` (`loc=css:...`, `loc=role:...`, `loc=href:...`). `@N` refs are for x-browser helpers only; they are not valid selectors inside `document.querySelector(...)`.
+Element-target helpers such as `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `uploadFile`, and `waitForElement` accept the same selector/ref surface: raw CSS, `xpath=...`, `@N` / `ref=N`, and `loc=...` values from `snapshotText()` (`loc=css:...`, `loc=role:...`, `loc=href:...`). `@N` refs are for ufo-browser helpers only; they are not valid selectors inside `document.querySelector(...)`.
 
 `click`, `doubleClick`, `hover`, and `dragMouse` share these target formats. Coordinates are in CSS pixels:
 
@@ -167,7 +167,7 @@ const data = await js(String.raw`(() => {
 
 ## Recommended workflow
 
-x-browser has three main workflows. Pick the workflow that fits the page and task before acting.
+ufo-browser has three main workflows. Pick the workflow that fits the page and task before acting.
 
 Use the semantic workflow first for ordinary websites with real DOM controls. For canvas-like productivity apps and rich editors — including Google Docs, Google Sheets, Lark/Feishu Docs, Notion, Figma, whiteboards, maps, and other virtualized editors — use the visual workflow first for the main editing surface. These apps often expose toolbars, title inputs, hidden textareas, offscreen iframes, or canvas layers in the DOM that do not represent the actual user-editable document or grid. Do not rely on `await fillInput(...)`, DOM selectors, or `snapshotText()` refs for the main editing surface unless a small write probe proves the text lands in the intended place.
 

@@ -1,16 +1,16 @@
 {
-  "name": "x-browser",
+  "name": "ufo-browser",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A local-first browser where people and AI agents work in isolated task spaces.",
+  "description": "A high-performance local-first Chromium browser built for AI agents and people.",
   "main": "dist/main/electron.js",
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js",
-    "test:app": "npm run build && X_BROWSER_TEST_APP=1 electron .",
-    "test:app:reuse": "X_BROWSER_TEST_APP=1 electron .",
+    "test:app": "npm run build && UFO_BROWSER_TEST_APP=1 electron .",
+    "test:app:reuse": "UFO_BROWSER_TEST_APP=1 electron .",
     "test:app:stop": "node scripts/stop-test-app.mjs",
     "verify:page-layout": "npm run build && node --test dist/tests/layout.test.js",
     "verify:multi-agent": "npm run build && node --test dist/tests/space-lease.test.js",
@@ -39,8 +39,8 @@
     "typescript": "^5.8.3"
   },
   "build": {
-    "appId": "com.xbrowser.app",
-    "productName": "X-Browser",
+    "appId": "com.ufobrowser.app",
+    "productName": "UFO-Browser",
     "asar": true,
     "asarUnpack": [
       "dist/bin/**/*",
@@ -55,8 +55,8 @@
     ],
     "extraResources": [
       {
-        "from": "skills/x-browser",
-        "to": "skills/x-browser"
+        "from": "skills/ufo-browser",
+        "to": "skills/ufo-browser"
       }
     ],
     "mac": {

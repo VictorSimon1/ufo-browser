@@ -434,7 +434,10 @@ export async function scopedChildTargets(contents: WebContents) {
       }),
       contents.debugger.sendCommand("Target.getTargets"),
     ]);
-    if (process.env.X_BROWSER_DEBUG_TARGETS === "1") {
+    if (
+      process.env.UFO_BROWSER_DEBUG_TARGETS === "1" ||
+      process.env.X_BROWSER_DEBUG_TARGETS === "1"
+    ) {
       console.error(
         "X_BROWSER_TARGET_DEBUG",
         JSON.stringify({ frames, document, targets }),

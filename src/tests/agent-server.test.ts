@@ -103,7 +103,10 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
     });
     assert.deepEqual(agentTab, { id: space.id, url: "https://example.com/" });
 
-    const handedOff = await rpc(socket, 8, "handOffTaskSpace", []);
+    const version = await rpc(socket, 8, "getBrowserVersion", []);
+    assert.deepEqual(version.result, { name: "UFO-Browser", version: "0.1.0" });
+
+    const handedOff = await rpc(socket, 9, "handOffTaskSpace", []);
     assert.deepEqual(handedOff.result, { done: true });
     assert.deepEqual(agentConnectionStates, [true, false]);
   } finally {

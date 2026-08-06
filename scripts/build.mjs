@@ -55,7 +55,7 @@ await build({
 await build({
   ...shared,
   entryPoints: ["src/agent/cli.ts"],
-  outfile: "dist/agent/x-browser.js",
+  outfile: "dist/agent/ufo-browser.js",
   platform: "node",
   format: "esm",
   banner: { js: "#!/usr/bin/env node" },
@@ -77,6 +77,8 @@ await cp("src/renderer/agent-overlay.css", "dist/renderer/agent-overlay.css");
 await cp("src/renderer/styles.css", "dist/renderer/styles.css");
 
 await mkdir(join(dist, "bin"), { recursive: true });
-await cp("scripts/x-browser-launcher.sh", join(dist, "bin/x-browser"));
-await chmod(join(dist, "bin/x-browser"), 0o755);
-console.log("X-Browser build complete");
+for (const name of ["ufo-browser", "x-browser"]) {
+  await cp("scripts/ufo-browser-launcher.sh", join(dist, "bin", name));
+  await chmod(join(dist, "bin", name), 0o755);
+}
+console.log("UFO-Browser build complete");

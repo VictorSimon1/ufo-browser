@@ -168,7 +168,7 @@ function render(next: any) {
     "aria-label",
     `返回 Spaces，共 ${spaceCount} 个`,
   );
-  document.title = next.activeTab?.title || next.space.name || "X-Browser";
+  document.title = next.activeTab?.title || next.space.name || "UFO-Browser";
   const controlled = next.space.ownership === "agent" && next.space.lifecycle === "active";
   if (targetChanged && pendingNavigation?.targetId !== nextTargetId) {
     pendingNavigation = undefined;
@@ -336,7 +336,7 @@ function currentDisplayAddress() {
 }
 
 function siteColor(value: string) {
-  let host = "x-browser";
+  let host = "ufo-browser";
   try {
     host = new URL(value).hostname || host;
   } catch {

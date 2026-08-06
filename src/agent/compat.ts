@@ -12,7 +12,7 @@ const nodeFetch =
 // Keep this list in lockstep with ego-browser/src/index.ts
 // LEGACY_GLOBAL_HELPERS. The installed Ego Skill is allowed to use either its
 // documented convenience names or this lower-level global surface, so an
-// X-Browser script should not need source edits when moved between runtimes.
+// UFO-Browser scripts should not need source edits when moved between runtimes.
 export const EGO_GLOBAL_HELPER_NAMES = [
   "click",
   "dblclick",
@@ -187,11 +187,11 @@ export function createEgoCompatibilityContext(
     // Keep the current facade API available.
     ...modern,
     // Preserve Ego's complete raw global helper contract. The documented
-    // aliases below intentionally override a few names where X-Browser must
+    // aliases below intentionally override a few names where UFO-Browser must
     // convert Skill timeout values from seconds to milliseconds.
     ...egoGlobals,
     // Installed ego leaves Node's fetch() callable. Preserve that behavior
-    // while retaining X-Browser's fetch.server()/fetch.browser() extensions.
+    // while retaining UFO-Browser's fetch.server()/fetch.browser() extensions.
     fetch: compatibleFetch,
 
     // ego-lite Skill compatible flat task-space helpers.

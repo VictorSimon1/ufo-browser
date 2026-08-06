@@ -10,7 +10,7 @@ const root = process.cwd();
 const testNamespace = "window-lifecycle";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 const electron = join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",

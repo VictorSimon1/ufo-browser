@@ -12,12 +12,12 @@ const testNamespace = "agent-surface-budget";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 const userData = join(testRoot, "user-data");
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 const electron = join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
 );
-const cli = join(root, "dist/bin/x-browser");
+const cli = join(root, "dist/bin/ufo-browser");
 const launchedAt = Date.now();
 let child;
 let stderr = "";
@@ -352,7 +352,7 @@ function runCli(source) {
     process.once("error", reject);
     process.once("exit", (code) => {
       if (code === 0) resolve(stdout.trim());
-      else reject(new Error(cliStderr || `x-browser exited ${code}`));
+      else reject(new Error(cliStderr || `ufo-browser exited ${code}`));
     });
     process.stdin.end(source);
   });

@@ -63,8 +63,11 @@ export class ClaudeSessionManager {
       env: {
         ...process.env,
         PATH: `${this.options.cliDirectory}:${process.env.PATH || ""}`,
+        UFO_BROWSER_SOCKET: this.options.socketPath,
         X_BROWSER_SOCKET: this.options.socketPath,
+        UFO_BROWSER_AGENT_WORKSPACE: this.options.workspace,
         X_BROWSER_AGENT_WORKSPACE: this.options.workspace,
+        UFO_BROWSER_NODE: process.execPath,
         X_BROWSER_NODE: process.execPath,
         ELECTRON_RUN_AS_NODE: "1",
       },
@@ -148,4 +151,4 @@ export class ClaudeSessionManager {
   }
 }
 
-const SYSTEM_PROMPT = `You are the Browser Agent embedded in X-Browser. For every website interaction, use the bundled x-browser skill and the x-browser CLI available on PATH. Work in isolated Task Spaces and reuse the same numeric Space id across command rounds. Never launch Chrome, Playwright, Puppeteer, or another browser controller. Do not use OS-level mouse or keyboard automation. Browser control must flow through X-Browser's local socket, ownership, lease, and CDP bridge. Keep the user informed with concise results and preserve live pages only when useful.`;
+const SYSTEM_PROMPT = `You are the Browser Agent embedded in UFO-Browser. For every website interaction, use the bundled ufo-browser skill and the ufo-browser CLI available on PATH. Work in isolated Task Spaces and reuse the same numeric Space id across command rounds. Never launch Chrome, Playwright, Puppeteer, or another browser controller. Do not use OS-level mouse or keyboard automation. Browser control must flow through UFO-Browser's local socket, ownership, lease, and CDP bridge. Keep the user informed with concise results and preserve live pages only when useful.`;

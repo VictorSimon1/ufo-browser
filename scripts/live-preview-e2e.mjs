@@ -10,12 +10,12 @@ const root = process.cwd();
 const testNamespace = "live-preview";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
-process.env.X_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 const electron = join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
 );
-const cli = join(root, "dist/bin/x-browser");
+const cli = join(root, "dist/bin/ufo-browser");
 let child;
 let taskId;
 let completed = false;
@@ -27,7 +27,7 @@ try {
   await waitForTestSocket(Date.now(), 20_000);
   const created = JSON.parse(
     await runCli(`
-const task = await useOrCreateTaskSpace('x-browser live preview e2e ' + Date.now())
+const task = await useOrCreateTaskSpace('ufo-browser live preview e2e ' + Date.now())
 const html = \`<!doctype html><meta charset="utf-8"><title>Live Preview E2E</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(205 72% 90%);transition:background .1s linear}.value{font:800 96px/1 -apple-system;color:#173a32}</style><div class="value">0</div><script>let n=0;globalThis.previewTimer=setInterval(()=>{n++;document.querySelector('.value').textContent=String(n);document.body.style.background='hsl('+((205+n*13)%360)+' 72% 90%)'},180)</script>\`
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 })
 cliLog(JSON.stringify({ taskId: task.id }))
@@ -215,7 +215,7 @@ function runCli(code) {
     process.on("error", reject);
     process.on("close", (code) => {
       if (code === 0) resolve(stdout.trim());
-      else reject(new Error(cliStderr || `x-browser exited ${code}`));
+      else reject(new Error(cliStderr || `ufo-browser exited ${code}`));
     });
     process.stdin.end(code);
   });
@@ -263,7 +263,7 @@ async function waitForTestSocket(launchedAt, timeoutMs) {
     }
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
-  throw new Error(`timed out waiting for X-Browser socket: ${latestError}`);
+  throw new Error(`timed out waiting for UFO-Browser socket: ${latestError}`);
 }
 
 async function freshJson(name, launchedAt, timeoutMs) {
