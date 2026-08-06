@@ -101,6 +101,7 @@ export class TaskSpaceManager {
   private state: BrowserState = { version: 1, nextSpaceId: 1, spaces: [] };
   private readonly runtimes = new Map<string, TabRuntime>();
   private readonly mutationQueues = new Map<number, Promise<unknown>>();
+  private readonly activeAgentConnections = new Set<number>();
   private readonly listeners = new Set<() => void>();
   private readonly controlListeners = new Set<(spaceId: number) => void>();
   private readonly activeTabListeners = new Set<
@@ -253,6 +254,7 @@ export class TaskSpaceManager {
       const index = this.state.spaces.findIndex((space) => space.id === spaceId);
       if (index < 0) return;
       const [space] = this.state.spaces.splice(index, 1);
+      this.activeAgentConnections.delete(spaceId);
       for (const tab of space.tabs) this.destroyRuntime(tab.targetId);
       this.visiblePreviewSpaceIds.delete(spaceId);
       this.previewDueAt.delete(spaceId);
@@ -449,7 +451,12 @@ export class TaskSpaceManager {
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: true,
-        backgroundThrottling: false,
+        // Page state must survive while detached, but hidden tabs should use
+        // Chromium's native timer/animation throttling. Agent commands attach
+        // the target to the shared compositor surface before input, capture,
+        // waits, or Turnstile work, restoring foreground-rate execution only
+        // for the bounded lifetime of the CLI transaction.
+        backgroundThrottling: true,
         sandbox: true,
         spellcheck: true,
       },
@@ -653,6 +660,8 @@ export class TaskSpaceManager {
     );
     return {
       active: this.previewActive,
+      activeAgentConnections: [...this.activeAgentConnections],
+      backgroundSurfaceWindowVisible: this.options.captureWindow.isVisible(),
       presentedTargetId: this.presentedTargetId,
       presentationReservedTargetId: this.presentationReservedTargetId,
       pageViewport: { ...this.pageViewport },
@@ -818,10 +827,22 @@ export class TaskSpaceManager {
     const space = this.findSpaceByTargetId(targetId);
     if (
       space?.ownership === "agent" &&
-      space.lifecycle === "active"
+      space.lifecycle === "active" &&
+      this.activeAgentConnections.has(space.id)
     ) {
       await this.ensureBackgroundSurface(space.id, targetId);
+      return;
     }
+    if (space) await this.releaseInactiveAgentSurfaces(space.id);
+  }
+
+  setAgentConnectionActive(spaceId: number, active: boolean) {
+    if (active) {
+      this.activeAgentConnections.add(spaceId);
+      return;
+    }
+    if (!this.activeAgentConnections.delete(spaceId)) return;
+    void this.releaseInactiveAgentSurfaces(spaceId).catch(() => undefined);
   }
 
   private async primeAgentBackgroundVisibility(
@@ -938,6 +959,11 @@ export class TaskSpaceManager {
       for (const tab of this.getSpaceOrThrow(spaceId).tabs) {
         this.backgroundVisibilityPrimedTargets.delete(tab.targetId);
       }
+      // User takeover, handoff, completion and error revoke the compositor
+      // resource immediately. The socket may remain alive while its in-flight
+      // command observes the generation failure, but it must not keep a
+      // transparent GPU surface running after control has changed hands.
+      this.setAgentConnectionActive(spaceId, false);
     }
     this.broadcastControl(spaceId);
   }
@@ -2126,10 +2152,48 @@ export class TaskSpaceManager {
     this.endOverviewFrameSubscription(state);
     this.previewPhases.delete(state.spaceId);
     this.schedulePreviewRecovery(state.spaceId, 0);
-    if (this.presentedTargetId !== state.targetId) {
+    if (
+      this.presentedTargetId !== state.targetId &&
+      !this.activeAgentConnections.has(state.spaceId)
+    ) {
+      await this.releaseBackgroundSurface(state.targetId);
       await this.releasePreviewOnlyRuntime(state.targetId);
     }
     this.schedulePreviewPump(0);
+  }
+
+  private async releaseInactiveAgentSurfaces(spaceId: number) {
+    const space = this.getSpace(spaceId);
+    if (!space) return;
+    const targetIds = space.tabs.map((tab) => tab.targetId);
+    const generations = new Map(
+      targetIds.map((targetId) => [
+        targetId,
+        this.bumpSurfaceGeneration(targetId),
+      ]),
+    );
+    await this.queueSurface(async () => {
+      if (this.activeAgentConnections.has(spaceId)) return;
+      for (const targetId of targetIds) {
+        if (
+          !this.isSurfaceGenerationCurrent(
+            targetId,
+            generations.get(targetId)!,
+          ) ||
+          this.isPresentationSurface(targetId) ||
+          this.overviewScreencast?.targetId === targetId ||
+          this.frameSubscriptionCaptures.has(targetId)
+        ) {
+          continue;
+        }
+        const view = this.getView(targetId);
+        if (!view || !this.hiddenSurfaceTargets.has(targetId)) continue;
+        this.options.captureWindow.contentView.removeChildView(view);
+        this.hiddenSurfaceTargets.delete(targetId);
+        this.backgroundVisibilityPrimedTargets.delete(targetId);
+      }
+      if (this.hiddenSurfaceTargets.size === 0) this.options.captureWindow.hide();
+    });
   }
 
   private schedulePreviewRecovery(spaceId: number, missingDelayMs: number) {

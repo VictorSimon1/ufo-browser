@@ -22,6 +22,7 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
   let taskState: unknown;
   let pointer: unknown;
   let agentTab: unknown;
+  const agentConnectionStates: boolean[] = [];
   const manager = {
     listSpaces: () => [structuredClone(space)],
     getSpaceOrThrow: (id: number) => {
@@ -41,6 +42,9 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
     createAgentTab: async (id: number, url: string) => {
       agentTab = { id, url };
       return { targetId: "page-1", url };
+    },
+    setAgentConnectionActive: (_id: number, active: boolean) => {
+      agentConnectionStates.push(active);
     },
   };
   const broker = {
@@ -98,6 +102,10 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
       url: "https://example.com/",
     });
     assert.deepEqual(agentTab, { id: space.id, url: "https://example.com/" });
+
+    const handedOff = await rpc(socket, 8, "handOffTaskSpace", []);
+    assert.deepEqual(handedOff.result, { done: true });
+    assert.deepEqual(agentConnectionStates, [true, false]);
   } finally {
     socket?.destroy();
     await server.close();

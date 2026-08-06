@@ -237,6 +237,7 @@ export class AgentServer {
     }
     const lease = this.leases.acquire(spaceId, connection.id);
     connection.lease = lease;
+    this.manager.setAgentConnectionActive(spaceId, true);
   }
 
   private assertSelected(connection: Connection) {
@@ -256,11 +257,13 @@ export class AgentServer {
 
   private release(connection: Connection) {
     if (connection.selectedSpaceId) {
+      const spaceId = connection.selectedSpaceId;
       this.broker.releaseConnectionSpace(
         connection.id,
-        connection.selectedSpaceId,
+        spaceId,
       );
-      this.leases.release(connection.selectedSpaceId, connection.id);
+      this.manager.setAgentConnectionActive(spaceId, false);
+      this.leases.release(spaceId, connection.id);
     }
     connection.lease = undefined;
   }

@@ -330,7 +330,7 @@ async function start() {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await writeFile(
       join(testRoot, "preview-main-initial.json"),
-      `${JSON.stringify(manager.previewDiagnostics(), null, 2)}\n`,
+      `${JSON.stringify(testPreviewDiagnostics(manager), null, 2)}\n`,
     );
     await writeFile(
       join(testRoot, "view-state.json"),
@@ -435,7 +435,7 @@ async function start() {
     testDiagnosticsTimer = setInterval(() => {
       void writeFile(
         join(testRoot, "preview-main-live.json"),
-        `${JSON.stringify(manager.previewDiagnostics(), null, 2)}\n`,
+        `${JSON.stringify(testPreviewDiagnostics(manager), null, 2)}\n`,
       ).catch(() => undefined);
     }, 350);
     setTimeout(() => {
@@ -1586,6 +1586,20 @@ async function captureVisibleTestViews(context: {
       await captureWebContentsPng(browserView),
     );
   }
+}
+
+function testPreviewDiagnostics(manager: TaskSpaceManager) {
+  return {
+    ...manager.previewDiagnostics(),
+    processMetrics: app.getAppMetrics().map((metric) => ({
+      pid: metric.pid,
+      type: metric.type,
+      serviceName: metric.serviceName,
+      name: metric.name,
+      cpu: metric.cpu,
+      memory: metric.memory,
+    })),
+  };
 }
 
 app.on("window-all-closed", () => {
