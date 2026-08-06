@@ -227,6 +227,7 @@ test("focus emulation is limited to the trusted Input gesture window", async () 
     ),
     false,
   );
+  assert.deepEqual(contents.backgroundThrottlingChanges, [false]);
 
   await broker.send(
     "connection-1",
@@ -259,6 +260,7 @@ test("focus emulation is limited to the trusted Input gesture window", async () 
       .map((command) => command.params.enabled),
     [true, false],
   );
+  assert.deepEqual(contents.backgroundThrottlingChanges, [false, true]);
 });
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 1500) {
@@ -356,6 +358,7 @@ class FakeDebugger extends EventEmitter {
 class FakeContents extends EventEmitter {
   readonly id = 42;
   readonly session = new EventEmitter();
+  readonly backgroundThrottlingChanges: boolean[] = [];
 
   constructor(readonly debuggerTransport: FakeDebugger) {
     super();
@@ -373,8 +376,12 @@ class FakeContents extends EventEmitter {
     // Page-overlay IPC is not relevant to broker routing assertions.
   }
 
+  setBackgroundThrottling(allowed: boolean) {
+    this.backgroundThrottlingChanges.push(allowed);
+  }
+
   async executeJavaScript() {
-    return undefined;
+    return { width: 1280, height: 720 };
   }
 }
 

@@ -9,6 +9,7 @@ export type ShellLayout = {
   overview: Rect;
   chrome: Rect;
   page: Rect;
+  overlay: Rect;
 };
 
 export function calculateShellLayout(
@@ -26,7 +27,13 @@ export function calculateShellLayout(
           Math.max(320, safeWidth - 640),
         );
   const contentWidth = Math.max(1, safeWidth - effectiveChat);
-  const pageHeight = Math.max(1, safeHeight - BROWSER_CHROME_HEIGHT);
+  // Match Ego/Chromium's browser surface geometry: the page keeps a viewport
+  // as tall as the complete content window while its native view starts below
+  // Browser Chrome. AppKit clips the lower chrome-height portion at the window
+  // edge. This preserves a full-height responsive viewport for the page and
+  // keeps our separate native Chrome/Agent overlay outside page screenshots.
+  const pageHeight = safeHeight;
+  const visiblePageHeight = Math.max(1, safeHeight - BROWSER_CHROME_HEIGHT);
   return {
     chat: { x: 0, y: 0, width: effectiveChat, height: safeHeight },
     content: {
@@ -52,6 +59,12 @@ export function calculateShellLayout(
       y: BROWSER_CHROME_HEIGHT,
       width: contentWidth,
       height: pageHeight,
+    },
+    overlay: {
+      x: effectiveChat,
+      y: BROWSER_CHROME_HEIGHT,
+      width: contentWidth,
+      height: visiblePageHeight,
     },
   };
 }

@@ -30,10 +30,7 @@ import {
   configureChromiumSession,
   ensureChromiumProfilePreferences,
 } from "./chromium-identity.js";
-import {
-  BROWSER_CHROME_HEIGHT,
-  calculateShellLayout,
-} from "./shell-page-bounds.js";
+import { BROWSER_CHROME_HEIGHT } from "./shell-page-bounds.js";
 import { selectPreviewCaptureIds } from "./preview-visibility.js";
 import { bitmapHasVisualDetail } from "./preview-quality.js";
 import {
@@ -129,6 +126,7 @@ export class TaskSpaceManager {
   private readonly frameSubscriptionCaptures = new Set<string>();
   private readonly overviewScreencastSuspendedTargets = new Set<string>();
   private readonly overviewScreencastRetryAt = new Map<string, number>();
+  private readonly foregroundCadenceReasons = new Map<string, Set<string>>();
   private previewActive = false;
   private previewTimer?: ReturnType<typeof setTimeout>;
   private previewRevision = 0;
@@ -506,6 +504,28 @@ export class TaskSpaceManager {
     }
   }
 
+  setPageForegroundCadence(
+    targetId: string,
+    reason: string,
+    active: boolean,
+  ) {
+    const runtime = this.runtimes.get(targetId);
+    if (!runtime || runtime.view.webContents.isDestroyed()) {
+      this.foregroundCadenceReasons.delete(targetId);
+      return;
+    }
+    const reasons = this.foregroundCadenceReasons.get(targetId) ?? new Set();
+    if (active) reasons.add(reason);
+    else reasons.delete(reason);
+    if (reasons.size > 0) {
+      this.foregroundCadenceReasons.set(targetId, reasons);
+      runtime.view.webContents.setBackgroundThrottling(false);
+      return;
+    }
+    this.foregroundCadenceReasons.delete(targetId);
+    runtime.view.webContents.setBackgroundThrottling(true);
+  }
+
   setOverviewPreviewActive(active: boolean) {
     this.previewActive = active;
     if (!active) {
@@ -790,13 +810,28 @@ export class TaskSpaceManager {
       }
       const view = runtime.view;
       // Model a complete browser window even though only the page view is
-      // rendered. This keeps window.outerHeight distinct from innerHeight in
-      // background Agent Spaces, matching a normal Chromium window instead of
-      // exposing a frameless page-sized automation surface.
-      const surface = calculateShellLayout(
-        this.pageViewport.width,
-        this.pageViewport.height + BROWSER_CHROME_HEIGHT,
-      );
+      // rendered. The page surface intentionally keeps the complete browser
+      // height and starts below Browser Chrome, matching the visible Ego
+      // geometry used by foreground Spaces.
+      // The visible App intentionally clips the lower chrome-height portion
+      // of its full-height page surface to match Ego. The transparent capture
+      // window has no human-visible chrome, so give it the extra native height
+      // and keep the same page viewport fully contained. A clipped offscreen
+      // child can otherwise make Viz repeatedly return a stale mailbox.
+      const surface = {
+        content: {
+          x: 0,
+          y: 0,
+          width: this.pageViewport.width,
+          height: this.pageViewport.height + BROWSER_CHROME_HEIGHT,
+        },
+        page: {
+          x: 0,
+          y: BROWSER_CHROME_HEIGHT,
+          width: this.pageViewport.width,
+          height: this.pageViewport.height,
+        },
+      };
       this.options.captureWindow.setBounds(surface.content);
       view.setBounds(surface.page);
       if (this.hiddenSurfaceTargets.has(targetId)) {
@@ -1686,6 +1721,7 @@ export class TaskSpaceManager {
     const wasActive = space.activeTabId === targetId;
     space.tabs.splice(index, 1);
     this.runtimes.delete(targetId);
+    this.foregroundCadenceReasons.delete(targetId);
     this.hiddenSurfaceTargets.delete(targetId);
     this.backgroundVisibilityPrimedTargets.delete(targetId);
     this.surfaceGenerations.delete(targetId);
@@ -1736,6 +1772,7 @@ export class TaskSpaceManager {
   private destroyRuntime(targetId: string) {
     const runtime = this.runtimes.get(targetId);
     this.runtimes.delete(targetId);
+    this.foregroundCadenceReasons.delete(targetId);
     this.hiddenSurfaceTargets.delete(targetId);
     this.backgroundVisibilityPrimedTargets.delete(targetId);
     this.surfaceGenerations.delete(targetId);
@@ -1790,6 +1827,7 @@ export class TaskSpaceManager {
       return;
     }
     this.runtimes.delete(targetId);
+    this.foregroundCadenceReasons.delete(targetId);
     this.surfaceGenerations.delete(targetId);
     if (!runtime.view.webContents.isDestroyed()) {
       runtime.view.webContents.close();
@@ -1940,6 +1978,7 @@ export class TaskSpaceManager {
       }
     };
     this.overviewScreencast = state;
+    this.setPageForegroundCadence(targetId, "overview-live-preview", true);
     try {
       this.subscribeOverviewFrame(state);
       this.overviewScreencastRetryAt.delete(targetId);
@@ -2064,6 +2103,10 @@ export class TaskSpaceManager {
     );
     state.lastVisualSignature = signature;
     if (!visualChanged) return false;
+    // A changed compositor frame is itself page activity. Keep genuinely
+    // dynamic previews on the responsive cadence while allowing static pages
+    // to continue backing off through unchanged-frame sampling.
+    state.lastActivityAt = Date.now();
     const resized =
       size.width > 588
         ? image.resize({ width: 588, quality: "good" })
@@ -2150,6 +2193,11 @@ export class TaskSpaceManager {
     if (state.resubscribeTimer) clearTimeout(state.resubscribeTimer);
     state.resubscribeTimer = undefined;
     this.endOverviewFrameSubscription(state);
+    this.setPageForegroundCadence(
+      state.targetId,
+      "overview-live-preview",
+      false,
+    );
     this.previewPhases.delete(state.spaceId);
     this.schedulePreviewRecovery(state.spaceId, 0);
     if (

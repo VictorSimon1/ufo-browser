@@ -18,6 +18,12 @@ test("pure browser mode fills the complete window width", () => {
     x: 0,
     y: BROWSER_CHROME_HEIGHT,
     width: 1600,
+    height: 1000,
+  });
+  assert.deepEqual(layout.overlay, {
+    x: 0,
+    y: BROWSER_CHROME_HEIGHT,
+    width: 1600,
     height: 1000 - BROWSER_CHROME_HEIGHT,
   });
 });
@@ -28,22 +34,25 @@ test("layout never emits zero-sized page bounds", () => {
   assert.ok(layout.page.height >= 1);
 });
 
-test("background compositor can preserve full browser outer geometry", () => {
-  const page = { width: 1470, height: 751 };
-  const layout = calculateShellLayout(
-    page.width,
-    page.height + BROWSER_CHROME_HEIGHT,
-  );
+test("page surface preserves a full-window viewport below browser chrome", () => {
+  const page = { width: 1470, height: 831 };
+  const layout = calculateShellLayout(page.width, page.height);
   assert.deepEqual(layout.content, {
     x: 0,
     y: 0,
     width: 1470,
-    height: 833,
+    height: 831,
   });
   assert.deepEqual(layout.page, {
     x: 0,
     y: BROWSER_CHROME_HEIGHT,
     width: 1470,
-    height: 751,
+    height: 831,
+  });
+  assert.deepEqual(layout.overlay, {
+    x: 0,
+    y: BROWSER_CHROME_HEIGHT,
+    width: 1470,
+    height: 831 - BROWSER_CHROME_HEIGHT,
   });
 });

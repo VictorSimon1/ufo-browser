@@ -241,7 +241,7 @@ export class PresentationCoordinator {
     } else {
       this.views.browser.setBounds(layout.chrome);
       this.attachedPage?.setBounds(layout.page);
-      if (this.overlaySpaceId !== null) this.views.overlay.setBounds(layout.page);
+      if (this.overlaySpaceId !== null) this.views.overlay.setBounds(layout.overlay);
     }
   }
 
@@ -282,7 +282,7 @@ export class PresentationCoordinator {
     }
 
     const [width, height] = this.window.getContentSize();
-    this.views.overlay.setBounds(calculateShellLayout(width, height).page);
+    this.views.overlay.setBounds(calculateShellLayout(width, height).overlay);
     const root = this.window.contentView;
     const children = root.children;
     if (children.at(-1) !== this.views.overlay) {

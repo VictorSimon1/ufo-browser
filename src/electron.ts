@@ -1349,8 +1349,11 @@ async function runControlUiAudit(context: {
       attached: window.contentView.children.includes(overlayView),
       topmost: window.contentView.children.at(-1) === overlayView,
       bounds: overlayView.getBounds(),
+      windowFocused: window.isFocused(),
       focused: overlayView.webContents.isFocused(),
     };
+    view.webContents.setBackgroundThrottling(false);
+    await wait(80);
     const pageButton = await view.webContents.executeJavaScript(
       `(() => {
         const button = document.querySelector('main button');
@@ -1360,24 +1363,57 @@ async function runControlUiAudit(context: {
       true,
     );
     if (!pageButton) throw new Error("control audit button missing");
+    const pageInputBefore = await view.webContents.executeJavaScript(
+      `(() => {
+        const point = ${JSON.stringify(pageButton)};
+        const hit = document.elementFromPoint(point.x, point.y);
+        return {
+          innerWidth,
+          innerHeight,
+          focused: document.hasFocus(),
+          visibility: document.visibilityState,
+          hit: hit?.tagName || null,
+          hitText: hit?.textContent?.trim() || null,
+        };
+      })()`,
+      true,
+    );
     if (!view.webContents.debugger.isAttached()) view.webContents.debugger.attach("1.3");
-    await view.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x: pageButton.x,
-      y: pageButton.y,
-      button: "left",
-      clickCount: 1,
-    });
-    await view.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: pageButton.x,
-      y: pageButton.y,
-      button: "left",
-      clickCount: 1,
-    });
+    // Match the real CdpBroker input path. A background test window must not
+    // steal macOS focus, but Chromium still needs focus emulation around its
+    // trusted page input for the click to land.
+    await view.webContents.debugger.sendCommand(
+      "Emulation.setFocusEmulationEnabled",
+      { enabled: true },
+    );
+    try {
+      await view.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: pageButton.x,
+        y: pageButton.y,
+        button: "left",
+        clickCount: 1,
+      });
+      await view.webContents.debugger.sendCommand("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: pageButton.x,
+        y: pageButton.y,
+        button: "left",
+        clickCount: 1,
+      });
+    } finally {
+      await view.webContents.debugger.sendCommand(
+        "Emulation.setFocusEmulationEnabled",
+        { enabled: false },
+      );
+    }
     await wait(80);
     const agentClickCount = await view.webContents.executeJavaScript(
       `Number(window.clickCount || 0)`,
+      true,
+    );
+    const pageInputAfter = await view.webContents.executeJavaScript(
+      `({ focused: document.hasFocus(), visibility: document.visibilityState })`,
       true,
     );
     overlayView.webContents.sendInputEvent({
@@ -1399,6 +1435,7 @@ async function runControlUiAudit(context: {
       `Number(window.clickCount || 0)`,
       true,
     );
+    view.webContents.setBackgroundThrottling(true);
     const pageIsolation = await view.webContents.executeJavaScript(
       `({ overlayNode: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
       true,
@@ -1441,7 +1478,7 @@ async function runControlUiAudit(context: {
       nativeOverlay.bounds.y === BROWSER_CHROME_HEIGHT &&
       nativeOverlay.bounds.width > 0 &&
       nativeOverlay.bounds.height > 0 &&
-      nativeOverlay.focused === true &&
+      nativeOverlay.focused === nativeOverlay.windowFocused &&
       overlay.design === "agent-dot-matrix-v3" &&
       overlay.motion === "ambient-sweep-v2" &&
       overlay.spaceId === String(space.id) &&
@@ -1459,7 +1496,7 @@ async function runControlUiAudit(context: {
       returned.runtimePreserved === true;
     await writeFile(
       join(testRoot, "control-ui-audit.json"),
-      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, nativeOverlay, overlay, pageIsolation, agentClickCount, humanAttemptClickCount, motionPreference, animationAdvanced, backgroundAfterReturn, returned }, null, 2)}\n`,
+      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, nativeOverlay, overlay, pageIsolation, pageButton, pageInputBefore, pageInputAfter, agentClickCount, humanAttemptClickCount, motionPreference, animationAdvanced, backgroundAfterReturn, returned }, null, 2)}\n`,
     );
   } finally {
     await presentation.showOverview().catch(() => undefined);

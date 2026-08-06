@@ -18,8 +18,11 @@ export const INTERNAL_URL_PREFIXES = [
   "chrome-untrusted://",
   "devtools://",
   "chrome-extension://",
+  "x-browser://",
   "about:",
 ];
+
+const INTERNAL_NEW_TAB_PATH = /(?:^|\/)newtab\.html$/i;
 
 type TabInfo = {
   targetId: string;
@@ -102,7 +105,11 @@ export async function pageInfo() {
       ph: root?.scrollHeight ?? innerHeight,
     });
   })()`;
-  return JSON.parse(await evaluate(expression));
+  const info = JSON.parse(await evaluate(expression));
+  if (isPhysicalNewTabUrl(info.url)) {
+    info.url = "x-browser://newtab/";
+  }
+  return info;
 }
 
 /**
@@ -297,6 +304,18 @@ function tabMatchesUrl(tabUrl: string, wantedUrl: string, match: UrlMatchMode) {
 
 function trimSlash(pathname: string) {
   return pathname.replace(/\/+$/, "") || "/";
+}
+
+function isPhysicalNewTabUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "x-browser:" && url.hostname === "newtab") ||
+      (url.protocol === "file:" && INTERNAL_NEW_TAB_PATH.test(url.pathname))
+    );
+  } catch {
+    return false;
+  }
 }
 
 function targetIdFrom(target: TabTarget, operation: string) {

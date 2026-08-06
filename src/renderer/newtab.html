@@ -2,12 +2,273 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; form-action https://www.google.com https://www.google.com.hk"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
-      body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f8f7;color:#24322e;font-family:-apple-system,BlinkMacSystemFont,sans-serif}.wrap{text-align:center}.logo{margin:auto;width:64px;height:64px;display:grid;place-items:center;border-radius:20px;background:#10251f;color:#fff;font-size:30px;font-weight:800;box-shadow:0 15px 40px #bfd3cc}.search{margin-top:28px;width:min(580px,70vw);padding:17px 22px;border:1px solid #dbe5e1;border-radius:16px;background:#fff;color:#7b8e88;box-shadow:0 12px 34px rgba(31,56,49,.08)}
+      :root {
+        color-scheme: light;
+        font-family: Arial, Helvetica, -apple-system, BlinkMacSystemFont, sans-serif;
+        font-synthesis: none;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { width: 100%; min-width: 320px; height: 100%; margin: 0; }
+
+      body {
+        overflow: hidden;
+        background: #fff;
+        color: #202124;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .page {
+        position: relative;
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .top-links {
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 15px;
+        padding: 0 20px;
+        font-size: 13px;
+      }
+
+      .top-links a {
+        color: #202124;
+        text-decoration: none;
+      }
+
+      .top-links a:hover { text-decoration: underline; }
+
+      .apps {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #5f6368;
+      }
+
+      .apps:hover { background: #f0f1f2; }
+
+      .apps svg { width: 20px; height: 20px; fill: currentColor; }
+
+      .profile {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #195c49;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        box-shadow: inset 0 0 0 2px rgba(255,255,255,.88);
+      }
+
+      .center {
+        width: 100%;
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        align-items: center;
+        padding: clamp(72px, 12vh, 122px) 24px 120px;
+      }
+
+      .google-logo {
+        height: 92px;
+        display: flex;
+        align-items: center;
+        font-size: 80px;
+        font-weight: 500;
+        letter-spacing: -7px;
+        line-height: 1;
+        user-select: none;
+      }
+
+      .google-logo span:last-child { letter-spacing: 0; }
+      .blue { color: #4285f4; }
+      .red { color: #ea4335; }
+      .yellow { color: #fbbc05; }
+      .green { color: #34a853; }
+
+      .search-form {
+        width: min(584px, calc(100vw - 48px));
+        margin-top: 26px;
+      }
+
+      .search-box {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 16px;
+        border: 1px solid #dfe1e5;
+        border-radius: 24px;
+        background: #fff;
+        box-shadow: 0 1px 6px rgba(32,33,36,.14);
+      }
+
+      .search-box:focus-within {
+        border-color: transparent;
+        box-shadow: 0 1px 8px rgba(32,33,36,.22);
+      }
+
+      .search-icon {
+        width: 20px;
+        height: 20px;
+        flex: 0 0 auto;
+        fill: none;
+        stroke: #9aa0a6;
+        stroke-linecap: round;
+        stroke-width: 2;
+      }
+
+      .search-box input {
+        min-width: 0;
+        flex: 1;
+        height: 42px;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: #202124;
+        font: inherit;
+        font-size: 16px;
+      }
+
+      .search-box input::placeholder { color: #70757a; opacity: 1; }
+
+      .search-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #4285f4;
+      }
+
+      .search-actions svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.65; }
+
+      .shortcuts {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 25px;
+      }
+
+      .shortcut {
+        width: 112px;
+        min-height: 112px;
+        display: flex;
+        align-items: center;
+        flex-direction: column;
+        gap: 12px;
+        padding: 16px 8px 10px;
+        border-radius: 4px;
+        color: #3c4043;
+        font-size: 13px;
+        text-decoration: none;
+      }
+
+      .shortcut:hover { background: #f1f3f4; }
+
+      .shortcut-icon {
+        width: 48px;
+        height: 48px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #f1f3f4;
+        color: #4285f4;
+        font-size: 21px;
+        font-weight: 700;
+      }
+
+      .customize {
+        position: absolute;
+        right: 16px;
+        bottom: 16px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 14px;
+        border-radius: 16px;
+        background: #d3e3fd;
+        color: #041e49;
+        font-size: 13px;
+        box-shadow: 0 1px 2px rgba(60,64,67,.15);
+        user-select: none;
+      }
+
+      .customize svg { width: 15px; height: 15px; fill: currentColor; }
+
+      @media (max-height: 660px) {
+        .center { padding-top: 42px; }
+        .shortcuts { display: none; }
+      }
+
+      @media (max-width: 620px) {
+        .top-links a { display: none; }
+        .google-logo { height: 72px; font-size: 62px; letter-spacing: -5px; }
+        .customize span { display: none; }
+        .customize { width: 32px; padding: 0; justify-content: center; }
+      }
     </style>
-    <title>UFO-Browser · New Tab</title>
+    <title>新标签页</title>
   </head>
-  <body><div class="wrap"><div class="logo">U</div><h1>UFO-Browser</h1><div class="search">在地址栏中搜索或输入网址</div></div></body>
+  <body>
+    <main class="page">
+      <nav class="top-links" aria-label="Google 链接">
+        <a href="https://mail.google.com/">Gmail</a>
+        <a href="https://www.google.com/imghp">图片</a>
+        <a class="apps" href="https://www.google.com/intl/zh-CN/about/products" aria-label="Google 应用">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h2v2H5V3Zm6 0h2v2h-2V3Zm6 0h2v2h-2V3ZM5 11h2v2H5v-2Zm6 0h2v2h-2v-2Zm6 0h2v2h-2v-2ZM5 19h2v2H5v-2Zm6 0h2v2h-2v-2Zm6 0h2v2h-2v-2Z"/></svg>
+        </a>
+        <span class="profile" aria-label="UFO-Browser 用户">U</span>
+      </nav>
+
+      <section class="center">
+        <div class="google-logo" role="img" aria-label="Google">
+          <span class="blue">G</span><span class="red">o</span><span class="yellow">o</span><span class="blue">g</span><span class="green">l</span><span class="red">e</span>
+        </div>
+
+        <form class="search-form" action="https://www.google.com/search" method="get">
+          <label class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.2 4.2"></path></svg>
+            <input name="q" aria-label="在 Google 上搜索" placeholder="在 Google 上搜索，或者输入一个网址" autocomplete="off" spellcheck="false" />
+            <span class="search-actions" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v4M9 21h6"></path></svg>
+              <svg viewBox="0 0 24 24"><path d="M8 5H6a2 2 0 0 0-2 2v2M16 5h2a2 2 0 0 1 2 2v2M8 19H6a2 2 0 0 1-2-2v-2M16 19h2a2 2 0 0 0 2-2v-2"></path><circle cx="12" cy="12" r="3.5"></circle></svg>
+            </span>
+          </label>
+        </form>
+
+        <div class="shortcuts" aria-label="快捷方式">
+          <a class="shortcut" href="https://www.google.com/">
+            <span class="shortcut-icon">G</span>
+            <span>Google</span>
+          </a>
+          <a class="shortcut" href="https://www.youtube.com/">
+            <span class="shortcut-icon red">▶</span>
+            <span>YouTube</span>
+          </a>
+        </div>
+      </section>
+
+      <div class="customize" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="m14.7 5.3 4 4L9.2 18.8 5 19l.2-4.2 9.5-9.5ZM13.3 6.7l4 4"></path></svg>
+        <span>自定义 UFO-Browser</span>
+      </div>
+    </main>
+  </body>
 </html>

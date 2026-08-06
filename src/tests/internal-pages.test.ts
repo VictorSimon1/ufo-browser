@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   isInternalNewTabUrl,
@@ -28,4 +29,16 @@ test("the persisted URL hides the physical new-tab file without masking navigati
     logicalNavigationUrl("https://example.com/", X_BROWSER_DEFAULT_NEW_TAB_URL),
     "https://example.com/",
   );
+});
+
+test("the bundled new-tab page is a local Google-style search surface", async () => {
+  const html = await readFile(
+    new URL("../renderer/newtab.html", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /aria-label="Google"/);
+  assert.match(html, /action="https:\/\/www\.google\.com\/search"/);
+  assert.match(html, /name="q"/);
+  assert.match(html, /<title>新标签页<\/title>/);
+  assert.doesNotMatch(html, /<script\b/i);
 });

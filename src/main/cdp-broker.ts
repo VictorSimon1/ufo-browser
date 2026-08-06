@@ -25,6 +25,11 @@ export class CdpBroker {
     string,
     ReturnType<typeof setTimeout>
   >();
+  private readonly agentAwakeTargets = new Set<string>();
+  private readonly backgroundThrottlingTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly downloads: DownloadRegistry;
 
   constructor(
@@ -47,6 +52,7 @@ export class CdpBroker {
         const view = this.manager.getView(tab.targetId);
         if (view) {
           void this.setFocusEmulation(tab.targetId, view.webContents, false);
+          this.restoreBackgroundThrottling(tab.targetId, view.webContents);
         }
       }
     });
@@ -229,6 +235,13 @@ export class CdpBroker {
       await this.manager.suspendOverviewScreencast(route.ownerTargetId);
     }
     try {
+      // A transparent App-level WebContentsView can geometrically occlude the
+      // page beneath it. Chromium then reports a hidden 0x0 viewport even
+      // though the last page frame remains visible to the human. Wake the page
+      // only for the bounded Agent command burst; this keeps screenshots,
+      // evaluate and trusted input independent from the human-control overlay
+      // without leaving background pages at foreground GPU cadence.
+      await this.beginAgentActivity(route.ownerTargetId, view.webContents);
       // Input preparation can itself race navigation or renderer teardown.
       // Keep it inside the cleanup boundary so temporary focus emulation is
       // always released. The App-level overlay is a separate native View and
@@ -262,6 +275,7 @@ export class CdpBroker {
       throw error;
     } finally {
       if (isInput) this.endAgentInput(route.ownerTargetId, view.webContents);
+      this.endAgentActivity(route.ownerTargetId, view.webContents);
     }
   }
 
@@ -289,6 +303,10 @@ export class CdpBroker {
       const focusTimer = this.focusEmulationTimers.get(targetId);
       if (focusTimer) clearTimeout(focusTimer);
       this.focusEmulationTimers.delete(targetId);
+      const throttleTimer = this.backgroundThrottlingTimers.get(targetId);
+      if (throttleTimer) clearTimeout(throttleTimer);
+      this.backgroundThrottlingTimers.delete(targetId);
+      this.agentAwakeTargets.delete(targetId);
       for (const [sessionId, route] of this.sessions) {
         if (route.ownerTargetId !== targetId) continue;
         this.sessions.delete(sessionId);
@@ -302,6 +320,8 @@ export class CdpBroker {
     if (!targetId) return;
     this.agentScreencasts.delete(sessionId);
     this.resumeOverviewIfAgentIdle(targetId);
+    const view = this.manager.getView?.(targetId);
+    if (view) this.endAgentActivity(targetId, view.webContents);
   }
 
   private resumeOverviewIfAgentIdle(targetId: string) {
@@ -320,6 +340,69 @@ export class CdpBroker {
     if (focusTimer) clearTimeout(focusTimer);
     this.focusEmulationTimers.delete(targetId);
     await this.setFocusEmulation(targetId, contents, true);
+  }
+
+  private async beginAgentActivity(targetId: string, contents: WebContents) {
+    const pendingRestore = this.backgroundThrottlingTimers.get(targetId);
+    if (pendingRestore) clearTimeout(pendingRestore);
+    this.backgroundThrottlingTimers.delete(targetId);
+    if (this.agentAwakeTargets.has(targetId) || contents.isDestroyed()) return;
+    if (typeof contents.setBackgroundThrottling !== "function") return;
+    this.agentAwakeTargets.add(targetId);
+    this.setAgentForegroundCadence(targetId, contents, true);
+    if (typeof contents.executeJavaScript !== "function") return;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const viewport = await contents
+        .executeJavaScript(
+          `({ width: window.innerWidth, height: window.innerHeight })`,
+          true,
+        )
+        .catch(() => null);
+      if (Number(viewport?.width) > 1 && Number(viewport?.height) > 1) return;
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+  }
+
+  private endAgentActivity(targetId: string, contents: WebContents) {
+    if (!this.agentAwakeTargets.has(targetId)) return;
+    if ([...this.agentScreencasts.values()].includes(targetId)) return;
+    const previous = this.backgroundThrottlingTimers.get(targetId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.backgroundThrottlingTimers.delete(targetId);
+      this.restoreBackgroundThrottling(targetId, contents);
+    }, 750);
+    this.backgroundThrottlingTimers.set(targetId, timer);
+  }
+
+  private restoreBackgroundThrottling(
+    targetId: string,
+    contents: WebContents,
+  ) {
+    const timer = this.backgroundThrottlingTimers.get(targetId);
+    if (timer) clearTimeout(timer);
+    this.backgroundThrottlingTimers.delete(targetId);
+    if (!this.agentAwakeTargets.delete(targetId) || contents.isDestroyed()) return;
+    this.setAgentForegroundCadence(targetId, contents, false);
+  }
+
+  private setAgentForegroundCadence(
+    targetId: string,
+    contents: WebContents,
+    active: boolean,
+  ) {
+    const manager = this.manager as TaskSpaceManager & {
+      setPageForegroundCadence?: (
+        targetId: string,
+        reason: string,
+        active: boolean,
+      ) => void;
+    };
+    if (typeof manager.setPageForegroundCadence === "function") {
+      manager.setPageForegroundCadence(targetId, "agent-command", active);
+      return;
+    }
+    contents.setBackgroundThrottling?.(!active);
   }
 
   private endAgentInput(targetId: string, contents: WebContents) {

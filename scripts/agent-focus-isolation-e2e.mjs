@@ -79,11 +79,15 @@ async function runPhase({ presentation }) {
       8_000,
     );
 
-    await activateBundle("com.apple.finder");
+    // Interactive macOS sessions can promote Finder. Headless/locked test
+    // sessions keep loginwindow frontmost even when AppKit reports a
+    // successful Finder activation; that is still a valid stable foreground
+    // for proving the Agent does not steal focus or move the cursor.
+    await activateBundle("com.apple.finder").catch(() => undefined);
     const foreground = await waitForSystemState(
       (state) => state.bundleId === "com.apple.finder",
-      5_000,
-    );
+      1_500,
+    ).catch(() => systemState());
     const before = await waitForDiagnostics(
       launchedAt,
       (state) =>
