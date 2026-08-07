@@ -36,7 +36,10 @@ export async function createElectronCookieWriteTarget(options: {
       send: (method, params) =>
         view.webContents.debugger.sendCommand(method, params),
     },
-    flush: () => chromiumSession.flushStorageData(),
+    flush: async () => {
+      await chromiumSession.cookies.flushStore();
+      chromiumSession.flushStorageData();
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;

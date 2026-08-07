@@ -109,7 +109,11 @@ async function verifyCookies(
   const regularActual = await target.cookies.get({});
   let partitionedActual: any[] = [];
   if (expected.some((cookie) => cookie.partitionKey)) {
-    const result = await target.cdp.send("Storage.getCookies");
+    // Storage.getCookies is browser-context scoped and returns the default
+    // Electron context when the debugger target belongs to a persistent
+    // custom Session. Network.getAllCookies is scoped to the target's actual
+    // Session and preserves CHIPS partition keys for exact verification.
+    const result = await target.cdp.send("Network.getAllCookies");
     partitionedActual = Array.isArray(result?.cookies)
       ? result.cookies.filter((cookie: any) => cookie.partitionKey)
       : [];
@@ -162,10 +166,22 @@ function cdpCookieMatches(expected: ImportedChromeCookie, actual: any) {
     Boolean(actual.httpOnly) === expected.httpOnly &&
     actualSameSite === expected.sameSite &&
     closeExpiration(Number(actual.expires), expected.expirationDate) &&
-    actual.partitionKey?.topLevelSite === expected.partitionKey?.topLevelSite &&
+    normalizePartitionSite(actual.partitionKey?.topLevelSite) ===
+      normalizePartitionSite(expected.partitionKey?.topLevelSite) &&
     Boolean(actual.partitionKey?.hasCrossSiteAncestor) ===
       expected.partitionKey?.hasCrossSiteAncestor
   );
+}
+
+function normalizePartitionSite(value: unknown) {
+  const site = String(value ?? "").trim();
+  try {
+    const url = new URL(site);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return site;
+    return `${url.protocol}//${url.host.toLowerCase()}`;
+  } catch {
+    return site.replace(/\/$/, "").toLowerCase();
+  }
 }
 
 function normalizeDomain(domain: string) {

@@ -81,8 +81,18 @@ class FakeCookieTarget implements CookieWriteTarget {
         }
         return { success: true };
       }
-      if (method === "Storage.getCookies") {
-        return { cookies: this.partitioned };
+      if (method === "Network.getAllCookies") {
+        return {
+          cookies: this.partitioned.map((cookie) => ({
+            ...cookie,
+            partitionKey: cookie.partitionKey
+              ? {
+                  ...cookie.partitionKey,
+                  topLevelSite: `${cookie.partitionKey.topLevelSite}/`,
+                }
+              : undefined,
+          })),
+        };
       }
       throw new Error(`unexpected CDP method: ${method}`);
     },

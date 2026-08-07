@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { spawn } from "node:child_process";
 import {
   lstat,
   readFile,
@@ -147,6 +148,33 @@ export async function detectChromeRunning(
     }
   }
   return { running: true, reason: "singleton-lock" };
+}
+
+export async function requestChromeQuit(
+  userDataPath = defaultChromeUserDataPath(),
+  timeoutMs = 20_000,
+) {
+  if (process.platform !== "darwin") {
+    throw new Error("Chrome quit is only available on macOS");
+  }
+  await new Promise<void>((resolvePromise, reject) => {
+    const child = spawn(
+      "/usr/bin/osascript",
+      ["-e", 'tell application "Google Chrome" to quit'],
+      { stdio: "ignore", windowsHide: true },
+    );
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolvePromise();
+      else reject(new Error("Chrome did not accept the quit request"));
+    });
+  });
+  const deadline = Date.now() + Math.max(1_000, timeoutMs);
+  while (Date.now() < deadline) {
+    if (!(await detectChromeRunning(userDataPath)).running) return { done: true };
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  }
+  throw new Error("Chrome is still running");
 }
 
 export function chromeTimeToUnixMilliseconds(value: unknown) {

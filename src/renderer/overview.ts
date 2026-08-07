@@ -4,12 +4,26 @@ const count = document.querySelector<HTMLElement>("#space-count")!;
 const cards = new Map<number, HTMLElement>();
 const previewStates = new Map<number, PreviewPaintState>();
 const create = createCard();
+const profileDialogBackdrop = document.querySelector<HTMLElement>(
+  "#profile-dialog-backdrop",
+)!;
+const profileDialogContent = document.querySelector<HTMLElement>(
+  "#profile-dialog-content",
+)!;
+const profileDialogTitle = document.querySelector<HTMLElement>(
+  "#profile-dialog-title",
+)!;
+const profileDialogSubtitle = document.querySelector<HTMLElement>(
+  "#profile-dialog-subtitle",
+)!;
 let spaces: any[] = [];
+let browserProfiles: any[] = [];
 let spacesResolved = false;
 let overviewActive = true;
 let visibilityFrame = 0;
 let visibilityFallback = 0;
 let openMenuCard: HTMLElement | undefined;
+let profileDialogLocked = false;
 
 type PreviewPaintState = {
   drawing: boolean;
@@ -22,16 +36,29 @@ const observer = new IntersectionObserver(
   { rootMargin: "120px 0px", threshold: [0, 0.01, 0.5, 1] },
 );
 
-document.querySelector("#quick-create")!.addEventListener("click", () =>
-  api.overview.create(),
+document.querySelector("#quick-create")!.addEventListener("click", openCreateSpace);
+document.querySelector("#profile-button")!.addEventListener("click", () => {
+  void openProfileDialog();
+});
+document.querySelector("#profile-dialog-close")!.addEventListener("click", () =>
+  closeProfileDialog(),
 );
+profileDialogBackdrop.addEventListener("pointerdown", (event) => {
+  if (event.target === profileDialogBackdrop) closeProfileDialog();
+});
+api.profiles.onImportProgress((progress: any) => updateImportProgress(progress));
 document.addEventListener("pointerdown", (event) => {
   const target = event.target as Element | null;
   if (target?.closest(".card-menu")) return;
   closeCardMenu();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || !openMenuCard) return;
+  if (event.key !== "Escape") return;
+  if (!profileDialogBackdrop.hidden) {
+    closeProfileDialog();
+    return;
+  }
+  if (!openMenuCard) return;
   const trigger = openMenuCard.querySelector<HTMLButtonElement>(
     ".card-menu-trigger",
   );
@@ -39,7 +66,7 @@ document.addEventListener("keydown", (event) => {
   trigger?.focus();
 });
 
-void refresh();
+void Promise.all([refresh(), refreshProfiles()]);
 api.overview.onChanged((next: any[]) => {
   spaces = next;
   spacesResolved = true;
@@ -74,6 +101,15 @@ async function refresh() {
   spaces = await api.overview.list();
   spacesResolved = true;
   render();
+}
+
+async function refreshProfiles() {
+  browserProfiles = await api.profiles.list();
+  updateProfileButton();
+  for (const space of spaces) {
+    const card = cards.get(Number(space.id));
+    if (card) updateSpaceCard(card, space);
+  }
 }
 
 function render() {
@@ -150,7 +186,7 @@ function spaceCard(spaceId: number) {
   info.className = "space-info";
   info.innerHTML = `
     <div class="space-title-line"><strong></strong><input class="space-title-editor" aria-label="Space 名称" maxlength="80" /></div>
-    <div class="space-meta"><span></span><span>Chrome · 用户1&nbsp;&nbsp;<b>▢</b> <em></em></span></div>
+    <div class="space-meta"><span></span><span><b class="space-profile">UFO-Browser</b>&nbsp;&nbsp;<b>▢</b> <em></em></span></div>
   `;
 
   const editor = info.querySelector<HTMLInputElement>(".space-title-editor")!;
@@ -336,6 +372,7 @@ function updateSpaceCard(card: HTMLElement, space: any) {
   card.querySelector(".space-meta span:first-child")!.textContent = controlled
     ? space.agentTask?.detail || "Agent 正在浏览"
     : activeTab?.title || "Ready";
+  card.querySelector(".space-profile")!.textContent = profileName(space.profileId);
   card.querySelector(".space-meta em")!.textContent = String(space.tabs.length);
   updatePreviewChrome(card, space, activeTab);
   const placeholder = card.querySelector<HTMLElement>(".preview-placeholder");
@@ -422,8 +459,410 @@ function createCard() {
   const card = document.createElement("button");
   card.className = "create-space-card";
   card.innerHTML = '<span><i></i><b></b></span><small>新建 Space</small>';
-  card.addEventListener("click", () => api.overview.create());
+  card.addEventListener("click", openCreateSpace);
   return card;
+}
+
+async function openProfileDialog() {
+  profileDialogLocked = false;
+  profileDialogBackdrop.hidden = false;
+  document.body.classList.add("dialog-open");
+  profileDialogTitle.textContent = "浏览器 Profile";
+  profileDialogSubtitle.textContent = "新 Space 将使用所选登录状态";
+  profileDialogContent.innerHTML = '<div class="dialog-loading"><i></i><span>正在读取 Profile</span></div>';
+  try {
+    await refreshProfiles();
+    renderProfileHome();
+  } catch {
+    renderDialogError("无法读取浏览器 Profile");
+  }
+  document.querySelector<HTMLButtonElement>("#profile-dialog-close")?.focus();
+}
+
+function closeProfileDialog() {
+  if (profileDialogLocked || profileDialogBackdrop.hidden) return;
+  profileDialogBackdrop.hidden = true;
+  document.body.classList.remove("dialog-open");
+  profileDialogContent.replaceChildren();
+  document.querySelector<HTMLButtonElement>("#profile-button")?.focus();
+}
+
+function renderProfileHome() {
+  profileDialogTitle.textContent = "浏览器 Profile";
+  profileDialogSubtitle.textContent = "新 Space 将使用所选登录状态";
+  profileDialogContent.replaceChildren();
+
+  const profilesSection = document.createElement("section");
+  profilesSection.className = "dialog-section";
+  const heading = document.createElement("h2");
+  heading.textContent = "Profile";
+  const list = document.createElement("div");
+  list.className = "profile-list";
+  for (const profile of browserProfiles) {
+    const row = document.createElement("div");
+    row.className = "profile-row";
+    row.classList.toggle("selected", profile.isDefault);
+    const select = document.createElement("button");
+    select.className = "profile-row-select";
+    select.innerHTML = `
+      <span class="profile-row-avatar"></span>
+      <span class="profile-row-copy"><strong></strong><small></small></span>
+      <span class="profile-row-check" aria-hidden="true">✓</span>
+    `;
+    select.querySelector(".profile-row-avatar")!.textContent = profileInitial(profile.name);
+    select.querySelector("strong")!.textContent = profile.name;
+    select.querySelector("small")!.textContent =
+      profile.kind === "imported"
+        ? `来自 Google Chrome · ${profile.source?.lastImportStatus === "partial" ? "部分导入" : "已导入"}`
+        : "UFO-Browser 本地 Profile";
+    select.setAttribute(
+      "aria-label",
+      profile.isDefault ? `${profile.name}，当前默认` : `将 ${profile.name} 设为默认`,
+    );
+    select.addEventListener("click", async () => {
+      if (profile.isDefault) return;
+      select.disabled = true;
+      try {
+        await api.profiles.setDefault(profile.id);
+        await refreshProfiles();
+        renderProfileHome();
+      } catch {
+        select.disabled = false;
+      }
+    });
+    row.append(select);
+    if (profile.kind === "imported") {
+      const remove = document.createElement("button");
+      remove.className = "profile-row-remove";
+      remove.title = "删除导入的 Profile";
+      remove.setAttribute("aria-label", `删除 ${profile.name}`);
+      remove.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 6h11"></path><path d="m8 3.8.5-1h3l.5 1"></path><path d="m6.1 6 .6 10h6.6l.6-10"></path><path d="M8.8 8.5v5M11.2 8.5v5"></path></svg>';
+      remove.addEventListener("click", async () => {
+        if (!window.confirm(`删除 ${profile.name}？现有登录状态将从 UFO-Browser 移除。`)) return;
+        remove.disabled = true;
+        try {
+          await api.profiles.remove(profile.id);
+          await refreshProfiles();
+          renderProfileHome();
+        } catch (error) {
+          remove.disabled = false;
+          renderDialogError(
+            String(error).includes("profile-in-use")
+              ? "这个 Profile 仍被 Space 使用，请先关闭相关 Space"
+              : "无法删除这个 Profile",
+            "返回",
+            renderProfileHome,
+          );
+        }
+      });
+      row.append(remove);
+    }
+    list.append(row);
+  }
+  profilesSection.append(heading, list);
+
+  const importSection = document.createElement("section");
+  importSection.className = "dialog-section import-command-section";
+  const importButton = document.createElement("button");
+  importButton.className = "import-command";
+  importButton.innerHTML = `
+    <span class="chrome-mark" aria-hidden="true"><i></i></span>
+    <span><strong>从 Chrome 导入登录状态</strong><small>Cookie 与网站存储，仅保存在这台 Mac</small></span>
+    <b aria-hidden="true">›</b>
+  `;
+  importButton.addEventListener("click", () => void renderChromeDiscovery());
+  importSection.append(importButton);
+
+  const sync = document.createElement("div");
+  sync.className = "coming-soon-row";
+  sync.innerHTML = '<span><strong>保持登录状态最新</strong><small>自动同步即将推出</small></span><button disabled role="switch" aria-checked="false"><i></i></button>';
+  importSection.append(sync);
+  profileDialogContent.append(profilesSection, importSection);
+}
+
+async function renderChromeDiscovery() {
+  profileDialogTitle.textContent = "从 Chrome 导入";
+  profileDialogSubtitle.textContent = "不会修改 Chrome，也不会导入密码或浏览记录";
+  profileDialogContent.innerHTML = '<div class="dialog-loading"><i></i><span>正在查找 Google Chrome Profile</span></div>';
+  try {
+    const discovery = await api.profiles.discoverChrome();
+    renderChromeProfiles(discovery);
+  } catch {
+    renderDialogError("无法读取 Google Chrome Profile", "返回", renderProfileHome);
+  }
+}
+
+function renderChromeProfiles(discovery: any) {
+  profileDialogContent.replaceChildren();
+  if (!Array.isArray(discovery?.profiles) || discovery.profiles.length === 0) {
+    renderDialogError("没有找到可导入的 Google Chrome Profile", "返回", renderProfileHome);
+    return;
+  }
+  const runningNotice = document.createElement("div");
+  runningNotice.className = `source-status ${discovery.running ? "warning" : "ready"}`;
+  runningNotice.innerHTML = discovery.running
+    ? '<span><strong>Google Chrome 正在运行</strong><small>完整导入前需要正常退出 Chrome</small></span>'
+    : '<span><strong>可以开始导入</strong><small>macOS 将在下一步请求 Keychain 授权</small></span>';
+  if (discovery.running) {
+    const quit = document.createElement("button");
+    quit.className = "secondary-button compact";
+    quit.textContent = "退出 Chrome";
+    quit.addEventListener("click", async () => {
+      quit.disabled = true;
+      quit.textContent = "正在退出";
+      try {
+        await api.profiles.quitChrome();
+        await renderChromeDiscovery();
+      } catch {
+        quit.disabled = false;
+        quit.textContent = "重新检测";
+      }
+    });
+    runningNotice.append(quit);
+  }
+
+  const form = document.createElement("form");
+  form.className = "chrome-import-form";
+  const choices = document.createElement("div");
+  choices.className = "chrome-profile-list";
+  const preferred =
+    discovery.profiles.find((profile: any) => profile.isLastUsed) ??
+    discovery.profiles[0];
+  for (const profile of discovery.profiles) {
+    const label = document.createElement("label");
+    label.className = "chrome-profile-row";
+    label.innerHTML = `
+      <input type="radio" name="chrome-profile" />
+      <span class="profile-row-avatar chrome"></span>
+      <span class="profile-row-copy"><strong></strong><small></small></span>
+      <span class="radio-indicator"><i></i></span>
+    `;
+    const input = label.querySelector<HTMLInputElement>("input")!;
+    input.value = profile.profileDirName;
+    input.checked = profile.profileDirName === preferred.profileDirName;
+    label.querySelector(".profile-row-avatar")!.textContent = profileInitial(
+      profile.displayName,
+    );
+    label.querySelector("strong")!.textContent = profile.displayName;
+    label.querySelector("small")!.textContent = `${profile.profileDirName} · ${formatBytes(profile.approximateImportBytes)}`;
+    choices.append(label);
+  }
+
+  const defaultChoice = document.createElement("label");
+  defaultChoice.className = "default-profile-choice";
+  defaultChoice.innerHTML = '<input type="checkbox" checked /><span><i>✓</i></span><b>设为新 Task Space 的默认 Profile</b>';
+  const actions = document.createElement("div");
+  actions.className = "dialog-actions";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "secondary-button";
+  back.textContent = "返回";
+  back.addEventListener("click", renderProfileHome);
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.className = "primary-button";
+  submit.textContent = discovery.running ? "等待 Chrome 退出" : "导入登录状态";
+  submit.disabled = Boolean(discovery.running);
+  actions.append(back, submit);
+  form.append(choices, defaultChoice, actions);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const selected = form.querySelector<HTMLInputElement>(
+      'input[name="chrome-profile"]:checked',
+    );
+    if (!selected) return;
+    void runChromeImport(
+      selected.value,
+      defaultChoice.querySelector<HTMLInputElement>("input")!.checked,
+    );
+  });
+  profileDialogContent.append(runningNotice, form);
+}
+
+async function runChromeImport(profileDirName: string, makeDefault: boolean) {
+  profileDialogLocked = true;
+  profileDialogTitle.textContent = "正在导入登录状态";
+  profileDialogSubtitle.textContent = "数据始终保留在这台 Mac";
+  profileDialogContent.innerHTML = importProgressMarkup();
+  updateImportProgress({ phase: "snapshotting", completed: 0, total: 4 });
+  try {
+    const result = await api.profiles.importChrome(profileDirName, makeDefault);
+    profileDialogLocked = false;
+    await refreshProfiles();
+    renderImportResult(result);
+  } catch (error) {
+    profileDialogLocked = false;
+    profileDialogTitle.textContent = "导入未完成";
+    profileDialogSubtitle.textContent = "现有 UFO-Browser 数据未受影响";
+    renderDialogError(importErrorMessage(error), "返回", () => {
+      void renderChromeDiscovery();
+    });
+  }
+}
+
+function importProgressMarkup() {
+  return `
+    <div class="import-progress-view">
+      <div class="import-progress-ring"><i></i><span id="import-progress-number">0%</span></div>
+      <strong id="import-progress-title">正在准备 Chrome 快照</strong>
+      <span id="import-progress-detail">正在建立受保护的本地副本</span>
+      <div class="import-progress-track"><i id="import-progress-fill"></i></div>
+      <div class="import-progress-steps">
+        <span data-phase="snapshotting">快照</span>
+        <span data-phase="importing-cookies">Cookie</span>
+        <span data-phase="verifying">验证</span>
+        <span data-phase="committed">完成</span>
+      </div>
+    </div>
+  `;
+}
+
+function updateImportProgress(progress: any) {
+  if (!profileDialogLocked || !document.querySelector("#import-progress-fill")) return;
+  const completed = Math.max(0, Number(progress?.completed) || 0);
+  const total = Math.max(1, Number(progress?.total) || 4);
+  const percent = Math.min(100, Math.round((completed / total) * 100));
+  const phase = String(progress?.phase || "snapshotting");
+  const copy: Record<string, [string, string]> = {
+    snapshotting: ["正在准备 Chrome 快照", "正在建立受保护的本地副本"],
+    "importing-cookies": ["正在导入 Cookie", "等待或处理 macOS Keychain 授权"],
+    verifying: ["正在验证登录状态", "逐项核对 Cookie 与分区属性"],
+    committed: ["导入完成", "新的 Profile 已可用于 Task Space"],
+  };
+  const [title, detail] = copy[phase] ?? copy.snapshotting;
+  document.querySelector<HTMLElement>("#import-progress-number")!.textContent = `${percent}%`;
+  document.querySelector<HTMLElement>("#import-progress-title")!.textContent = title;
+  document.querySelector<HTMLElement>("#import-progress-detail")!.textContent = detail;
+  document.querySelector<HTMLElement>("#import-progress-fill")!.style.width = `${percent}%`;
+  const order = ["snapshotting", "importing-cookies", "verifying", "committed"];
+  const index = Math.max(0, order.indexOf(phase));
+  document.querySelectorAll<HTMLElement>(".import-progress-steps span").forEach((step, stepIndex) => {
+    step.classList.toggle("active", stepIndex <= index);
+  });
+}
+
+function renderImportResult(result: any) {
+  profileDialogTitle.textContent = result?.status === "partial" ? "登录状态已部分导入" : "登录状态已导入";
+  profileDialogSubtitle.textContent = result?.profile?.name || "Chrome Profile";
+  profileDialogContent.innerHTML = `
+    <div class="import-result-view">
+      <span class="result-mark">✓</span>
+      <strong></strong>
+      <small></small>
+      <div class="import-result-stats">
+        <span><b>${Number(result?.cookies?.imported) || 0}</b><small>Cookie</small></span>
+        <span><b>${Number(result?.cookies?.partitioned) || 0}</b><small>CHIPS</small></span>
+        <span><b>${Array.isArray(result?.storage?.copied) ? result.storage.copied.length : 0}</b><small>存储类型</small></span>
+      </div>
+      <button class="primary-button">完成</button>
+    </div>
+  `;
+  profileDialogContent.querySelector(".import-result-view > strong")!.textContent =
+    result?.status === "partial" ? "部分网站可能需要重新登录" : "新 Space 可以直接使用这份登录状态";
+  profileDialogContent.querySelector(".import-result-view > small")!.textContent =
+    `${Number(result?.cookies?.skipped) || 0} 项已过期或无法安全迁移`;
+  profileDialogContent.querySelector("button")!.addEventListener("click", () => {
+    renderProfileHome();
+  });
+}
+
+function renderDialogError(
+  message: string,
+  actionLabel = "关闭",
+  action: () => void = closeProfileDialog,
+) {
+  profileDialogLocked = false;
+  profileDialogContent.innerHTML = `
+    <div class="dialog-error-view">
+      <span>!</span>
+      <strong></strong>
+      <button class="secondary-button"></button>
+    </div>
+  `;
+  profileDialogContent.querySelector("strong")!.textContent = message;
+  const button = profileDialogContent.querySelector<HTMLButtonElement>("button")!;
+  button.textContent = actionLabel;
+  button.addEventListener("click", action);
+}
+
+function openCreateSpace() {
+  if (browserProfiles.length <= 1) {
+    void api.overview.create();
+    return;
+  }
+  profileDialogLocked = false;
+  profileDialogBackdrop.hidden = false;
+  document.body.classList.add("dialog-open");
+  profileDialogTitle.textContent = "新建 Space";
+  profileDialogSubtitle.textContent = "选择这个 Space 使用的浏览器 Profile";
+  profileDialogContent.innerHTML = `
+    <form class="create-space-form">
+      <label><span>名称</span><input name="name" maxlength="80" placeholder="新 Space" /></label>
+      <label><span>Profile</span><select name="profile"></select></label>
+      <div class="dialog-actions"><button type="button" class="secondary-button">取消</button><button type="submit" class="primary-button">创建</button></div>
+    </form>
+  `;
+  const form = profileDialogContent.querySelector<HTMLFormElement>("form")!;
+  const select = form.querySelector<HTMLSelectElement>("select")!;
+  for (const profile of browserProfiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.name;
+    option.selected = profile.isDefault;
+    select.append(option);
+  }
+  form.querySelector<HTMLButtonElement>('button[type="button"]')!.addEventListener("click", closeProfileDialog);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = form.querySelector<HTMLInputElement>('input[name="name"]')!.value.trim();
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    submit.disabled = true;
+    try {
+      await api.overview.create(name || undefined, select.value);
+      closeProfileDialog();
+    } catch {
+      submit.disabled = false;
+    }
+  });
+  form.querySelector<HTMLInputElement>("input")!.focus();
+}
+
+function updateProfileButton() {
+  const selected = browserProfiles.find((profile) => profile.isDefault) ?? browserProfiles[0];
+  if (!selected) return;
+  document.querySelector("#profile-avatar")!.textContent = profileInitial(selected.name);
+  document.querySelector("#profile-button-label")!.textContent = selected.name;
+}
+
+function profileName(profileId: string) {
+  return (
+    browserProfiles.find((profile) => profile.id === profileId)?.name ??
+    (profileId === "default" ? "UFO-Browser" : "Profile")
+  );
+}
+
+function profileInitial(name: string) {
+  return String(name || "U").match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() || "U";
+}
+
+function formatBytes(value: unknown) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function importErrorMessage(error: unknown) {
+  const value = String(error);
+  if (value.includes("chrome-running")) return "Google Chrome 仍在运行";
+  if (value.includes("keychain-canceled")) return "已取消 macOS Keychain 授权";
+  if (value.includes("keychain-item-missing")) return "没有找到 Chrome Safe Storage";
+  if (value.includes("cookie-decryption-failed")) {
+    return "无法解密 Chrome Cookie，现有 UFO-Browser 数据未受影响";
+  }
+  if (value.includes("cookie-verification-failed")) return "Cookie 验证未通过，现有 Profile 未受影响";
+  if (value.includes("chrome-profile-not-found")) return "Chrome Profile 已发生变化，请重新检测";
+  return "导入没有完成，现有 UFO-Browser 数据未受影响";
 }
 
 function scheduleVisibilityPublish() {

@@ -192,7 +192,7 @@ export class TaskSpaceManager {
 
   listProfiles() {
     return this.options.profiles.listPublic().map(({ id, isDefault, name }) => ({
-      id,
+      id: id === "default" ? "Default" : id,
       isDefault,
       name,
     }));

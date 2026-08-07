@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BrowserProfileRegistry,
+  cleanupPendingProfilePartitions,
   DEFAULT_PROFILE_PARTITION_ID,
   isValidPartitionId,
   isValidProfileId,
@@ -18,7 +19,7 @@ test("profile registry creates a private default profile atomically", async () =
     await registry.initialize();
     assert.deepEqual(registry.listPublic(), [
       {
-        id: "Default",
+        id: "default",
         isDefault: true,
         name: "您的 UFO-Browser",
         kind: "local",
@@ -66,6 +67,67 @@ test("profile registry publishes an imported profile only after an atomic add", 
     const reloaded = new BrowserProfileRegistry(path);
     await reloaded.initialize();
     assert.equal(reloaded.getDefault().partitionId, "x-browser-profile-chrome-default-abc123");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("removing an imported profile falls back to local and cleans its partition on cold start", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-profile-registry-"));
+  const path = join(root, "profiles.json");
+  const partitionsRoot = join(root, "Partitions");
+  const partitionId = "x-browser-profile-chrome-removable";
+  try {
+    const registry = new BrowserProfileRegistry(path);
+    await registry.initialize();
+    const now = Date.now();
+    await registry.add(
+      {
+        id: "chrome-removable",
+        partitionId,
+        name: "Chrome Personal",
+        kind: "imported",
+        source: {
+          browser: "chrome",
+          profileDirName: "Default",
+          displayName: "Personal",
+          importedAt: now,
+          lastImportStatus: "success",
+          loginSyncEnabled: false,
+        },
+        createdAt: now,
+        updatedAt: now,
+      },
+      true,
+    );
+    await mkdir(join(partitionsRoot, partitionId), { recursive: true });
+    await writeFile(join(partitionsRoot, partitionId, "Cookies"), "private state");
+
+    await registry.remove("chrome-removable");
+    assert.equal(registry.getDefault().id, "default");
+    assert.deepEqual(registry.pendingPartitionCleanup(), [partitionId]);
+    assert.equal(registry.listPublic().some((profile) => profile.id === "chrome-removable"), false);
+    assert.equal(await readFile(join(partitionsRoot, partitionId, "Cookies"), "utf8"), "private state");
+
+    const restarted = new BrowserProfileRegistry(path);
+    await restarted.initialize();
+    const pending = restarted.pendingPartitionCleanup();
+    await cleanupPendingProfilePartitions(partitionsRoot, pending);
+    await restarted.completePartitionCleanup(pending);
+    await assert.rejects(readFile(join(partitionsRoot, partitionId, "Cookies"), "utf8"));
+    assert.deepEqual(restarted.pendingPartitionCleanup(), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the built-in local browser profile cannot be removed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-profile-registry-"));
+  try {
+    const registry = new BrowserProfileRegistry(join(root, "profiles.json"));
+    await registry.initialize();
+    await assert.rejects(registry.remove("default"), /local browser profile cannot be removed/);
+    assert.equal(registry.listPublic().length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

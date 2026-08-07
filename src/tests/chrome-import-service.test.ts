@@ -114,6 +114,34 @@ test("Chrome import refuses a running source before touching Keychain", async ()
   }
 });
 
+test("Chrome import does not publish a Profile when every encrypted Cookie fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  try {
+    await createChromeFixture(chromeRoot, profilePath, Buffer.from("correct-secret"));
+    const registry = new BrowserProfileRegistry(join(root, "UFO", "profiles.json"));
+    await registry.initialize();
+    const service = new ChromeLoginImportService({
+      userDataPath: join(root, "UFO"),
+      partitionsRoot: join(root, "UFO", "Partitions"),
+      profiles: registry,
+      keychain: new MockKeychainProvider("wrong-secret"),
+      targetChromiumVersion: "150.0.0.0",
+      chromeUserDataPath: chromeRoot,
+      createTarget: async () => new FakeCookieTarget(),
+    });
+    await assert.rejects(
+      service.importProfile("Default", true),
+      (error: ChromeImportError) => error.code === "cookie-decryption-failed",
+    );
+    assert.equal(registry.listPublic().length, 1);
+    assert.equal(registry.getDefault().id, "default");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 class FakeCookieTarget implements CookieWriteTarget {
   regular: any[] = [];
   partitioned: any[] = [];
@@ -138,7 +166,7 @@ class FakeCookieTarget implements CookieWriteTarget {
         });
         return { success: true };
       }
-      if (method === "Storage.getCookies") return { cookies: this.partitioned };
+      if (method === "Network.getAllCookies") return { cookies: this.partitioned };
       throw new Error("unexpected CDP method");
     },
   };

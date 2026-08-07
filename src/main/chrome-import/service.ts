@@ -5,6 +5,7 @@ import {
   defaultChromeUserDataPath,
   detectChromeRunning,
   discoverChromeProfiles,
+  requestChromeQuit,
   type DiscoveredChromeProfile,
 } from "./discovery.js";
 import { readChromeCookies } from "./cookies.js";
@@ -66,6 +67,12 @@ export class ChromeLoginImportService {
     };
   }
 
+  async quitChrome() {
+    const chromeUserDataPath =
+      this.options.chromeUserDataPath ?? defaultChromeUserDataPath();
+    return requestChromeQuit(chromeUserDataPath);
+  }
+
   async importProfile(
     profileDirName: string,
     makeDefault: boolean,
@@ -103,6 +110,18 @@ export class ChromeLoginImportService {
             this.options.keychain,
           )
         : { databaseVersion: 0, cookies: [], warnings: [] };
+      if (
+        cookieResult.cookies.length === 0 &&
+        cookieResult.warnings.some((warning) =>
+          [
+            "decryption-failed",
+            "host-digest-mismatch",
+            "invalid-utf8",
+          ].includes(warning.code),
+        )
+      ) {
+        throw new ChromeImportError("cookie-decryption-failed");
+      }
       target = await this.options.createTarget(
         snapshot.target.profileId,
         snapshot.target.partitionId,

@@ -9,8 +9,8 @@ function on(channel: string, listener: (payload: any) => void) {
 contextBridge.exposeInMainWorld("xBrowser", {
   overview: {
     list: () => ipcRenderer.invoke("x-browser:overview:list"),
-    create: (name?: string) =>
-      ipcRenderer.invoke("x-browser:overview:create", name),
+    create: (name?: string, profileId?: string) =>
+      ipcRenderer.invoke("x-browser:overview:create", name, profileId),
     open: (spaceId: number) =>
       ipcRenderer.invoke("x-browser:overview:open", spaceId),
     rename: (spaceId: number, name: string) =>
@@ -25,6 +25,24 @@ contextBridge.exposeInMainWorld("xBrowser", {
       on("x-browser:spaces-changed", listener),
     onPreviewFrame: (listener: (frame: any) => void) =>
       on("x-browser:overview-preview-frame", listener),
+  },
+  profiles: {
+    list: () => ipcRenderer.invoke("x-browser:profiles:list"),
+    setDefault: (profileId: string) =>
+      ipcRenderer.invoke("x-browser:profiles:set-default", profileId),
+    remove: (profileId: string) =>
+      ipcRenderer.invoke("x-browser:profiles:remove", profileId),
+    discoverChrome: () =>
+      ipcRenderer.invoke("x-browser:profiles:chrome-discover"),
+    quitChrome: () => ipcRenderer.invoke("x-browser:profiles:chrome-quit"),
+    importChrome: (profileDirName: string, makeDefault: boolean) =>
+      ipcRenderer.invoke(
+        "x-browser:profiles:chrome-import",
+        profileDirName,
+        makeDefault,
+      ),
+    onImportProgress: (listener: (progress: any) => void) =>
+      on("x-browser:chrome-import-progress", listener),
   },
   browser: {
     state: () => ipcRenderer.invoke("x-browser:browser:state"),

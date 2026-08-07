@@ -1,9 +1,10 @@
-import { cp, mkdir, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   app,
   BaseWindow,
   ipcMain,
+  session,
   type IpcMainInvokeEvent,
   WebContentsView,
 } from "electron";
@@ -14,8 +15,18 @@ import { PresentationCoordinator } from "./main/presentation-coordinator.js";
 import { SnapshotService } from "./main/snapshot.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
-import { BrowserProfileRegistry } from "./main/profile-registry.js";
+import {
+  BrowserProfileRegistry,
+  cleanupPendingProfilePartitions,
+} from "./main/profile-registry.js";
 import { recoverChromeImportJobs } from "./main/chrome-import/transaction.js";
+import { ChromeLoginImportService } from "./main/chrome-import/service.js";
+import { createElectronCookieWriteTarget } from "./main/chrome-import/electron-target.js";
+import { readChromeCookies } from "./main/chrome-import/cookies.js";
+import {
+  MacKeychainProvider,
+  MockKeychainProvider,
+} from "./main/chrome-import/keychain.js";
 import { ClaudeSessionManager } from "./main/claude-chat/manager.js";
 import { visibleSpaceIds } from "./main/preview-visibility.js";
 import { BROWSER_CHROME_HEIGHT } from "./main/shell-page-bounds.js";
@@ -154,11 +165,46 @@ async function start() {
   const store = new BrowserStateStore(join(userDataPath, "browser-state.json"));
   const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
   await profiles.initialize();
+  const pendingProfileCleanup = profiles.pendingPartitionCleanup();
+  if (pendingProfileCleanup.length > 0) {
+    await cleanupPendingProfilePartitions(partitionsRoot, pendingProfileCleanup);
+    await profiles.completePartitionCleanup(pendingProfileCleanup);
+  }
   await recoverChromeImportJobs(
     join(userDataPath, "Chrome Import", "jobs"),
     partitionsRoot,
     profiles.partitionIds(),
   );
+  const keychainHelperPath = app.isPackaged
+    ? join(
+        process.resourcesPath,
+        "app.asar.unpacked",
+        "dist",
+        "bin",
+        "ufo-keychain-helper",
+      )
+    : join(projectRoot, "dist", "bin", "ufo-keychain-helper");
+  const testSafeStorageSecret = process.env.X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET;
+  const chromeImport = new ChromeLoginImportService({
+    userDataPath,
+    partitionsRoot,
+    profiles,
+    keychain:
+      isTestApp && testSafeStorageSecret
+        ? new MockKeychainProvider(testSafeStorageSecret)
+        : new MacKeychainProvider(keychainHelperPath),
+    targetChromiumVersion: process.versions.chrome,
+    chromeUserDataPath:
+      isTestApp && process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
+        ? process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
+        : undefined,
+    createTarget: (profileId, partitionId) =>
+      createElectronCookieWriteTarget({
+        partitionsRoot,
+        profileId,
+        partitionId,
+      }),
+  });
   const manager = new TaskSpaceManager({
     store,
     profiles,
@@ -259,6 +305,8 @@ async function start() {
     overviewView,
     browserView,
     claude,
+    profiles,
+    chromeImport,
   });
   traceStart("ipc-registered");
   claude.onEvent((event) =>
@@ -463,6 +511,73 @@ async function start() {
     }, 500);
   }
 
+  if (isTestApp && process.env.X_BROWSER_TEST_CHROME_IMPORT_UI_AUDIT === "1") {
+    setTimeout(() => {
+      void runChromeImportUiAudit({
+        testRoot,
+        userDataPath,
+        manager,
+        profiles,
+        overviewView,
+      }).catch(async (error) => {
+        await writeFile(
+          join(testRoot, "chrome-import-ui-audit.json"),
+          `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+        ).catch(() => undefined);
+      });
+    }, 650);
+  }
+
+  if (isTestApp && process.env.X_BROWSER_TEST_CHROME_IMPORT_RESTART_AUDIT === "1") {
+    setTimeout(() => {
+      void runChromeImportRestartAudit({
+        testRoot,
+        userDataPath,
+        manager,
+        profiles,
+        overviewView,
+      }).catch(async (error) => {
+        await writeFile(
+          join(testRoot, "chrome-import-restart-audit.json"),
+          `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+        ).catch(() => undefined);
+      });
+    }, 650);
+  }
+
+  if (isTestApp && process.env.X_BROWSER_TEST_CHROME_IMPORT_ROLLBACK_AUDIT === "1") {
+    setTimeout(() => {
+      void runChromeImportRollbackAudit({
+        testRoot,
+        profiles,
+        overviewView,
+      }).catch(async (error) => {
+        await writeFile(
+          join(testRoot, "chrome-import-rollback-audit.json"),
+          `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+        ).catch(() => undefined);
+      });
+    }, 650);
+  }
+
+  if (
+    isTestApp &&
+    process.env.X_BROWSER_TEST_CHROME_IMPORT_ROLLBACK_RECOVERY_AUDIT === "1"
+  ) {
+    setTimeout(() => {
+      void runChromeImportRollbackRecoveryAudit({
+        testRoot,
+        userDataPath,
+        profiles,
+      }).catch(async (error) => {
+        await writeFile(
+          join(testRoot, "chrome-import-rollback-recovery-audit.json"),
+          `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+        ).catch(() => undefined);
+      });
+    }, 650);
+  }
+
   if (isTestApp && process.env.X_BROWSER_TEST_CONTROL_UI_AUDIT === "1") {
     setTimeout(() => {
       void runControlUiAudit({
@@ -656,10 +771,20 @@ type IpcContext = {
   overviewView: WebContentsView;
   browserView: WebContentsView;
   claude: ClaudeSessionManager;
+  profiles: BrowserProfileRegistry;
+  chromeImport: ChromeLoginImportService;
 };
 
 function registerIpc(context: IpcContext) {
-  const { manager, presentation, leases, shellIds, browserView } = context;
+  const {
+    manager,
+    presentation,
+    leases,
+    shellIds,
+    browserView,
+    profiles,
+    chromeImport,
+  } = context;
   const shell = <T extends unknown[]>(
     channel: string,
     handler: (event: IpcMainInvokeEvent, ...args: T) => unknown,
@@ -671,8 +796,44 @@ function registerIpc(context: IpcContext) {
   };
 
   shell("x-browser:overview:list", () => manager.listSpaces());
-  shell("x-browser:overview:create", async (_event, name?: string) => {
-    const space = await manager.createSpace(name || `Space ${manager.listSpaces().length + 1}`, "user");
+  shell("x-browser:profiles:list", () => profiles.listPublic());
+  shell("x-browser:profiles:set-default", (_event, profileId: string) =>
+    profiles.setDefault(String(profileId)),
+  );
+  shell("x-browser:profiles:remove", (_event, profileId: string) => {
+    const id = String(profileId);
+    if (manager.listSpaces().some((space) => space.profileId === id)) {
+      throw new Error("profile-in-use");
+    }
+    return profiles.remove(id);
+  });
+  shell("x-browser:profiles:chrome-discover", () => chromeImport.discover());
+  shell("x-browser:profiles:chrome-quit", () => chromeImport.quitChrome());
+  shell(
+    "x-browser:profiles:chrome-import",
+    (event, profileDirName: string, makeDefault: boolean) => {
+      const directory = String(profileDirName);
+      if (!/^(Default|Profile [1-9][0-9]*)$/.test(directory)) {
+        throw new Error("invalid Chrome profile directory");
+      }
+      return chromeImport.importProfile(
+        directory,
+        makeDefault === true,
+        (progress) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("x-browser:chrome-import-progress", progress);
+          }
+        },
+      );
+    },
+  );
+  shell("x-browser:overview:create", async (_event, name?: string, profileId?: string) => {
+    const selectedProfileId = profileId ? String(profileId) : undefined;
+    const space = await manager.createSpace(
+      name || `Space ${manager.listSpaces().length + 1}`,
+      "user",
+      selectedProfileId,
+    );
     await presentation.showSpace(space.id);
     browserView.webContents.send("x-browser:browser-state", manager.navigationState(space.id));
     return space;
@@ -1701,6 +1862,460 @@ async function runSpaceUiAudit(context: {
       2,
     )}\n`,
   );
+}
+
+async function runChromeImportUiAudit(context: {
+  testRoot: string;
+  userDataPath: string;
+  manager: TaskSpaceManager;
+  profiles: BrowserProfileRegistry;
+  overviewView: WebContentsView;
+}) {
+  const { testRoot, userDataPath, manager, profiles, overviewView } = context;
+  const initialSpaceCount = manager.listSpaces().length;
+  await overviewView.webContents.executeJavaScript(
+    `(() => {
+      globalThis.__chromeImportProgress = [];
+      window.xBrowser.profiles.onImportProgress((progress) => {
+        globalThis.__chromeImportProgress.push({
+          phase: String(progress?.phase || ''),
+          completed: Number(progress?.completed || 0),
+          total: Number(progress?.total || 0),
+        });
+      });
+      document.querySelector('#profile-button')?.click();
+    })()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.import-command'))`,
+  );
+  const profileHome = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      dialogVisible: !document.querySelector('#profile-dialog-backdrop')?.hidden,
+      profileRows: document.querySelectorAll('.profile-row').length,
+      importLabel: document.querySelector('.import-command strong')?.textContent || '',
+      syncDisabled: Boolean(document.querySelector('.coming-soon-row button')?.disabled),
+    }))()`,
+    true,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.import-command')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.chrome-profile-row'))`,
+  );
+  const discovery = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      title: document.querySelector('#profile-dialog-title')?.textContent || '',
+      profiles: [...document.querySelectorAll('.chrome-profile-row')].map((row) => ({
+        name: row.querySelector('strong')?.textContent || '',
+        detail: row.querySelector('small')?.textContent || '',
+        selected: Boolean(row.querySelector('input')?.checked),
+      })),
+      submitEnabled: !document.querySelector('.chrome-import-form button[type="submit"]')?.disabled,
+    }))()`,
+    true,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.chrome-import-form')?.requestSubmit()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.import-result-view, .dialog-error-view'))`,
+    12_000,
+  );
+  const importFailed = await overviewView.webContents.executeJavaScript(
+    `Boolean(document.querySelector('.dialog-error-view'))`,
+    true,
+  );
+  if (importFailed) {
+    throw new Error(
+      `Chrome import verification diagnostic: ${JSON.stringify(
+        await diagnoseChromeImportFailure(userDataPath),
+      )}`,
+    );
+  }
+  const result = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      title: document.querySelector('#profile-dialog-title')?.textContent || '',
+      stats: [...document.querySelectorAll('.import-result-stats > span')].map((row) => ({
+        value: row.querySelector('b')?.textContent || '',
+        label: row.querySelector('small')?.textContent || '',
+      })),
+      progress: globalThis.__chromeImportProgress || [],
+    }))()`,
+    true,
+  );
+  const imported = profiles.list().find((profile) => profile.kind === "imported");
+  if (!imported) throw new Error("Chrome import UI did not publish a Profile");
+  const importedCookies = await session
+    .fromPartition(`persist:${imported.partitionId}`)
+    .cookies.get({});
+
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.import-result-view button')?.click(); document.querySelector('#quick-create')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.create-space-form'))`,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `(() => {
+      const form = document.querySelector('.create-space-form');
+      const name = form?.querySelector('input[name="name"]');
+      const profile = form?.querySelector('select[name="profile"]');
+      if (name) name.value = 'Imported Profile Space';
+      if (profile) profile.value = ${JSON.stringify(imported.id)};
+      form?.requestSubmit();
+    })()`,
+    true,
+  );
+  await waitUntil(
+    () => manager.listSpaces().length === initialSpaceCount + 1,
+    3_000,
+  );
+  const created = manager.listSpaces().at(-1)!;
+  const removeWhileUsed = await overviewView.webContents.executeJavaScript(
+    `window.xBrowser.profiles.remove(${JSON.stringify(imported.id)}).then(() => 'removed').catch((error) => String(error))`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "chrome-import-ui.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  const phases = result.progress.map((progress: any) => progress.phase);
+  const ok =
+    profileHome.dialogVisible === true &&
+    profileHome.profileRows === 1 &&
+    profileHome.importLabel === "从 Chrome 导入登录状态" &&
+    profileHome.syncDisabled === true &&
+    discovery.title === "从 Chrome 导入" &&
+    discovery.profiles.length === 1 &&
+    discovery.profiles[0].name === "Fixture Personal" &&
+    discovery.profiles[0].selected === true &&
+    discovery.submitEnabled === true &&
+    result.title === "登录状态已导入" &&
+    phases.join(",") ===
+      "snapshotting,importing-cookies,verifying,committed" &&
+    importedCookies.length === 2 &&
+    profiles.getDefault().id === imported.id &&
+    created.profileId === imported.id &&
+    String(removeWhileUsed).includes("profile-in-use");
+  await writeFile(
+    join(testRoot, "chrome-import-ui-audit.json"),
+    `${JSON.stringify(
+      {
+        ok,
+        profileHome,
+        discovery,
+        result,
+        importedProfile: {
+          id: imported.id,
+          isDefault: profiles.getDefault().id === imported.id,
+          cookieCount: importedCookies.length,
+        },
+        createdSpace: { id: created.id, profileId: created.profileId },
+        removeWhileUsed: String(removeWhileUsed).includes("profile-in-use"),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function diagnoseChromeImportFailure(userDataPath: string) {
+  const jobsRoot = join(userDataPath, "Chrome Import", "jobs");
+  const jobNames = await directoryNames(jobsRoot);
+  const latestJob = jobNames.at(-1);
+  if (!latestJob) return { pendingJobs: 0 };
+  const manifest = JSON.parse(
+    await readFile(join(jobsRoot, latestJob, "job.json"), "utf8"),
+  );
+  const partitionId = String(manifest?.target?.partitionId || "");
+  const profileId = String(manifest?.target?.profileId || "");
+  const target = await createElectronCookieWriteTarget({
+    partitionsRoot: join(userDataPath, "Partitions"),
+    profileId,
+    partitionId,
+  });
+  try {
+    const regular = await target.cookies.get({});
+    const storage = await target.cdp.send("Network.getAllCookies");
+    const storageCookies = Array.isArray(storage?.cookies) ? storage.cookies : [];
+    const partitioned = storageCookies.filter((cookie: any) => cookie.partitionKey);
+    const testSecret = process.env.X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET || "";
+    const expected = await readChromeCookies(
+      join(jobsRoot, latestJob, "source", "Cookies"),
+      new MockKeychainProvider(testSecret),
+    );
+    const expectedPartitioned = expected.cookies.find(
+      (cookie) => cookie.partitionKey,
+    );
+    const actualPartitioned = partitioned[0];
+    const partitionComparison =
+      expectedPartitioned && actualPartitioned
+        ? {
+            name: actualPartitioned.name === expectedPartitioned.name,
+            value: actualPartitioned.value === expectedPartitioned.value,
+            domain:
+              String(actualPartitioned.domain || "").replace(/^\./, "") ===
+              expectedPartitioned.domain.replace(/^\./, ""),
+            path: actualPartitioned.path === expectedPartitioned.path,
+            secure: Boolean(actualPartitioned.secure) === expectedPartitioned.secure,
+            httpOnly:
+              Boolean(actualPartitioned.httpOnly) === expectedPartitioned.httpOnly,
+            sameSite:
+              actualPartitioned.sameSite === "None"
+                ? expectedPartitioned.sameSite === "no_restriction"
+                : actualPartitioned.sameSite === expectedPartitioned.sameSite,
+            expirationDelta: Math.abs(
+              Number(actualPartitioned.expires) -
+                expectedPartitioned.expirationDate,
+            ),
+            topLevelSite:
+              actualPartitioned.partitionKey?.topLevelSite ===
+              expectedPartitioned.partitionKey?.topLevelSite,
+            hasCrossSiteAncestor:
+              Boolean(
+                actualPartitioned.partitionKey?.hasCrossSiteAncestor,
+              ) === expectedPartitioned.partitionKey?.hasCrossSiteAncestor,
+          }
+        : undefined;
+    return {
+      pendingJobs: jobNames.length,
+      phase: String(manifest?.phase || ""),
+      failureCode: String(manifest?.failureCode || ""),
+      regular: regular.map((cookie) => ({
+        hostOnly: Boolean(cookie.hostOnly),
+        secure: Boolean(cookie.secure),
+        httpOnly: Boolean(cookie.httpOnly),
+        session: Boolean(cookie.session),
+        sameSite: cookie.sameSite,
+        expirationPresent: typeof cookie.expirationDate === "number",
+      })),
+      partitioned: partitioned.map((cookie: any) => ({
+        secure: Boolean(cookie.secure),
+        httpOnly: Boolean(cookie.httpOnly),
+        sameSite: String(cookie.sameSite || ""),
+        expirationPresent: typeof cookie.expires === "number",
+        partitionKeyPresent: Boolean(cookie.partitionKey),
+        hasCrossSiteAncestor: Boolean(
+          cookie.partitionKey?.hasCrossSiteAncestor,
+        ),
+      })),
+      storageCookies: storageCookies.map((cookie: any) => ({
+        keys: Object.keys(cookie).sort(),
+        partitionKeyType: typeof cookie.partitionKey,
+        partitionKeyPresent: Boolean(cookie.partitionKey),
+        partitionKeyOpaque: Boolean(cookie.partitionKeyOpaque),
+        sameParty: Boolean(cookie.sameParty),
+      })),
+      partitionComparison,
+    };
+  } finally {
+    await target.dispose();
+  }
+}
+
+async function runChromeImportRestartAudit(context: {
+  testRoot: string;
+  userDataPath: string;
+  manager: TaskSpaceManager;
+  profiles: BrowserProfileRegistry;
+  overviewView: WebContentsView;
+}) {
+  const { testRoot, userDataPath, manager, profiles, overviewView } = context;
+  const imported = profiles.list().find((profile) => profile.kind === "imported");
+  if (!imported) throw new Error("imported Profile was not restored");
+  const cookies = await session
+    .fromPartition(`persist:${imported.partitionId}`)
+    .cookies.get({});
+  const storage = await readFile(
+    join(
+      userDataPath,
+      "Partitions",
+      imported.partitionId,
+      "Local Storage",
+      "leveldb",
+      "fixture-state",
+    ),
+    "utf8",
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('#profile-button')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `document.querySelectorAll('.profile-row').length === 2`,
+  );
+  await writeFile(
+    join(testRoot, "chrome-import-restart.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  const dom = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      profiles: [...document.querySelectorAll('.profile-row')].map((row) => ({
+        name: row.querySelector('strong')?.textContent || '',
+        selected: row.classList.contains('selected'),
+      })),
+      headerProfile: document.querySelector('#profile-button-label')?.textContent || '',
+    }))()`,
+    true,
+  );
+  const importedSpaces = manager
+    .listSpaces()
+    .filter((space) => space.profileId === imported.id);
+  const ok =
+    cookies.length === 2 &&
+    storage === "fixture-login-storage" &&
+    profiles.getDefault().id === imported.id &&
+    importedSpaces.length === 1 &&
+    dom.profiles.length === 2 &&
+    dom.headerProfile === imported.name;
+  await writeFile(
+    join(testRoot, "chrome-import-restart-audit.json"),
+    `${JSON.stringify(
+      {
+        ok,
+        importedProfile: {
+          id: imported.id,
+          name: imported.name,
+          cookieCount: cookies.length,
+          storageRestored: storage === "fixture-login-storage",
+        },
+        importedSpaceIds: importedSpaces.map((space) => space.id),
+        dom,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function runChromeImportRollbackAudit(context: {
+  testRoot: string;
+  profiles: BrowserProfileRegistry;
+  overviewView: WebContentsView;
+}) {
+  const { testRoot, profiles, overviewView } = context;
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('#profile-button')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.import-command'))`,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.import-command')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.chrome-import-form'))`,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.chrome-import-form')?.requestSubmit()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.dialog-error-view'))`,
+    12_000,
+  );
+  const dom = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      title: document.querySelector('#profile-dialog-title')?.textContent || '',
+      error: document.querySelector('.dialog-error-view strong')?.textContent || '',
+      action: document.querySelector('.dialog-error-view button')?.textContent || '',
+    }))()`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "chrome-import-rollback.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  const ok =
+    profiles.list().length === 1 &&
+    profiles.getDefault().id === "default" &&
+    dom.error === "无法解密 Chrome Cookie，现有 UFO-Browser 数据未受影响";
+  await writeFile(
+    join(testRoot, "chrome-import-rollback-audit.json"),
+    `${JSON.stringify({ ok, profileCount: profiles.list().length, dom }, null, 2)}\n`,
+  );
+}
+
+async function runChromeImportRollbackRecoveryAudit(context: {
+  testRoot: string;
+  userDataPath: string;
+  profiles: BrowserProfileRegistry;
+}) {
+  const { testRoot, userDataPath, profiles } = context;
+  const partitionNames = await directoryNames(join(userDataPath, "Partitions"));
+  const jobNames = await directoryNames(join(userDataPath, "Chrome Import", "jobs"));
+  const leakedPartitions = partitionNames.filter((name) =>
+    name.startsWith("x-browser-profile-chrome-"),
+  );
+  const ok =
+    profiles.list().length === 1 &&
+    profiles.getDefault().id === "default" &&
+    leakedPartitions.length === 0 &&
+    jobNames.length === 0;
+  await writeFile(
+    join(testRoot, "chrome-import-rollback-recovery-audit.json"),
+    `${JSON.stringify(
+      {
+        ok,
+        profileCount: profiles.list().length,
+        leakedPartitionCount: leakedPartitions.length,
+        pendingJobCount: jobNames.length,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function waitForRenderer(
+  view: WebContentsView,
+  expression: string,
+  timeoutMs = 4_000,
+) {
+  return waitUntil(
+    async () =>
+      Boolean(await view.webContents.executeJavaScript(expression, true)),
+    timeoutMs,
+  );
+}
+
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error("timed out waiting for Chrome import audit state");
+}
+
+async function directoryNames(path: string) {
+  try {
+    return (await readdir(path, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => entry.name);
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 async function captureVisibleTestViews(context: {

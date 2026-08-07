@@ -1,5 +1,13 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 
 export const DEFAULT_PROFILE_ID = "default";
 export const DEFAULT_PROFILE_PARTITION_ID = "x-browser-profile-default";
@@ -30,6 +38,7 @@ export type BrowserProfileState = {
   version: 1;
   defaultProfileId: string;
   profiles: BrowserProfileRecord[];
+  pendingPartitionCleanup: string[];
 };
 
 export type PublicBrowserProfile = {
@@ -71,7 +80,7 @@ export class BrowserProfileRegistry {
 
   listPublic(): PublicBrowserProfile[] {
     return this.state.profiles.map((profile) => ({
-      id: profile.id === DEFAULT_PROFILE_ID ? "Default" : profile.id,
+      id: profile.id,
       isDefault: profile.id === this.state.defaultProfileId,
       name: profile.name,
       kind: profile.kind,
@@ -118,6 +127,36 @@ export class BrowserProfileRegistry {
     await this.save();
   }
 
+  async remove(profileId: string) {
+    const profile = this.getOrThrow(profileId);
+    if (profile.kind !== "imported") {
+      throw new Error("local browser profile cannot be removed");
+    }
+    this.state.profiles = this.state.profiles.filter(
+      (candidate) => candidate.id !== profile.id,
+    );
+    if (this.state.defaultProfileId === profile.id) {
+      this.state.defaultProfileId = DEFAULT_PROFILE_ID;
+    }
+    if (!this.state.pendingPartitionCleanup.includes(profile.partitionId)) {
+      this.state.pendingPartitionCleanup.push(profile.partitionId);
+    }
+    await this.save();
+    return structuredClone(profile);
+  }
+
+  pendingPartitionCleanup() {
+    return [...this.state.pendingPartitionCleanup];
+  }
+
+  async completePartitionCleanup(partitionIds: readonly string[]) {
+    const completed = new Set(partitionIds);
+    this.state.pendingPartitionCleanup = this.state.pendingPartitionCleanup.filter(
+      (partitionId) => !completed.has(partitionId),
+    );
+    await this.save();
+  }
+
   private save(): Promise<void> {
     const snapshot = structuredClone(this.state);
     this.writeQueue = this.writeQueue.then(() => this.writeAtomically(snapshot));
@@ -139,6 +178,7 @@ function createDefaultProfileState(now = Date.now()): BrowserProfileState {
   return {
     version: 1,
     defaultProfileId: DEFAULT_PROFILE_ID,
+    pendingPartitionCleanup: [],
     profiles: [
       {
         id: DEFAULT_PROFILE_ID,
@@ -160,6 +200,19 @@ function validateProfileState(input: unknown): BrowserProfileState {
   if (state.version !== 1 || !Array.isArray(state.profiles)) {
     throw new Error("unsupported browser profile registry");
   }
+  const pendingPartitionCleanup =
+    state.pendingPartitionCleanup === undefined
+      ? []
+      : state.pendingPartitionCleanup;
+  if (
+    !Array.isArray(pendingPartitionCleanup) ||
+    pendingPartitionCleanup.some(
+      (partitionId) =>
+        typeof partitionId !== "string" || !isValidPartitionId(partitionId),
+    )
+  ) {
+    throw new Error("invalid pending browser profile cleanup");
+  }
   if (!isValidProfileId(state.defaultProfileId)) {
     throw new Error("invalid default browser profile id");
   }
@@ -177,7 +230,7 @@ function validateProfileState(input: unknown): BrowserProfileState {
   if (!profileIds.has(state.defaultProfileId)) {
     throw new Error("default browser profile does not exist");
   }
-  return structuredClone(state);
+  return structuredClone({ ...state, pendingPartitionCleanup });
 }
 
 function validateProfileRecord(profile: BrowserProfileRecord) {
@@ -221,5 +274,32 @@ function validateProfileSource(source: BrowserProfileSource | undefined) {
   }
   if (source.loginSyncEnabled !== false) {
     throw new Error("browser login sync is not available");
+  }
+}
+
+export async function cleanupPendingProfilePartitions(
+  partitionsRoot: string,
+  partitionIds: readonly string[],
+) {
+  const root = resolve(partitionsRoot);
+  for (const partitionId of partitionIds) {
+    if (!isValidPartitionId(partitionId)) {
+      throw new Error("invalid pending browser profile partition id");
+    }
+    const target = resolve(root, partitionId);
+    const child = relative(root, target);
+    if (child !== partitionId || child.includes(sep)) {
+      throw new Error("browser profile cleanup escaped partitions root");
+    }
+    try {
+      const info = await lstat(target);
+      if (info.isSymbolicLink()) {
+        await rm(target, { force: true });
+      } else {
+        await rm(target, { recursive: true, force: true });
+      }
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
 }
