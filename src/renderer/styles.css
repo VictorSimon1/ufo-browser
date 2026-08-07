@@ -160,6 +160,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   font-size: 12px;
   font-weight: 720;
 }
+.profile-avatar.has-image,
+.profile-row-avatar.has-image { overflow: hidden; background: #eef2f1; }
+.profile-avatar img,
+.profile-row-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .profile-button > span:nth-child(2) {
   min-width: 0;
   overflow: hidden;
@@ -266,7 +270,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   cursor: pointer;
 }
 .profile-row-select:disabled { cursor: default; opacity: .6; }
-.profile-row-remove {
+.profile-row-remove,
+.profile-row-clone {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
@@ -278,10 +283,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   color: #a46a6e;
   cursor: pointer;
 }
+.profile-row-clone { color: #647770; }
+.profile-row-clone:hover:not(:disabled),
+.profile-row-clone:focus-visible { background: #edf3f1; color: #2f5c4f; }
 .profile-row-remove:hover:not(:disabled),
 .profile-row-remove:focus-visible { background: #fae9ea; color: #a33d43; }
-.profile-row-remove:disabled { cursor: default; opacity: .45; }
-.profile-row-remove svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+.profile-row-remove:disabled,
+.profile-row-clone:disabled { cursor: default; opacity: .45; }
+.profile-row-remove svg,
+.profile-row-clone svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
 .profile-row:last-child,
 .chrome-profile-row:last-child { border-bottom: 0; }
 .profile-row:hover,

@@ -529,7 +529,10 @@ function renderProfileHome() {
       <span class="profile-row-copy"><strong></strong><small></small></span>
       <span class="profile-row-check" aria-hidden="true">✓</span>
     `;
-    select.querySelector(".profile-row-avatar")!.textContent = profileInitial(profile.name);
+    renderProfileAvatar(
+      select.querySelector<HTMLElement>(".profile-row-avatar")!,
+      profile,
+    );
     select.querySelector("strong")!.textContent = profile.name;
     select.querySelector("small")!.textContent = profileDetail(profile);
     select.setAttribute(
@@ -548,6 +551,13 @@ function renderProfileHome() {
       }
     });
     row.append(select);
+    const clone = document.createElement("button");
+    clone.className = "profile-row-clone";
+    clone.title = "克隆这个 Profile";
+    clone.setAttribute("aria-label", `克隆 ${profile.name}`);
+    clone.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.5" y="6.5" width="9" height="9" rx="2"></rect><path d="M5 13.5H4.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2V5"></path></svg>';
+    clone.addEventListener("click", () => renderCloneProfile(profile));
+    row.append(clone);
     if (profile.kind === "imported") {
       const sync = document.createElement("button");
       const syncEnabled = profile.source?.loginSyncEnabled === true;
@@ -925,8 +935,71 @@ function openCreateSpace() {
 function updateProfileButton() {
   const selected = browserProfiles.find((profile) => profile.isDefault) ?? browserProfiles[0];
   if (!selected) return;
-  document.querySelector("#profile-avatar")!.textContent = profileInitial(selected.name);
+  renderProfileAvatar(
+    document.querySelector<HTMLElement>("#profile-avatar")!,
+    selected,
+  );
   document.querySelector("#profile-button-label")!.textContent = selected.name;
+}
+
+function renderProfileAvatar(element: HTMLElement, profile: any) {
+  element.replaceChildren();
+  const source = String(profile?.avatarDataUrl || "");
+  if (source.startsWith("data:image/")) {
+    const image = document.createElement("img");
+    image.src = source;
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    element.append(image);
+    element.classList.add("has-image");
+    return;
+  }
+  element.classList.remove("has-image");
+  element.textContent = profileInitial(profile?.name);
+}
+
+function renderCloneProfile(sourceProfile: any) {
+  profileDialogTitle.textContent = "克隆 UFO-Browser Profile";
+  profileDialogSubtitle.textContent = `以 ${sourceProfile.name} 作为独立登录态来源`;
+  profileDialogContent.innerHTML = `
+    <form class="create-space-form profile-clone-form">
+      <label><span>名称</span><input name="name" maxlength="160" /></label>
+      <p class="import-scope-note">Cookie 与网站登录存储会复制到新的独立 Profile；以后可从直接来源增量同步，两个 Profile 的标签页和 Space 始终隔离。</p>
+      <label class="default-profile-choice"><input name="default" type="checkbox" /><span><i>✓</i></span><b>设为新 Space 的默认 Profile</b></label>
+      <label class="default-profile-choice"><input name="sync" type="checkbox" /><span><i>✓</i></span><b>克隆后自动同步来源的登录状态</b></label>
+      <div class="dialog-actions"><button type="button" class="secondary-button">返回</button><button type="submit" class="primary-button">开始克隆</button></div>
+    </form>
+  `;
+  const form = profileDialogContent.querySelector<HTMLFormElement>("form")!;
+  const name = form.querySelector<HTMLInputElement>('input[name="name"]')!;
+  name.value = `${sourceProfile.name} 副本`;
+  form.querySelector<HTMLButtonElement>('button[type="button"]')!.addEventListener(
+    "click",
+    renderProfileHome,
+  );
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    submit.disabled = true;
+    profileDialogLocked = true;
+    profileDialogSubtitle.textContent = "正在复制登录状态，主窗口可继续响应";
+    try {
+      await api.profiles.cloneUfo(
+        sourceProfile.id,
+        name.value.trim(),
+        form.querySelector<HTMLInputElement>('input[name="default"]')!.checked,
+        form.querySelector<HTMLInputElement>('input[name="sync"]')!.checked,
+      );
+      profileDialogLocked = false;
+      await refreshProfiles();
+      renderProfileHome();
+    } catch {
+      profileDialogLocked = false;
+      renderDialogError("无法安全克隆这个 Profile", "返回", renderProfileHome);
+    }
+  });
+  name.focus();
+  name.select();
 }
 
 function profileDetail(profile: any) {

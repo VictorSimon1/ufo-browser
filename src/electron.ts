@@ -33,6 +33,8 @@ import {
   ChromeProfileCookieSourceProvider,
   UfoProfileCookieSourceProvider,
 } from "./main/profile-sync/source-providers.js";
+import { ProfileAvatarStore } from "./main/profile-avatar-store.js";
+import { ProfileCloneService } from "./main/profile-clone/service.js";
 import {
   MacKeychainProvider,
   MockKeychainProvider,
@@ -192,6 +194,9 @@ async function start() {
 
   const userDataPath = app.getPath("userData");
   const partitionsRoot = join(userDataPath, "Partitions");
+  const profileAvatars = new ProfileAvatarStore(
+    join(userDataPath, "Profile Avatars"),
+  );
   const store = new BrowserStateStore(join(userDataPath, "browser-state.json"));
   const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
   await profiles.initialize();
@@ -293,6 +298,13 @@ async function start() {
       }
     },
   });
+  const profileClone = new ProfileCloneService({
+    profiles,
+    partitionsRoot,
+    avatars: profileAvatars,
+    sync: profileSync,
+    createTarget: createProfileTarget,
+  });
   const chromeImport = new ChromeLoginImportService({
     userDataPath,
     partitionsRoot,
@@ -314,8 +326,12 @@ async function start() {
         copiedStorage,
         staticPreflight,
       }),
-    onProfileImported: (profile, cookies) =>
-      profileSync.seedProfile(profile.id, cookies),
+    onProfileImported: async (profile, cookies, source) => {
+      await profileAvatars
+        .importFromPath(profile.id, source.avatarPath)
+        .catch(() => false);
+      await profileSync.seedProfile(profile.id, cookies);
+    },
   });
   const manager = new TaskSpaceManager({
     store,
@@ -419,6 +435,8 @@ async function start() {
     profiles,
     chromeImport,
     profileSync,
+    profileClone,
+    profileAvatars,
   });
   traceStart("ipc-registered");
   claude.onEvent((event) =>
@@ -948,6 +966,8 @@ type IpcContext = {
   profiles: BrowserProfileRegistry;
   chromeImport: ChromeLoginImportService;
   profileSync: ProfileSyncService;
+  profileClone: ProfileCloneService;
+  profileAvatars: ProfileAvatarStore;
 };
 
 function registerIpc(context: IpcContext) {
@@ -960,6 +980,8 @@ function registerIpc(context: IpcContext) {
     profiles,
     chromeImport,
     profileSync,
+    profileClone,
+    profileAvatars,
   } = context;
   const shell = <T extends unknown[]>(
     channel: string,
@@ -976,11 +998,14 @@ function registerIpc(context: IpcContext) {
     name: app.getName(),
     version: app.getVersion(),
   }));
-  shell("x-browser:profiles:list", () =>
-    profiles.listPublic().map((profile) => ({
-      ...profile,
-      syncStatus: profileSync.status(profile.id),
-    })),
+  shell("x-browser:profiles:list", async () =>
+    Promise.all(
+      profiles.listPublic().map(async (profile) => ({
+        ...profile,
+        avatarDataUrl: await profileAvatars.dataUrl(profile.id),
+        syncStatus: profileSync.status(profile.id),
+      })),
+    ),
   );
   shell("x-browser:profiles:set-default", async (_event, profileId: string) => {
     const id = String(profileId);
@@ -994,8 +1019,25 @@ function registerIpc(context: IpcContext) {
     }
     const removed = await profiles.remove(id);
     await profileSync.removeProfile(id);
+    await profileAvatars.remove(id);
     return removed;
   });
+  shell(
+    "x-browser:profiles:clone-ufo",
+    (
+      _event,
+      sourceProfileId: string,
+      name: string,
+      makeDefault: boolean,
+      loginSyncEnabled: boolean,
+    ) =>
+      profileClone.cloneUfoProfile({
+        sourceProfileId: String(sourceProfileId),
+        name: String(name || ""),
+        makeDefault: makeDefault === true,
+        loginSyncEnabled: loginSyncEnabled === true,
+      }),
+  );
   shell(
     "x-browser:profiles:sync-set",
     (_event, profileId: string, enabled: boolean) =>

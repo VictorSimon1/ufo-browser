@@ -39,6 +39,19 @@ contextBridge.exposeInMainWorld("xBrowser", {
       ipcRenderer.invoke("x-browser:profiles:sync-set", profileId, enabled),
     syncNow: (profileId: string) =>
       ipcRenderer.invoke("x-browser:profiles:sync-now", profileId),
+    cloneUfo: (
+      sourceProfileId: string,
+      name: string,
+      makeDefault: boolean,
+      loginSyncEnabled: boolean,
+    ) =>
+      ipcRenderer.invoke(
+        "x-browser:profiles:clone-ufo",
+        sourceProfileId,
+        name,
+        makeDefault,
+        loginSyncEnabled,
+      ),
     discoverChrome: () =>
       ipcRenderer.invoke("x-browser:profiles:chrome-discover"),
     quitChrome: () => ipcRenderer.invoke("x-browser:profiles:chrome-quit"),

@@ -74,6 +74,7 @@ export type ChromeLoginImportServiceOptions = {
   onProfileImported?: (
     profile: BrowserProfileRecord,
     cookies: ImportedChromeCookie[],
+    source: DiscoveredChromeProfile,
   ) => Promise<void> | void;
 };
 
@@ -245,7 +246,7 @@ export class ChromeLoginImportService {
         makeDefault,
       );
       await Promise.resolve(
-        this.options.onProfileImported?.(profile, cookieResult.cookies),
+        this.options.onProfileImported?.(profile, cookieResult.cookies, source),
       ).catch(() => undefined);
       reportProgress({ phase: "committed", completed: 4, total: 4 });
       return {

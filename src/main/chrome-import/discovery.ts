@@ -8,6 +8,7 @@ import {
   realpath,
 } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
+import { discoverChromeProfileAvatar } from "../profile-avatar-store.js";
 
 export const CHROME_PROFILE_DIRECTORY_PATTERN = /^(Default|Profile [1-9][0-9]*)$/;
 
@@ -44,6 +45,7 @@ export type DiscoveredChromeProfile = {
   isLastUsed: boolean;
   activeAt?: number;
   approximateImportBytes: number;
+  avatarPath?: string;
 };
 
 export interface BrowserLoginSourceAdapter {
@@ -134,6 +136,7 @@ export async function discoverChromeProfiles(
         profileRealPath,
         { deadline: sizeDeadline },
       ),
+      avatarPath: await discoverChromeProfileAvatar(profileRealPath, info),
     });
   }
   return profiles;
