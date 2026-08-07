@@ -1,14 +1,11 @@
 import Foundation
 import Security
 
-guard CommandLine.arguments.count == 2 else {
+guard CommandLine.arguments.count == 1 else {
   exit(1)
 }
 
-let service = CommandLine.arguments[1]
-guard !service.isEmpty && service.utf8.count <= 200 else {
-  exit(1)
-}
+let service = "Chrome Safe Storage"
 
 let query: [CFString: Any] = [
   kSecClass: kSecClassGenericPassword,

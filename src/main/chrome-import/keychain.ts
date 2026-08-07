@@ -39,36 +39,63 @@ export class MacKeychainProvider implements KeychainProvider {
     if (process.platform !== "darwin") {
       return Promise.reject(new KeychainError("keychain-unavailable"));
     }
-    if (!service || service.length > 200) {
+    if (service !== CHROME_SAFE_STORAGE_SERVICE) {
       return Promise.reject(new Error("invalid Keychain service"));
     }
     return new Promise((resolve, reject) => {
-      const child = spawn(this.helperPath, [service], {
+      const child = spawn(this.helperPath, [], {
         stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
       });
       const chunks: Buffer[] = [];
       let length = 0;
+      let settled = false;
+      const clearChunks = () => {
+        for (const chunk of chunks) chunk.fill(0);
+        chunks.length = 0;
+        length = 0;
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearChunks();
+        reject(error);
+      };
       child.stdout.on("data", (chunk: Buffer) => {
+        if (settled) {
+          chunk.fill(0);
+          return;
+        }
         length += chunk.length;
+        chunks.push(chunk);
         if (length > 64 * 1024) {
           child.kill();
-          reject(new Error("Keychain secret exceeded the safe limit"));
+          fail(new KeychainError("keychain-failed"));
           return;
         }
-        chunks.push(Buffer.from(chunk));
       });
-      child.once("error", () => reject(new KeychainError("keychain-unavailable")));
+      child.once("error", () =>
+        fail(new KeychainError("keychain-unavailable")),
+      );
       child.once("exit", (code) => {
-        if (code === 0) {
-          const secret = Buffer.concat(chunks);
-          if (!secret.length) reject(new KeychainError("keychain-item-missing"));
-          else resolve(secret);
+        if (settled) {
+          clearChunks();
           return;
         }
-        if (code === 2) reject(new KeychainError("keychain-canceled"));
-        else if (code === 3) reject(new KeychainError("keychain-item-missing"));
-        else reject(new KeychainError("keychain-failed"));
+        if (code === 0) {
+          const secret = Buffer.concat(chunks, length);
+          clearChunks();
+          if (!secret.length) {
+            fail(new KeychainError("keychain-item-missing"));
+          } else {
+            settled = true;
+            resolve(secret);
+          }
+          return;
+        }
+        if (code === 2) fail(new KeychainError("keychain-canceled"));
+        else if (code === 3) fail(new KeychainError("keychain-item-missing"));
+        else fail(new KeychainError("keychain-failed"));
       });
     });
   }

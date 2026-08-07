@@ -70,11 +70,11 @@ The Chrome Cookies database itself is never installed into the destination parti
 
 ## Keychain and sensitive data
 
-Production reads the macOS generic-password item whose service is `Chrome Safe Storage` through `dist/bin/ufo-keychain-helper`, implemented with Security.framework. macOS may show its native password or Touch ID authorization UI. UFO-Browser never asks for or stores the macOS password itself.
+Production reads the macOS generic-password item whose service is `Chrome Safe Storage` through `dist/bin/ufo-keychain-helper`, implemented with Security.framework. The helper is hardcoded to that one service and accepts no command-line arguments, so it cannot act as a general Keychain lookup surface. macOS may show its native password or Touch ID authorization UI. UFO-Browser never asks for or stores the macOS password itself.
 
 The import requests the Safe Storage secret lazily and at most once. Canceling or denying the native authorization aborts the transaction immediately; it is never downgraded to a per-Cookie warning or a publishable partial Profile.
 
-The Safe Storage secret and Cookie values must not appear in logs, command-line parameters, environment variables, error text, screenshots, audit JSON, or persisted job manifests. The helper writes only the secret bytes to its restricted stdout; the main process transfers them to the Worker in memory and clears its Buffer. Derived keys and decrypted temporary Buffers are cleared after use.
+The Safe Storage secret and Cookie values must not appear in logs, command-line parameters, environment variables, error text, screenshots, audit JSON, or persisted job manifests. The helper writes only the secret bytes to its restricted stdout; the main process transfers them to the Worker in memory and clears the assembled secret plus every stdout chunk. Derived keys and decrypted temporary Buffers are cleared after use.
 
 Failures are exposed as stable codes and counts such as `keychain-canceled`, `cookie-decryption-failed`, or `host-digest-mismatch`, without domain names or values.
 
