@@ -29,10 +29,12 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
     await registry.initialize();
     await mkdir(join(profilePath, "Local Storage", "leveldb"), { recursive: true });
     await mkdir(join(profilePath, "IndexedDB"), { recursive: true });
+    await mkdir(join(profilePath, "Network"), { recursive: true });
     await mkdir(join(profilePath, "Service Worker", "CacheStorage"), {
       recursive: true,
     });
-    await writeFile(join(profilePath, "Cookies"), "encrypted-cookie-db");
+    await writeFile(join(profilePath, "Cookies"), "legacy-cookie-db");
+    await writeFile(join(profilePath, "Network", "Cookies"), "encrypted-cookie-db");
     await writeFile(join(profilePath, "Local Storage", "leveldb", "data"), "local");
     await writeFile(join(profilePath, "IndexedDB", "data"), "indexed");
     await writeFile(join(profilePath, "Service Worker", "CacheStorage", "data"), "sw");
@@ -149,6 +151,36 @@ test("newer Chrome Service Worker data is skipped instead of risking corruption"
     assert.equal(snapshot.storage.skipped.includes("Service Worker"), true);
     assert.deepEqual(snapshot.storage.warningCodes, [
       "service-worker-version-mismatch",
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("optional Service Worker copy failures become partial warnings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
+  const sourceRoot = join(root, "Chrome");
+  const profilePath = join(sourceRoot, "Default");
+  try {
+    await mkdir(join(profilePath, "Service Worker"), { recursive: true });
+    await writeFile(join(profilePath, "Service Worker", "data"), "optional");
+    const transaction = await ChromeImportTransaction.create({
+      jobsRoot: join(root, "jobs"),
+      partitionsRoot: join(root, "partitions"),
+      source: sourceProfile(sourceRoot, profilePath),
+      targetChromiumVersion: "150.0.0.0",
+      copyStorageTree: async (sourcePath) => {
+        if (sourcePath.endsWith("Service Worker")) {
+          throw new Error("fixture optional copy failure");
+        }
+      },
+    });
+    const snapshot = await transaction.snapshot();
+    assert.equal(snapshot.phase, "preparing-profile");
+    assert.equal(snapshot.storage.copied.includes("Service Worker"), false);
+    assert.equal(snapshot.storage.skipped.includes("Service Worker"), true);
+    assert.deepEqual(snapshot.storage.warningCodes, [
+      "service-worker-copy-failed",
     ]);
   } finally {
     await rm(root, { recursive: true, force: true });

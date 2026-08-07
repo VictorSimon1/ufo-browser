@@ -71,6 +71,7 @@ export type ChromeImportTransactionOptions = {
   partitionsRoot: string;
   source: DiscoveredChromeProfile;
   targetChromiumVersion: string;
+  copyStorageTree?: (sourcePath: string, targetPath: string) => Promise<void>;
   id?: string;
   now?: () => number;
 };
@@ -180,8 +181,20 @@ export class ChromeImportTransaction {
           this.manifest.storage.skipped.push(relativePath);
           continue;
         }
-        await copyTreeSafely(sourcePath, targetPath);
-        this.manifest.storage.copied.push(relativePath);
+        try {
+          await (this.options.copyStorageTree ?? copyTreeSafely)(
+            sourcePath,
+            targetPath,
+          );
+          this.manifest.storage.copied.push(relativePath);
+        } catch (error) {
+          if (relativePath !== OPTIONAL_SERVICE_WORKER_PATH) throw error;
+          await rm(targetPath, { recursive: true, force: true });
+          this.manifest.storage.skipped.push(relativePath);
+          this.manifest.storage.warningCodes.push(
+            "service-worker-copy-failed",
+          );
+        }
       }
       await this.setPhase("preparing-profile");
       return this.state();
@@ -251,8 +264,8 @@ export class ChromeImportTransaction {
 
   private async copyCookieDatabase(sourceProfilePath: string) {
     const candidates = [
-      join(sourceProfilePath, "Cookies"),
       join(sourceProfilePath, "Network", "Cookies"),
+      join(sourceProfilePath, "Cookies"),
     ];
     const sourcePath = await firstExistingPath(candidates);
     if (!sourcePath) return;

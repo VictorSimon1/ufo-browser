@@ -664,7 +664,7 @@ function renderChromeProfiles(discovery: any) {
   defaultChoice.innerHTML = '<input type="checkbox" checked /><span><i>✓</i></span><b>设为新 Task Space 的默认 Profile</b>';
   const partialChoice = document.createElement("label");
   partialChoice.className = "default-profile-choice partial-import-choice";
-  partialChoice.innerHTML = '<input type="checkbox" checked /><span><i>✓</i></span><b>若少量数据无法安全迁移，仍创建部分导入 Profile</b>';
+  partialChoice.innerHTML = '<input type="checkbox" /><span><i>✓</i></span><b>若少量数据无法安全迁移，仍创建部分导入 Profile</b>';
   const actions = document.createElement("div");
   actions.className = "dialog-actions";
   const back = document.createElement("button");
@@ -909,6 +909,7 @@ function importWarningLabel(code: string) {
     "invalid-utf8": "部分 Cookie 文本格式无效",
     "invalid-cookie-row": "存在无效 Cookie 记录",
     "service-worker-version-mismatch": "Service Worker 版本不兼容，已跳过",
+    "service-worker-copy-failed": "Service Worker 数据无法安全复制，已跳过",
   };
   return labels[code] || "";
 }

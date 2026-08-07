@@ -2029,7 +2029,7 @@ async function runChromeImportUiAudit(context: {
     discovery.profiles[0].detail.includes("最近使用") &&
     discovery.scope.includes("临时会话 Cookie 将保留 30 天") &&
     discovery.scope.includes("不会导入密码、浏览记录或 Google 同步账号") &&
-    discovery.partialAllowed === true &&
+    discovery.partialAllowed === false &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
     phases.join(",") ===
