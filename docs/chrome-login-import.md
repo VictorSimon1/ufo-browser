@@ -120,7 +120,7 @@ npm run verify:chrome-import-restart
 npm run verify:chrome-import-rollback
 ```
 
-The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin storage through Chromium. The success and restart audits load the same fixture origin from the imported partition and semantically read Local Storage, IndexedDB, and OPFS. WebStorage and File System allowlist copying also has file markers. Rollback uses the wrong mock key and verifies that no Profile, partition, or job leaks.
+The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin storage through Chromium. The success and restart audits load the same fixture origin from the imported partition and semantically read Local Storage, IndexedDB, and OPFS. WebStorage and File System allowlist copying also has file markers. Comparisons happen only in memory; audit JSON and command output persist booleans, never the Cookie, origin-storage, file-marker, domain, or Mock Keychain values. The E2E runner rejects any audit containing one of those fixture values. Rollback uses the wrong mock key and verifies that no Profile, partition, or job leaks.
 
 Current isolated evidence proves:
 

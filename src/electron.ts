@@ -1988,6 +1988,17 @@ async function runChromeImportUiAudit(context: {
     userDataPath,
     imported.partitionId,
   );
+  const originStorageVerified = {
+    localStorage: originStorage.localStorage === "fixture-local-storage",
+    indexedDb: originStorage.indexedDb === "fixture-indexeddb",
+    opfs: originStorage.opfs === "fixture-opfs",
+  };
+  const copiedStorageVerified = {
+    webStorage:
+      copiedStorageMarkers.webStorage === "fixture-web-storage-copy",
+    fileSystem:
+      copiedStorageMarkers.fileSystem === "fixture-file-system-copy",
+  };
 
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('.import-result-view button')?.click(); document.querySelector('#quick-create')?.click()`,
@@ -2061,11 +2072,8 @@ async function runChromeImportUiAudit(context: {
       (progress: any) => progress.detailCode === "Local Storage",
     ) &&
     importedCookies.length === 2 &&
-    originStorage.localStorage === "fixture-local-storage" &&
-    originStorage.indexedDb === "fixture-indexeddb" &&
-    originStorage.opfs === "fixture-opfs" &&
-    copiedStorageMarkers.webStorage === "fixture-web-storage-copy" &&
-    copiedStorageMarkers.fileSystem === "fixture-file-system-copy" &&
+    Object.values(originStorageVerified).every(Boolean) &&
+    Object.values(copiedStorageVerified).every(Boolean) &&
     profiles.getDefault().id === imported.id &&
     created.profileId === imported.id &&
     String(removeWhileUsed).includes("profile-in-use");
@@ -2081,8 +2089,8 @@ async function runChromeImportUiAudit(context: {
           id: imported.id,
           isDefault: profiles.getDefault().id === imported.id,
           cookieCount: importedCookies.length,
-          originStorage,
-          copiedStorageMarkers,
+          originStorageVerified,
+          copiedStorageVerified,
         },
         createdSpace: { id: created.id, profileId: created.profileId },
         removeWhileUsed: String(removeWhileUsed).includes("profile-in-use"),
@@ -2271,6 +2279,17 @@ async function runChromeImportRestartAudit(context: {
     userDataPath,
     imported.partitionId,
   );
+  const originStorageVerified = {
+    localStorage: originStorage.localStorage === "fixture-local-storage",
+    indexedDb: originStorage.indexedDb === "fixture-indexeddb",
+    opfs: originStorage.opfs === "fixture-opfs",
+  };
+  const copiedStorageVerified = {
+    webStorage:
+      copiedStorageMarkers.webStorage === "fixture-web-storage-copy",
+    fileSystem:
+      copiedStorageMarkers.fileSystem === "fixture-file-system-copy",
+  };
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('#profile-button')?.click()`,
     true,
@@ -2298,11 +2317,8 @@ async function runChromeImportRestartAudit(context: {
     .filter((space) => space.profileId === imported.id);
   const ok =
     cookies.length === 2 &&
-    originStorage.localStorage === "fixture-local-storage" &&
-    originStorage.indexedDb === "fixture-indexeddb" &&
-    originStorage.opfs === "fixture-opfs" &&
-    copiedStorageMarkers.webStorage === "fixture-web-storage-copy" &&
-    copiedStorageMarkers.fileSystem === "fixture-file-system-copy" &&
+    Object.values(originStorageVerified).every(Boolean) &&
+    Object.values(copiedStorageVerified).every(Boolean) &&
     profiles.getDefault().id === imported.id &&
     importedSpaces.length === 1 &&
     dom.profiles.length === 2 &&
@@ -2316,8 +2332,8 @@ async function runChromeImportRestartAudit(context: {
           id: imported.id,
           name: imported.name,
           cookieCount: cookies.length,
-          originStorage,
-          copiedStorageMarkers,
+          originStorageVerified,
+          copiedStorageVerified,
         },
         importedSpaceIds: importedSpaces.map((space) => space.id),
         dom,

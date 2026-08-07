@@ -24,6 +24,16 @@ const testNamespace = `chrome-import-${mode}`;
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 const chromeRoot = join(testRoot, "chrome-fixture");
 const safeStorageSecret = "ufo-fixture-safe-storage";
+const forbiddenAuditValues = [
+  safeStorageSecret,
+  "fixture-cookie-value",
+  "fixture-local-storage",
+  "fixture-indexeddb",
+  "fixture-opfs",
+  "fixture-web-storage-copy",
+  "fixture-file-system-copy",
+  "fixture.example",
+];
 const configuredExecutable = process.env.X_BROWSER_TEST_EXECUTABLE;
 const executable = configuredExecutable
   ? resolve(configuredExecutable)
@@ -113,7 +123,16 @@ async function runPhase(auditFlag, auditName, secret) {
     stderr += String(chunk);
     if (stderr.length > 30_000) stderr = stderr.slice(-30_000);
   });
-  return freshJson(auditName, launchedAt, 20_000);
+  const audit = await freshJson(auditName, launchedAt, 20_000);
+  const serialized = JSON.stringify(audit);
+  for (const value of forbiddenAuditValues) {
+    assert.equal(
+      serialized.includes(value),
+      false,
+      `${auditName} exposed a fixture secret or storage value`,
+    );
+  }
+  return audit;
 }
 
 async function terminatePhase() {
