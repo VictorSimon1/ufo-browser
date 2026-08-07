@@ -14,6 +14,7 @@ import {
 import { constants as fsConstants } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { DiscoveredChromeProfile } from "./discovery.js";
+import type { StoragePreflightResult } from "./storage-preflight.js";
 import {
   BrowserProfileRegistry,
   isValidPartitionId,
@@ -91,6 +92,20 @@ const REQUIRED_STORAGE_PATHS = [
   "QuotaManager-journal",
 ] as const;
 const OPTIONAL_SERVICE_WORKER_PATH = "Service Worker";
+const STORAGE_PATHS = new Set<string>([
+  ...REQUIRED_STORAGE_PATHS,
+  OPTIONAL_SERVICE_WORKER_PATH,
+]);
+const STORAGE_WARNING_CODES = new Set([
+  "file-system-incompatible",
+  "indexeddb-incompatible",
+  "local-storage-incompatible",
+  "origin-storage-preflight-failed",
+  "service-worker-copy-failed",
+  "service-worker-incompatible",
+  "service-worker-version-mismatch",
+  "storage-metadata-incompatible",
+]);
 const PERSISTED_FAILURE_CODES = new Set([
   "chrome-import-failed",
   "chrome-profile-not-found",
@@ -252,6 +267,37 @@ export class ChromeImportTransaction {
     await rename(this.stagedPartitionPath, this.targetPartitionPath);
     this.manifest.target.activated = true;
     await this.setPhase("importing-storage");
+  }
+
+  async applyStoragePreflight(result: StoragePreflightResult) {
+    if (
+      this.manifest.phase !== "importing-storage" &&
+      this.manifest.phase !== "importing-cookies"
+    ) {
+      throw new Error("Chrome import storage is not active");
+    }
+    const copied = new Set(this.manifest.storage.copied);
+    for (const relativePath of new Set(result.failed)) {
+      if (!STORAGE_PATHS.has(relativePath) || !copied.has(relativePath)) continue;
+      copied.delete(relativePath);
+      if (!this.manifest.storage.skipped.includes(relativePath)) {
+        this.manifest.storage.skipped.push(relativePath);
+      }
+    }
+    this.manifest.storage.copied = this.manifest.storage.copied.filter((path) =>
+      copied.has(path),
+    );
+    for (const code of new Set(result.warningCodes)) {
+      if (
+        STORAGE_WARNING_CODES.has(code) &&
+        !this.manifest.storage.warningCodes.includes(code)
+      ) {
+        this.manifest.storage.warningCodes.push(code);
+      }
+    }
+    this.manifest.updatedAt = (this.options.now ?? Date.now)();
+    await this.writeManifest();
+    return this.state();
   }
 
   async publish(

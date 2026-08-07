@@ -276,6 +276,39 @@ test("optional Service Worker copy failures become partial warnings", async () =
   }
 });
 
+test("storage preflight records only allowlisted datasets and warning codes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
+  const sourceRoot = join(root, "Chrome");
+  const profilePath = join(sourceRoot, "Default");
+  try {
+    await mkdir(join(profilePath, "Local Storage"), { recursive: true });
+    await writeFile(join(profilePath, "Local Storage", "state"), "fixture");
+    const transaction = await ChromeImportTransaction.create({
+      jobsRoot: join(root, "jobs"),
+      partitionsRoot: join(root, "partitions"),
+      source: sourceProfile(sourceRoot, profilePath),
+      targetChromiumVersion: "150.0.0.0",
+    });
+    await transaction.snapshot();
+    await transaction.activateStorage();
+    const updated = await transaction.applyStoragePreflight({
+      failed: ["Local Storage", "../../outside"] as any,
+      warningCodes: [
+        "local-storage-incompatible",
+        "authorization=do-not-persist",
+      ],
+    });
+    assert.equal(updated.storage.copied.includes("Local Storage"), false);
+    assert.equal(updated.storage.skipped.includes("Local Storage"), true);
+    assert.deepEqual(updated.storage.warningCodes, [
+      "local-storage-incompatible",
+    ]);
+    assert.equal(JSON.stringify(updated).includes("authorization="), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Chrome import job ids and source profile paths cannot traverse", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
   const sourceRoot = join(root, "Chrome");

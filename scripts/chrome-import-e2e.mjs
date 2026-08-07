@@ -61,6 +61,11 @@ try {
       safeStorageSecret,
     );
     assert.equal(audit.ok, true, JSON.stringify(audit));
+    assert.equal(
+      storageServer.preflightRequests,
+      0,
+      "Chrome storage preflight reached the fixture network server",
+    );
     process.stdout.write(`${JSON.stringify(audit, null, 2)}\n`);
   } else if (mode === "restart") {
     const imported = await runPhase(
@@ -69,6 +74,11 @@ try {
       safeStorageSecret,
     );
     assert.equal(imported.ok, true, JSON.stringify(imported));
+    assert.equal(
+      storageServer.preflightRequests,
+      0,
+      "Chrome storage preflight reached the fixture network server",
+    );
     await terminatePhase();
     const restarted = await runPhase(
       "X_BROWSER_TEST_CHROME_IMPORT_RESTART_AUDIT",
@@ -84,6 +94,11 @@ try {
       "wrong-fixture-secret",
     );
     assert.equal(failed.ok, true, JSON.stringify(failed));
+    assert.equal(
+      storageServer.preflightRequests,
+      0,
+      "Chrome storage preflight reached the fixture network server",
+    );
     await terminatePhase();
     const recovered = await runPhase(
       "X_BROWSER_TEST_CHROME_IMPORT_ROLLBACK_RECOVERY_AUDIT",
@@ -250,7 +265,11 @@ async function createChromeFixture(chromeRoot, secretText) {
 }
 
 async function startStorageServer() {
-  const server = createServer((_request, response) => {
+  let preflightRequests = 0;
+  const server = createServer((request, response) => {
+    if (request.url?.startsWith("/.well-known/ufo-storage-preflight")) {
+      preflightRequests++;
+    }
     response.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
@@ -268,6 +287,9 @@ async function startStorageServer() {
   }
   return {
     origin: `http://127.0.0.1:${address.port}/`,
+    get preflightRequests() {
+      return preflightRequests;
+    },
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

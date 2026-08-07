@@ -754,6 +754,7 @@ function updateImportProgress(progress: any) {
   };
   const snapshotDetails: Record<string, string> = {
     preparing: "正在检查可安全迁移的数据",
+    compatibility: "正在验证 Chromium 存储格式兼容性",
     Cookies: "正在复制 Chrome Cookie 数据库",
     "Local Storage": "正在复制 Local Storage",
     IndexedDB: "正在复制 IndexedDB",
@@ -929,6 +930,12 @@ function importWarningLabel(code: string) {
     "invalid-cookie-row": "存在无效 Cookie 记录",
     "service-worker-version-mismatch": "Service Worker 版本不兼容，已跳过",
     "service-worker-copy-failed": "Service Worker 数据无法安全复制，已跳过",
+    "local-storage-incompatible": "Local Storage 格式不兼容，已跳过",
+    "indexeddb-incompatible": "IndexedDB 格式不兼容，已跳过",
+    "file-system-incompatible": "File System / OPFS 格式不兼容，已跳过",
+    "storage-metadata-incompatible": "站点存储元数据不兼容，已跳过",
+    "service-worker-incompatible": "Service Worker 数据未通过兼容性验证，已跳过",
+    "origin-storage-preflight-failed": "站点存储兼容性验证失败，已安全跳过",
   };
   return labels[code] || "";
 }

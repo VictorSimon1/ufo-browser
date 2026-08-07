@@ -16,6 +16,7 @@ import {
   type CookieWriteTarget,
 } from "./cookie-writer.js";
 import { ChromeImportTransaction } from "./transaction.js";
+import type { StoragePreflightResult } from "./storage-preflight.js";
 import type { BrowserProfileRegistry } from "../profile-registry.js";
 
 export type ChromeImportProgress = {
@@ -55,7 +56,16 @@ export type ChromeLoginImportServiceOptions = {
   keychain: KeychainProvider;
   targetChromiumVersion: string;
   chromeUserDataPath?: string;
-  createTarget: (profileId: string, partitionId: string) => Promise<CookieWriteTarget>;
+  preflightStorage?: (
+    profileId: string,
+    partitionId: string,
+    copiedStorage: readonly string[],
+  ) => Promise<StoragePreflightResult>;
+  createTarget: (
+    profileId: string,
+    partitionId: string,
+    copiedStorage: readonly string[],
+  ) => Promise<CookieWriteTarget>;
   readCookies?: (databasePath: string) => Promise<ChromeCookieReadResult>;
   sourceAdapter?: BrowserLoginSourceAdapter;
 };
@@ -142,9 +152,28 @@ export class ChromeLoginImportService {
             detailCode: progress.item,
           }),
       });
-      const snapshot = await transaction.snapshot();
+      let snapshot = await transaction.snapshot();
       await this.assertSourceStopped();
       await transaction.activateStorage();
+
+      reportProgress({
+        phase: "snapshotting",
+        completed: 1,
+        total: 4,
+        detailCode: "compatibility",
+      });
+      if (this.options.preflightStorage) {
+        snapshot = await transaction.applyStoragePreflight(
+          await this.options.preflightStorage(
+            snapshot.target.profileId,
+            snapshot.target.partitionId,
+            snapshot.storage.copied,
+          ),
+        );
+      }
+      if (knownPartial(snapshot) && !allowPartial) {
+        throw new ChromeImportError("partial-import-not-approved");
+      }
 
       reportProgress({ phase: "importing-cookies", completed: 1, total: 4 });
       await transaction.setPhase("importing-cookies");
@@ -171,8 +200,17 @@ export class ChromeLoginImportService {
       target = await this.options.createTarget(
         snapshot.target.profileId,
         snapshot.target.partitionId,
+        snapshot.storage.copied,
       );
       targetCreated = true;
+      if (target.preflightStorage) {
+        snapshot = await transaction.applyStoragePreflight(
+          await target.preflightStorage(snapshot.storage.copied),
+        );
+        if (snapshot.storage.warningCodes.length > 0 && !allowPartial) {
+          throw new ChromeImportError("partial-import-not-approved");
+        }
+      }
       const writeResult = await writeAndVerifyCookies(target, cookieResult.cookies);
 
       reportProgress({ phase: "verifying", completed: 3, total: 4 });
@@ -241,6 +279,15 @@ export class ChromeLoginImportService {
       throw new ChromeImportError("chrome-running");
     }
   }
+}
+
+function knownPartial(snapshot: {
+  storage: { cookieDatabasePresent: boolean; warningCodes: readonly string[] };
+}) {
+  return (
+    !snapshot.storage.cookieDatabasePresent ||
+    snapshot.storage.warningCodes.length > 0
+  );
 }
 
 function countWarningCodes(codes: readonly string[]) {

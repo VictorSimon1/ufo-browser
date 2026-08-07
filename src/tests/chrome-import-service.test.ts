@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   symlink,
   writeFile,
@@ -413,7 +414,153 @@ test("Chrome partial import requires explicit approval before publishing", async
   }
 });
 
+test("origin storage preflight becomes an approved partial before Keychain access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  const userDataPath = join(root, "UFO");
+  const secret = Buffer.from("fixture-safe-storage");
+  try {
+    await createChromeFixture(chromeRoot, profilePath, secret);
+    await mkdir(join(profilePath, "IndexedDB"), { recursive: true });
+    await writeFile(join(profilePath, "IndexedDB", "fixture"), "incompatible");
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    const keychain = new MockKeychainProvider(secret);
+    let targetsCreated = 0;
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain,
+      targetChromiumVersion: "150.0.0.0",
+      chromeUserDataPath: chromeRoot,
+      preflightStorage: async () => ({
+        failed: ["IndexedDB"],
+        warningCodes: ["indexeddb-incompatible"],
+      }),
+      createTarget: async () => {
+        targetsCreated++;
+        return new FakeCookieTarget();
+      },
+    });
+
+    await assert.rejects(
+      service.importProfile("Default", false, false),
+      (error: ChromeImportError) =>
+        error.code === "partial-import-not-approved",
+    );
+    assert.deepEqual(keychain.requests, []);
+    assert.equal(targetsCreated, 0);
+    assert.equal(registry.listPublic().length, 1);
+
+    const imported = await service.importProfile("Default", false, true);
+    assert.equal(imported.status, "partial");
+    assert.equal(imported.cookies.imported, 2);
+    assert.equal(imported.storage.copied.includes("IndexedDB"), false);
+    assert.equal(imported.storage.skipped.includes("IndexedDB"), true);
+    assert.deepEqual(imported.storage.warningCodes, [
+      { code: "indexeddb-incompatible", count: 1 },
+    ]);
+    assert.equal(keychain.requests.length, 1);
+    assert.equal(targetsCreated, 1);
+    assert.equal(registry.listPublic().length, 2);
+  } finally {
+    secret.fill(0);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unexpected static storage preflight failures abort instead of publishing unsafe partial data", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  const userDataPath = join(root, "UFO");
+  try {
+    await createChromeFixture(chromeRoot, profilePath, Buffer.from("unused"));
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    const keychain = new MockKeychainProvider("must-not-run");
+    let targetsCreated = 0;
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain,
+      targetChromiumVersion: "150.0.0.0",
+      chromeUserDataPath: chromeRoot,
+      preflightStorage: async () => {
+        throw new Error("origin=https://private.example value=do-not-expose");
+      },
+      createTarget: async () => {
+        targetsCreated++;
+        return new FakeCookieTarget();
+      },
+    });
+
+    await assert.rejects(
+      service.importProfile("Default", false, true),
+      (error: ChromeImportError) => {
+        assert.equal(error.code, "chrome-import-failed");
+        assert.doesNotMatch(String(error), /private\.example|do-not-expose/);
+        return true;
+      },
+    );
+    assert.deepEqual(keychain.requests, []);
+    assert.equal(targetsCreated, 0);
+    assert.equal(registry.listPublic().length, 1);
+    assert.deepEqual(
+      await readdir(join(userDataPath, "Chrome Import", "jobs")),
+      [],
+    );
+    assert.deepEqual(await readdir(join(userDataPath, "Partitions")), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Chromium runtime preflight can downgrade storage after Cookie decryption", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  const userDataPath = join(root, "UFO");
+  const secret = Buffer.from("fixture-safe-storage");
+  try {
+    await createChromeFixture(chromeRoot, profilePath, secret);
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    const target = new FakeCookieTarget();
+    target.preflightStorage = async () => ({
+      failed: ["Local Storage"],
+      warningCodes: ["local-storage-incompatible"],
+    });
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain: new MockKeychainProvider(secret),
+      targetChromiumVersion: "150.0.0.0",
+      chromeUserDataPath: chromeRoot,
+      createTarget: async () => target,
+    });
+
+    const imported = await service.importProfile("Default", false, true);
+    assert.equal(imported.status, "partial");
+    assert.equal(imported.cookies.imported, 2);
+    assert.equal(imported.storage.copied.includes("Local Storage"), false);
+    assert.equal(imported.storage.skipped.includes("Local Storage"), true);
+    assert.deepEqual(imported.storage.warningCodes, [
+      { code: "local-storage-incompatible", count: 1 },
+    ]);
+    assert.equal(target.disposed, 1);
+  } finally {
+    secret.fill(0);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 class FakeCookieTarget implements CookieWriteTarget {
+  preflightStorage?: CookieWriteTarget["preflightStorage"];
   regular: any[] = [];
   partitioned: any[] = [];
   disposed = 0;

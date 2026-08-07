@@ -31,7 +31,9 @@ discover
   → wait for a confirmed normal Chrome exit
   → create a protected snapshot job
   → activate storage into a new partition
+  → statically inspect LevelDB and quota metadata
   → parse/decrypt Cookies in a Worker
+  → open origin storage in an isolated Chromium target
   → write regular Cookies with Electron
   → write CHIPS with same-partition CDP
   → flush and verify Cookies
@@ -42,6 +44,7 @@ The implementation lives under `src/main/chrome-import/`:
 
 - `discovery.ts` discovers `Default` and `Profile N` from Chrome `Local State`, validates direct-child paths, estimates import size, detects `SingletonLock`, and exposes the Chrome Stable source adapter.
 - `transaction.ts` owns the job manifest, safe allowlisted copy, partition activation, publication, failure journal, and cold-start recovery.
+- `storage-preflight.ts` validates LevelDB manifests and SQLite quota metadata without reading stored values, discovers only bounded HTTP(S) origins needed for the runtime probe, and removes structurally invalid datasets before a target Session exists.
 - `keychain.ts` calls the restricted macOS helper for `Chrome Safe Storage`. Tests use `MockKeychainProvider`.
 - `worker-reader.ts` transfers the Keychain result in memory to `chrome-cookie-worker.js`; the source secret Buffer is cleared after transfer.
 - `cookies.ts` reads Chrome SQLite through `node:sqlite`, supports `v10`/`v11`, PBKDF2-HMAC-SHA1, AES-128-CBC, Cookie DB v24 host digests, timestamp conversion, and sanitized warning counts.
@@ -57,6 +60,10 @@ Profile discovery gives all listed Profiles one shared 350 ms size-estimation bu
 Before import, the UI states that processing stays on the current Mac, that passwords, credit cards, history, and Google Sync state are excluded, and that Passkey-, device-bound-, or client-certificate-based sites may require a fresh login. A successful result therefore describes most sites as reusable instead of promising universal login continuity, and explicitly reports whether the imported Profile became the default for new Task Spaces.
 
 During snapshotting, the UI advances across the fixed allowlisted datasets (Cookies, Local Storage, IndexedDB, WebStorage, File System/OPFS, storage/quota metadata, and compatible Service Worker data). Progress events contain only these stable dataset labels and numeric counters; they never expose source paths, origins, domains, or stored values, and a failed progress observer cannot abort the transaction.
+
+Before Keychain access, the activated copy receives a bounded static compatibility preflight. Local Storage, IndexedDB, and File System LevelDB directories must have a consistent `CURRENT`/`MANIFEST` structure, while copied QuotaManager SQLite databases must pass `quick_check`. If this already proves that an origin-storage dataset is unsafe and partial import was not approved, the transaction stops before requesting the Chrome Safe Storage secret.
+
+After Cookie decryption but before any Cookie is written, a hidden target in the new partition performs the Chromium-side preflight. It opens up to 32 bounded origin candidates within an eight-second total budget. CDP request interception fulfills every probe navigation with an in-memory blank document, bypasses imported Service Workers, and never allows a request to reach the source website. The probe asks Chromium itself to open Local Storage, enumerate IndexedDB databases, initialize quota/OPFS, and read Service Worker registrations; it returns only booleans. A rejected dataset is cleared through the target Session, moved from `copied` to `skipped`, and surfaced by a stable warning code. Cookie import may then succeed as an explicitly approved partial result. If incompatible quota metadata requires Chromium to clear the shared origin-storage backend, every affected copied dataset is marked skipped rather than being reported as preserved.
 
 Cookie rows are streamed from SQLite inside the Worker instead of materializing the full query result before conversion. The 10,000-Cookie gate therefore keeps parsing off the main event loop and avoids holding both a complete raw-row array and the converted import array at once.
 
@@ -102,6 +109,7 @@ Failure states are `failed`, `partial`, or `cleanup-pending`.
 - Registry mutations are serialized as next-state writes: the in-memory Profile list changes only after the atomic file replacement succeeds, and a failed write does not poison later retries.
 - The atomic Profile Registry write is the durable commit point. Failure to write the final job marker or remove its temporary directory after that point does not report a false import failure; cold-start recovery preserves the published partition and removes any leftover journal.
 - The job manifest records both source and target Chromium versions. An incompatible Service Worker dataset is skipped with the sanitized `service-worker-version-mismatch` warning and makes the result partial. A safe-copy failure isolated to the optional Service Worker dataset is cleaned up and reported as `service-worker-copy-failed`; required storage copy failures still abort and roll back the import.
+- LevelDB/Quota structural failures and Chromium first-open failures use allowlisted `*-incompatible` warning codes. Stored values, database names, origins, filesystem paths, and raw Chromium diagnostics never enter the result or job manifest. An unapproved static partial stops before Keychain; a runtime incompatibility clears the rejected storage and requires the same explicit partial consent before publication.
 - If a target Session was created before failure, the partition is left journaled and removed on the next cold start before reuse.
 - Published partitions are preserved during job recovery.
 - Removing an imported Profile immediately removes it from the registry and queues its partition for cold-start deletion.
@@ -120,13 +128,14 @@ npm run verify:chrome-import-restart
 npm run verify:chrome-import-rollback
 ```
 
-The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin storage through Chromium. The success and restart audits load the same fixture origin from the imported partition and semantically read Local Storage, IndexedDB, and OPFS. WebStorage and File System allowlist copying also has file markers. Comparisons happen only in memory; audit JSON and command output persist booleans, never the Cookie, origin-storage, file-marker, domain, or Mock Keychain values. The E2E runner rejects any audit containing one of those fixture values. Rollback uses the wrong mock key and verifies that no Profile, partition, or job leaks.
+The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin storage through Chromium. The success and restart audits load the same fixture origin from the imported partition and semantically read Local Storage, IndexedDB, and OPFS. WebStorage and File System allowlist copying also has file markers. The fixture server counts requests to the reserved preflight path and requires the count to remain zero, proving that CDP fulfilled the compatibility page before it reached the network. Comparisons happen only in memory; audit JSON and command output persist booleans, never the Cookie, origin-storage, file-marker, domain, or Mock Keychain values. The E2E runner rejects any audit containing one of those fixture values. Rollback uses the wrong mock key and verifies that no Profile, partition, or job leaks.
 
 Current isolated evidence proves:
 
 - two Cookies are persisted, including one CHIPS Cookie;
 - a 10,000-Cookie batch keeps writes at the configured concurrency limit and verifies through indexed identity lookups instead of quadratic scans;
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;
+- the no-network Chromium compatibility preflight completes before Cookie writes, while the same origin storage remains readable after import and restart;
 - WebStorage and File System markers survive restart;
 - the imported Profile can become default and be selected by a new Space;
 - the success result visibly reports `默认 Profile：是/否`;

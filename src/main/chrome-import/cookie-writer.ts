@@ -1,4 +1,5 @@
 import type { ImportedChromeCookie } from "./cookies.js";
+import type { StoragePreflightResult } from "./storage-preflight.js";
 
 export type CookieApi = {
   set(details: Electron.CookiesSetDetails): Promise<void>;
@@ -12,6 +13,9 @@ export type CookieCdp = {
 export type CookieWriteTarget = {
   cookies: CookieApi;
   cdp: CookieCdp;
+  preflightStorage?(
+    copiedStorage: readonly string[],
+  ): Promise<StoragePreflightResult>;
   flush(): Promise<void> | void;
   dispose(): Promise<void> | void;
 };
