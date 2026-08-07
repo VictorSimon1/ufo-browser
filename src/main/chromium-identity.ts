@@ -8,6 +8,7 @@ export function reducedChromiumUserAgent(chromeVersion: string) {
 }
 
 export const chromiumAcceptLanguages = "zh-CN,zh";
+const configuredChromiumSessions = new WeakSet<object>();
 
 const chromiumGreaseCharacters = [
   " ",
@@ -123,6 +124,9 @@ export async function configureChromiumSession(
   chromeVersion = process.versions.chrome,
   env: Record<string, string | undefined> = process.env,
 ) {
+  if (configuredChromiumSessions.has(chromiumSession)) return;
+  configuredChromiumSessions.add(chromiumSession);
+  try {
   // Keep UA, navigator.languages, and Accept-Language as close as Electron
   // allows to the native Chromium profile used by ego-lite. Electron appends
   // the standard q=0.9 weight to the second language itself.
@@ -158,5 +162,9 @@ export async function configureChromiumSession(
   const proxyRules = proxyRulesFromEnvironment(env);
   if (proxyRules) {
     await chromiumSession.setProxy({ proxyRules });
+  }
+  } catch (error) {
+    configuredChromiumSessions.delete(chromiumSession);
+    throw error;
   }
 }

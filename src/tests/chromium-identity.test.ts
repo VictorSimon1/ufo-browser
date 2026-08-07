@@ -69,6 +69,19 @@ test("session UA setup supplies the ego-compatible language list", async () => {
   assert.equal(requested, true);
 });
 
+test("session setup is idempotent when import and Manager reuse one partition", async () => {
+  let configured = 0;
+  const chromiumSession = {
+    setUserAgent: () => configured++,
+    setPermissionRequestHandler: () => undefined,
+    webRequest: { onBeforeSendHeaders: () => undefined },
+    setProxy: async () => undefined,
+  };
+  await configureChromiumSession(chromiumSession as any, "150.0.0.0", {});
+  await configureChromiumSession(chromiumSession as any, "150.0.0.0", {});
+  assert.equal(configured, 1);
+});
+
 test("low entropy client hints match Chromium 150 native UAData", () => {
   assert.deepEqual(chromiumLowEntropyClientHints("150.0.7871.129", "darwin"), {
     "Sec-CH-UA": '"Not;A=Brand";v="8", "Chromium";v="150"',
