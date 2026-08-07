@@ -80,6 +80,8 @@ Failures are exposed as stable codes and counts such as `keychain-canceled`, `co
 
 Persisted job manifests accept only an explicit allowlist of stable failure codes. Any unknown or dynamically generated error text is reduced to `chrome-import-failed` before `job.json` is written, so exception messages cannot persist Cookie, token, domain, or authorization fragments.
 
+The same rule applies before a transaction exists: discovery, normal-quit, import preflight, and best-effort rollback errors cross the renderer boundary only as stable codes. Raw filesystem, SQLite, AppleScript, or helper diagnostics never become UI error payloads.
+
 ## Transaction and deletion behavior
 
 The job progresses through:

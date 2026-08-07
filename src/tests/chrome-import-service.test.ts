@@ -184,6 +184,71 @@ test("Chrome import discards a snapshot if Chrome starts while it is copied", as
   }
 });
 
+test("Chrome source failures cross IPC boundaries only as stable error codes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const userDataPath = join(root, "UFO");
+  const sensitiveDiagnostic = "authorization=do-not-expose /Users/private/Chrome";
+  try {
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    const options = {
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain: new MockKeychainProvider("must-not-run"),
+      targetChromiumVersion: "150.0.0.0",
+      createTarget: async () => new FakeCookieTarget(),
+    };
+    const discoveryService = new ChromeLoginImportService({
+      ...options,
+      sourceAdapter: {
+        browser: "chrome",
+        browserName: "Google Chrome",
+        discover: async () => {
+          throw new Error(sensitiveDiagnostic);
+        },
+        running: async () => ({ running: false }),
+        quit: async () => {
+          throw new Error(sensitiveDiagnostic);
+        },
+      },
+    });
+    await assert.rejects(discoveryService.discover(), (error: ChromeImportError) => {
+      assert.equal(error.code, "chrome-discovery-failed");
+      assert.doesNotMatch(String(error), /authorization|do-not-expose|Users/);
+      return true;
+    });
+    await assert.rejects(discoveryService.quitChrome(), (error: ChromeImportError) => {
+      assert.equal(error.code, "chrome-quit-failed");
+      assert.doesNotMatch(String(error), /authorization|do-not-expose|Users/);
+      return true;
+    });
+
+    const importService = new ChromeLoginImportService({
+      ...options,
+      sourceAdapter: {
+        browser: "chrome",
+        browserName: "Google Chrome",
+        discover: async () => [],
+        running: async () => {
+          throw new Error(sensitiveDiagnostic);
+        },
+        quit: async () => ({ done: true }),
+      },
+    });
+    await assert.rejects(
+      importService.importProfile("Default", true, true),
+      (error: ChromeImportError) => {
+        assert.equal(error.code, "chrome-import-failed");
+        assert.doesNotMatch(String(error), /authorization|do-not-expose|Users/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Chrome import does not publish a Profile when every encrypted Cookie fails", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
   const chromeRoot = join(root, "Chrome");

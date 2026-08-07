@@ -935,6 +935,8 @@ function importWarningLabel(code: string) {
 function importErrorMessage(error: unknown) {
   const value = String(error);
   if (value.includes("chrome-running")) return "Google Chrome 仍在运行";
+  if (value.includes("chrome-discovery-failed")) return "无法读取 Chrome Profile，请检查本机访问权限";
+  if (value.includes("chrome-quit-failed")) return "无法正常退出 Google Chrome，请手动退出后重试";
   if (value.includes("keychain-canceled")) return "已取消 macOS Keychain 授权";
   if (value.includes("keychain-item-missing")) return "没有找到 Chrome Safe Storage";
   if (value.includes("cookie-decryption-failed")) {

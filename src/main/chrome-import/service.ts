@@ -72,18 +72,26 @@ export class ChromeLoginImportService {
   }
 
   async discover() {
-    const [profiles, running] = await Promise.all([
-      this.source.discover(),
-      this.source.running(),
-    ]);
-    return {
-      running: running.running,
-      profiles: profiles.map(sanitizeDiscoveredProfile),
-    };
+    try {
+      const [profiles, running] = await Promise.all([
+        this.source.discover(),
+        this.source.running(),
+      ]);
+      return {
+        running: running.running,
+        profiles: profiles.map(sanitizeDiscoveredProfile),
+      };
+    } catch {
+      throw new ChromeImportError("chrome-discovery-failed");
+    }
   }
 
   async quitChrome() {
-    return this.source.quit();
+    try {
+      return await this.source.quit();
+    } catch {
+      throw new ChromeImportError("chrome-quit-failed");
+    }
   }
 
   async importProfile(
@@ -92,13 +100,6 @@ export class ChromeLoginImportService {
     allowPartial: boolean,
     onProgress: (progress: ChromeImportProgress) => void = () => undefined,
   ): Promise<ChromeImportResult> {
-    await this.assertSourceStopped();
-    const source = (await this.source.discover()).find(
-      (profile) => profile.profileDirName === profileDirName,
-    );
-    if (!source) throw new ChromeImportError("chrome-profile-not-found");
-    await this.assertSourceStopped();
-
     let transaction: ChromeImportTransaction | undefined;
     let target: CookieWriteTarget | undefined;
     let targetCreated = false;
@@ -110,6 +111,12 @@ export class ChromeLoginImportService {
       }
     };
     try {
+      await this.assertSourceStopped();
+      const source = (await this.source.discover()).find(
+        (profile) => profile.profileDirName === profileDirName,
+      );
+      if (!source) throw new ChromeImportError("chrome-profile-not-found");
+      await this.assertSourceStopped();
       reportProgress({
         phase: "snapshotting",
         completed: 0,
@@ -214,7 +221,9 @@ export class ChromeLoginImportService {
         // The import journal still prevents a partially initialized profile
         // from being published when a hidden target cannot close cleanly.
       }
-      await transaction?.fail(importErrorCode(error), targetCreated);
+      await transaction?.fail(importErrorCode(error), targetCreated).catch(
+        () => undefined,
+      );
       if (error instanceof ChromeImportError) throw error;
       throw new ChromeImportError(importErrorCode(error));
     }
