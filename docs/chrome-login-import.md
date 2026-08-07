@@ -67,7 +67,7 @@ After Cookie decryption but before any Cookie is written, a hidden target in the
 
 Cookie rows are streamed from SQLite inside the Worker instead of materializing the full query result before conversion. The 10,000-Cookie gate therefore keeps parsing off the main event loop and avoids holding both a complete raw-row array and the converted import array at once.
 
-The static origin-storage scanner has the same event-loop isolation guarantee. Its Worker has a bounded lifetime, transfers only dataset labels and warning codes back to the main process, and is terminated after success or failure. A 16 MiB LevelDB fixture verifies that renderer/main timers continue advancing during inspection. Both Worker entry points are required App ASAR entries and are exercised by the packaged import smoke test.
+The static origin-storage scanner has the same event-loop isolation guarantee. Its Worker has a bounded lifetime and returns only dataset labels, warning codes, and the bounded HTTP(S) origin identifiers required by the in-memory Chromium probe. Those origin identifiers are passed directly to the target creator; they never enter the renderer, logs, result payload, audit JSON, or persisted job manifest. The Worker is terminated after success or failure. A 16 MiB LevelDB fixture verifies that renderer/main timers continue advancing during inspection. Both Worker entry points are required App ASAR entries and are exercised by the packaged import smoke test.
 
 ## Source consistency and file safety
 
@@ -145,8 +145,21 @@ Current isolated evidence proves:
 - an unapproved partial result publishes no Profile;
 - an incorrect key publishes nothing and is cleaned on restart.
 
-`npm run package:mac:test` additionally starts the packaged `UFO-Browser.app` with the same isolated fixture and completes the success audit. This verifies that `chrome-cookie-worker.js` can run from `app.asar`, the unpacked Keychain helper path resolves, and the packaged Bundle can persist Cookie/CHIPS and origin storage without using the real Keychain.
+`npm run package:mac:test` additionally starts the packaged `UFO-Browser.app` with the same isolated fixture and completes the success audit. This verifies that `chrome-cookie-worker.js` and `chrome-storage-preflight-worker.js` can run from `app.asar`, the unpacked Keychain helper path resolves, and the packaged Bundle can persist Cookie/CHIPS and origin storage without using the real Keychain.
 
 ## Remaining real-machine acceptance
 
-The only intentionally deferred acceptance step is a user-initiated import from the formal UI against a real Chrome Stable Profile. The user must be present to approve the native Keychain password or Touch ID prompt. That check should confirm that the real `Chrome Safe Storage` item decrypts the installed Chrome Cookie database without printing sensitive material.
+The only intentionally deferred acceptance step is a user-initiated import from the formal UI against a real Chrome Stable Profile. The user must be present to approve the native Keychain password or Touch ID prompt. Do not automate this step or inspect the real Profile from a test command.
+
+When the user is available, perform this checklist:
+
+1. Quit Chrome normally, then open Profile management and choose **从 Chrome 导入登录状态**.
+2. Confirm that only expected Chrome Stable Profiles appear and that the source name, last-used time, and estimated size are reasonable.
+3. Leave partial import disabled for the first attempt, choose whether the imported Profile should become the default, and start the import.
+4. Approve the native macOS `Chrome Safe Storage` authorization with password or Touch ID. UFO-Browser must not display its own password field.
+5. Confirm a success result with sanitized Cookie/CHIPS counts and storage-type labels; no Cookie value, domain, origin, filesystem path, or Keychain text may appear.
+6. Open a new Task Space with the imported Profile and sample sites that cover a normal Cookie login, an HttpOnly login, and origin storage. Device-bound or Passkey-backed sites are allowed to request login again.
+7. Restart UFO-Browser and verify that the sampled login state and the default-Profile choice persist while existing Spaces still use their original Profile.
+8. Confirm Chrome still opens normally with its original Profile unchanged. Optionally remove the imported UFO Profile after closing Spaces that reference it, then restart UFO-Browser and verify its isolated partition is cleaned.
+
+If the native authorization is canceled, denied, or the real Cookie database cannot be decrypted, capture only the stable UI error code and phase. Do not collect the Cookie database, Keychain secret, raw helper output, source paths, or site identifiers.
