@@ -4,6 +4,7 @@ import type { StoragePreflightResult } from "./storage-preflight.js";
 export type CookieApi = {
   set(details: Electron.CookiesSetDetails): Promise<void>;
   get(filter: Electron.CookiesGetFilter): Promise<Electron.Cookie[]>;
+  remove?(url: string, name: string): Promise<void>;
 };
 
 export type CookieCdp = {
@@ -66,7 +67,7 @@ export function cookieUrl(cookie: ImportedChromeCookie) {
   return url.toString();
 }
 
-function toElectronCookie(cookie: ImportedChromeCookie): Electron.CookiesSetDetails {
+export function toElectronCookie(cookie: ImportedChromeCookie): Electron.CookiesSetDetails {
   return {
     url: cookieUrl(cookie),
     name: cookie.name,
@@ -80,7 +81,7 @@ function toElectronCookie(cookie: ImportedChromeCookie): Electron.CookiesSetDeta
   };
 }
 
-function toCdpCookie(cookie: ImportedChromeCookie) {
+export function toCdpCookie(cookie: ImportedChromeCookie) {
   const sameSite =
     cookie.sameSite === "no_restriction"
       ? "None"
