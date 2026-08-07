@@ -59,7 +59,7 @@ npm run package:mac
 4. 计算 `skills/ufo-browser` 的 SHA-256，并同步到已安装的 Agent。
 5. 重新构建主进程、preload、renderer、CLI 和测试产物。
 6. 使用 electron-builder 生成 UFO-Browser App，再由 macOS `ditto` 和 `hdiutil` 生成 ZIP 与 DMG。
-7. 验证 App 内的 `app.asar`、App Icon、Skill、OpenAI Agent manifest 及 DMG/ZIP 均存在。
+7. 验证 App 内的 `app.asar`、App Icon、Skill、OpenAI Agent manifest、可执行 `ufo-keychain-helper`、`chrome-cookie-worker.js` 及 DMG/ZIP 均存在。
 
 `npm run release:mac` 是同一正式流程的别名。
 

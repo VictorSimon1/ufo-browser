@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import { access, readFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { listPackage } from "@electron/asar";
 
 const root = process.cwd();
 const releaseRoot = resolve(root, "release");
@@ -127,6 +129,23 @@ async function verifyArtifacts(appRoot, expectArchives) {
     "Contents/Resources/app.asar.unpacked/dist/bin/ufo-keychain-helper",
   ];
   for (const relative of required) await access(join(appRoot, relative));
+  await access(
+    join(
+      appRoot,
+      "Contents/Resources/app.asar.unpacked/dist/bin/ufo-keychain-helper",
+    ),
+    fsConstants.X_OK,
+  );
+  const asarEntries = new Set(
+    listPackage(join(appRoot, "Contents/Resources/app.asar"), {
+      isPack: false,
+    }),
+  );
+  for (const entry of ["/dist/main/chrome-cookie-worker.js"]) {
+    if (!asarEntries.has(entry)) {
+      throw new Error(`Required App ASAR entry was not packaged: ${entry}`);
+    }
+  }
 
   const packageInfo = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const archives = files.filter((path) => /\.(dmg|zip)$/.test(path));
