@@ -15,14 +15,28 @@ export const DEFAULT_PROFILE_PARTITION_ID = "x-browser-profile-default";
 export type BrowserProfileKind = "local" | "imported";
 export type BrowserProfileImportStatus = "success" | "partial";
 
-export type BrowserProfileSource = {
-  browser: "chrome";
-  profileDirName: string;
+type BrowserProfileSourceCommon = {
   displayName: string;
   importedAt: number;
   lastImportStatus: BrowserProfileImportStatus;
-  loginSyncEnabled: false;
+  loginSyncEnabled: boolean;
 };
+
+export type ChromeBrowserProfileSource = BrowserProfileSourceCommon & {
+  type: "chrome";
+  browser: "chrome";
+  profileDirName: string;
+};
+
+export type UfoBrowserProfileSource = BrowserProfileSourceCommon & {
+  type: "ufo";
+  browser: "ufo-browser";
+  profileId: string;
+};
+
+export type BrowserProfileSource =
+  | ChromeBrowserProfileSource
+  | UfoBrowserProfileSource;
 
 export type BrowserProfileRecord = {
   id: string;
@@ -35,7 +49,7 @@ export type BrowserProfileRecord = {
 };
 
 export type BrowserProfileState = {
-  version: 1;
+  version: 2;
   defaultProfileId: string;
   profiles: BrowserProfileRecord[];
   pendingPartitionCleanup: string[];
@@ -67,6 +81,9 @@ export class BrowserProfileRegistry {
     try {
       const parsed = JSON.parse(await readFile(this.path, "utf8"));
       this.state = validateProfileState(parsed);
+      if (parsed?.version !== this.state.version) {
+        await this.writeAtomically(this.state);
+      }
     } catch (error: any) {
       if (error?.code !== "ENOENT") throw error;
       this.state = createDefaultProfileState();
@@ -116,6 +133,19 @@ export class BrowserProfileRegistry {
       ) {
         throw new Error(`browser partition already exists: ${profile.partitionId}`);
       }
+      if (profile.source?.type === "ufo") {
+        const sourceProfileId = profile.source.profileId;
+        if (sourceProfileId === profile.id) {
+          throw new Error("browser profile cannot clone itself");
+        }
+        if (
+          !state.profiles.some(
+            (candidate) => candidate.id === sourceProfileId,
+          )
+        ) {
+          throw new Error("source UFO-Browser profile does not exist");
+        }
+      }
       state.profiles.push(structuredClone(profile));
       if (makeDefault) state.defaultProfileId = profile.id;
       return structuredClone(profile);
@@ -129,11 +159,32 @@ export class BrowserProfileRegistry {
     });
   }
 
+  async setLoginSyncEnabled(profileId: string, enabled: boolean) {
+    return this.commitMutation((state) => {
+      const profile = getProfileFromState(state, profileId);
+      if (profile.kind !== "imported" || !profile.source) {
+        throw new Error("local browser profile cannot enable login sync");
+      }
+      profile.source.loginSyncEnabled = enabled === true;
+      profile.updatedAt = Date.now();
+      return structuredClone(profile);
+    });
+  }
+
   async remove(profileId: string) {
     return this.commitMutation((state) => {
       const profile = getProfileFromState(state, profileId);
       if (profile.kind !== "imported") {
         throw new Error("local browser profile cannot be removed");
+      }
+      if (
+        state.profiles.some(
+          (candidate) =>
+            candidate.source?.type === "ufo" &&
+            candidate.source.profileId === profile.id,
+        )
+      ) {
+        throw new Error("browser profile is still used as a clone source");
       }
       state.profiles = state.profiles.filter(
         (candidate) => candidate.id !== profile.id,
@@ -198,7 +249,7 @@ function getProfileFromState(state: BrowserProfileState, profileId: string) {
 
 function createDefaultProfileState(now = Date.now()): BrowserProfileState {
   return {
-    version: 1,
+    version: 2,
     defaultProfileId: DEFAULT_PROFILE_ID,
     pendingPartitionCleanup: [],
     profiles: [
@@ -218,10 +269,11 @@ function validateProfileState(input: unknown): BrowserProfileState {
   if (!input || typeof input !== "object") {
     throw new Error("invalid browser profile registry");
   }
-  const state = input as BrowserProfileState;
-  if (state.version !== 1 || !Array.isArray(state.profiles)) {
+  const raw = input as BrowserProfileState | LegacyBrowserProfileState;
+  if ((raw.version !== 1 && raw.version !== 2) || !Array.isArray(raw.profiles)) {
     throw new Error("unsupported browser profile registry");
   }
+  const state = migrateProfileState(raw);
   const pendingPartitionCleanup =
     state.pendingPartitionCleanup === undefined
       ? []
@@ -252,6 +304,15 @@ function validateProfileState(input: unknown): BrowserProfileState {
   if (!profileIds.has(state.defaultProfileId)) {
     throw new Error("default browser profile does not exist");
   }
+  for (const profile of state.profiles) {
+    if (profile.source?.type !== "ufo") continue;
+    if (
+      profile.source.profileId === profile.id ||
+      !profileIds.has(profile.source.profileId)
+    ) {
+      throw new Error("source UFO-Browser profile does not exist");
+    }
+  }
   return structuredClone({ ...state, pendingPartitionCleanup });
 }
 
@@ -279,11 +340,21 @@ function validateProfileRecord(profile: BrowserProfileRecord) {
 }
 
 function validateProfileSource(source: BrowserProfileSource | undefined) {
-  if (!source || source.browser !== "chrome") {
+  if (!source || (source.type !== "chrome" && source.type !== "ufo")) {
     throw new Error("invalid browser profile source");
   }
-  if (!/^(Default|Profile [1-9][0-9]*)$/.test(source.profileDirName)) {
-    throw new Error("invalid source profile directory");
+  if (source.type === "chrome") {
+    if (
+      source.browser !== "chrome" ||
+      !/^(Default|Profile [1-9][0-9]*)$/.test(source.profileDirName)
+    ) {
+      throw new Error("invalid source Chrome profile");
+    }
+  } else if (
+    source.browser !== "ufo-browser" ||
+    !isValidProfileId(source.profileId)
+  ) {
+    throw new Error("invalid source UFO-Browser profile");
   }
   if (typeof source.displayName !== "string" || !source.displayName.trim()) {
     throw new Error("invalid source profile display name");
@@ -294,9 +365,40 @@ function validateProfileSource(source: BrowserProfileSource | undefined) {
   if (source.lastImportStatus !== "success" && source.lastImportStatus !== "partial") {
     throw new Error("invalid browser profile import status");
   }
-  if (source.loginSyncEnabled !== false) {
-    throw new Error("browser login sync is not available");
+  if (typeof source.loginSyncEnabled !== "boolean") {
+    throw new Error("invalid browser login sync setting");
   }
+}
+
+type LegacyBrowserProfileState = Omit<BrowserProfileState, "version" | "profiles"> & {
+  version: 1;
+  profiles: Array<
+    Omit<BrowserProfileRecord, "source"> & {
+      source?: Omit<ChromeBrowserProfileSource, "type" | "loginSyncEnabled"> & {
+        loginSyncEnabled: false;
+      };
+    }
+  >;
+};
+
+function migrateProfileState(
+  state: BrowserProfileState | LegacyBrowserProfileState,
+): BrowserProfileState {
+  if (state.version === 2) return structuredClone(state);
+  return {
+    ...structuredClone(state),
+    version: 2,
+    profiles: state.profiles.map((profile) => ({
+      ...profile,
+      source: profile.source
+        ? {
+            ...profile.source,
+            type: "chrome" as const,
+            loginSyncEnabled: false,
+          }
+        : undefined,
+    })),
+  };
 }
 
 export async function cleanupPendingProfilePartitions(

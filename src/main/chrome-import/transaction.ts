@@ -322,6 +322,7 @@ export class ChromeImportTransaction {
       name: `Chrome - ${this.manifest.source.displayName}`,
       kind: "imported",
       source: {
+        type: "chrome",
         browser: "chrome",
         profileDirName: this.manifest.source.profileDirName,
         displayName: this.manifest.source.displayName,

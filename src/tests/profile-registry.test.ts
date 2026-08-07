@@ -38,7 +38,7 @@ test("profile registry creates a private default profile atomically", async () =
     assert.equal(registry.getDefault().partitionId, DEFAULT_PROFILE_PARTITION_ID);
     assert.equal((await stat(root)).mode & 0o777, 0o700);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
-    assert.equal(JSON.parse(await readFile(path, "utf8")).version, 1);
+    assert.equal(JSON.parse(await readFile(path, "utf8")).version, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -58,6 +58,7 @@ test("profile registry publishes an imported profile only after an atomic add", 
         name: "Chrome Default",
         kind: "imported",
         source: {
+          type: "chrome",
           browser: "chrome",
           profileDirName: "Default",
           displayName: "Chrome Default",
@@ -122,6 +123,7 @@ test("removing an imported profile falls back to local and cleans its partition 
         name: "Chrome Personal",
         kind: "imported",
         source: {
+          type: "chrome",
           browser: "chrome",
           profileDirName: "Default",
           displayName: "Personal",
@@ -167,7 +169,53 @@ test("the built-in local browser profile cannot be removed", async () => {
   }
 });
 
-test("profile registry rejects traversal, duplicate partitions, and enabled sync", async () => {
+test("UFO clones bind to an existing source and protect that dependency", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-profile-registry-"));
+  try {
+    const registry = new BrowserProfileRegistry(join(root, "profiles.json"));
+    await registry.initialize();
+    const source = importedProfile(
+      "chrome-source",
+      "x-browser-profile-chrome-source",
+    );
+    await registry.add(source);
+    const now = Date.now();
+    await registry.add({
+      id: "ufo-clone",
+      partitionId: "x-browser-profile-ufo-clone",
+      name: "工作副本",
+      kind: "imported",
+      source: {
+        type: "ufo",
+        browser: "ufo-browser",
+        profileId: source.id,
+        displayName: source.name,
+        importedAt: now,
+        lastImportStatus: "success",
+        loginSyncEnabled: true,
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+    await assert.rejects(
+      registry.remove(source.id),
+      /still used as a clone source/,
+    );
+    await assert.rejects(
+      registry.setLoginSyncEnabled("default", true),
+      /local browser profile/,
+    );
+    assert.equal(
+      registry.listPublic().find((profile) => profile.id === "ufo-clone")
+        ?.source?.loginSyncEnabled,
+      true,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("profile registry migrates legacy sources and persists per-profile sync", async () => {
   assert.equal(isValidProfileId("../Default"), false);
   assert.equal(isValidPartitionId("../../Chrome"), false);
   assert.equal(isValidPartitionId("x-browser-profile-safe_name"), true);
@@ -200,10 +248,13 @@ test("profile registry rejects traversal, duplicate partitions, and enabled sync
         ],
       }),
     );
-    await assert.rejects(
-      new BrowserProfileRegistry(path).initialize(),
-      /login sync is not available/,
-    );
+    const registry = new BrowserProfileRegistry(path);
+    await registry.initialize();
+    assert.equal(registry.listPublic()[0].source?.type, "chrome");
+    assert.equal(registry.listPublic()[0].source?.loginSyncEnabled, false);
+    assert.equal(JSON.parse(await readFile(path, "utf8")).version, 2);
+    await registry.setLoginSyncEnabled("imported", true);
+    assert.equal(registry.listPublic()[0].source?.loginSyncEnabled, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -217,12 +268,13 @@ function importedProfile(id: string, partitionId: string) {
     name: "Chrome Personal",
     kind: "imported" as const,
     source: {
+      type: "chrome" as const,
       browser: "chrome" as const,
       profileDirName: "Default",
       displayName: "Personal",
       importedAt: now,
       lastImportStatus: "success" as const,
-      loginSyncEnabled: false as const,
+      loginSyncEnabled: false,
     },
     createdAt: now,
     updatedAt: now,
