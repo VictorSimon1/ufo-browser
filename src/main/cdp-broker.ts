@@ -355,7 +355,7 @@ export class CdpBroker {
       const viewport = await contents
         .executeJavaScript(
           `({ width: window.innerWidth, height: window.innerHeight })`,
-          true,
+          false,
         )
         .catch(() => null);
       if (Number(viewport?.width) > 1 && Number(viewport?.height) > 1) return;

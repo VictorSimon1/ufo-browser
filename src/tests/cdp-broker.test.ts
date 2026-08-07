@@ -228,6 +228,11 @@ test("focus emulation is limited to the trusted Input gesture window", async () 
     false,
   );
   assert.deepEqual(contents.backgroundThrottlingChanges, [false]);
+  assert.deepEqual(
+    contents.executeJavaScriptUserGestures,
+    [false],
+    "Agent viewport probes must not create a page user activation",
+  );
 
   await broker.send(
     "connection-1",
@@ -359,6 +364,7 @@ class FakeContents extends EventEmitter {
   readonly id = 42;
   readonly session = new EventEmitter();
   readonly backgroundThrottlingChanges: boolean[] = [];
+  readonly executeJavaScriptUserGestures: boolean[] = [];
 
   constructor(readonly debuggerTransport: FakeDebugger) {
     super();
@@ -380,7 +386,8 @@ class FakeContents extends EventEmitter {
     this.backgroundThrottlingChanges.push(allowed);
   }
 
-  async executeJavaScript() {
+  async executeJavaScript(_source: string, userGesture = false) {
+    this.executeJavaScriptUserGestures.push(userGesture);
     return { width: 1280, height: 720 };
   }
 }
