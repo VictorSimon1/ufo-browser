@@ -50,7 +50,7 @@ The implementation lives under `src/main/chrome-import/`:
 
 The Profile Registry is `profiles.json`. Each imported Profile owns a generated partition such as `x-browser-profile-chrome-<id>`. New Spaces use the current default Profile unless the user explicitly selects another one; existing Spaces retain their original `profileId`.
 
-The selection screen shows the Chrome directory, last-used date, and estimated import size. It also requires an explicit checkbox decision about whether UFO-Browser may publish a partial Profile when a small subset cannot be migrated safely.
+The selection screen shows the Chrome directory, last-used date, and estimated import size. It also requires an explicit checkbox decision about whether UFO-Browser may publish a partial Profile when a small subset cannot be migrated safely. This consent is off by default, so a partial Profile is never published unless the user actively opts in.
 
 ## Source consistency and file safety
 
@@ -58,7 +58,7 @@ Chrome must be normally closed before the snapshot. If `SingletonLock` points to
 
 Import jobs are stored below the UFO-Browser user-data directory with directory mode `0700` and file mode `0600`. Source Profiles must be direct, non-symlink children of Chrome User Data. The copy skips symlinks, copies only an allowlist, and uses `COPYFILE_FICLONE` so APFS can clone-on-write with a normal-copy fallback.
 
-The Chrome Cookies database itself is never installed into the destination partition. It is read from staging, decrypted, converted, and written through the target Chromium session so UFO-Browser owns the resulting Cookie store.
+The Chrome Cookies database itself is never installed into the destination partition. The snapshot prefers the modern `Network/Cookies` location and falls back to the legacy root `Cookies` database only when needed. It is read from staging, decrypted, converted, and written through the target Chromium session so UFO-Browser owns the resulting Cookie store.
 
 ## Keychain and sensitive data
 
@@ -81,7 +81,7 @@ Failure states are `failed`, `partial`, or `cleanup-pending`.
 
 - The old default Profile and all existing Spaces are never overwritten.
 - A Profile is added to `profiles.json` only after verification. A partial result is published only when the user explicitly allowed partial import on the confirmation screen.
-- The job manifest records both source and target Chromium versions. An incompatible Service Worker dataset is skipped with the sanitized `service-worker-version-mismatch` warning and makes the result partial.
+- The job manifest records both source and target Chromium versions. An incompatible Service Worker dataset is skipped with the sanitized `service-worker-version-mismatch` warning and makes the result partial. A safe-copy failure isolated to the optional Service Worker dataset is cleaned up and reported as `service-worker-copy-failed`; required storage copy failures still abort and roll back the import.
 - If a target Session was created before failure, the partition is left journaled and removed on the next cold start before reuse.
 - Published partitions are preserved during job recovery.
 - Removing an imported Profile immediately removes it from the registry and queues its partition for cold-start deletion.

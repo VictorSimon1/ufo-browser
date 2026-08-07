@@ -170,7 +170,7 @@ See [docs/macos-build.md](docs/macos-build.md) for target directories, ownership
 
 ## Chrome login-state import
 
-Open Profile management in Overview and choose **从 Chrome 导入登录状态**. UFO-Browser discovers Chrome Stable `Default` and `Profile N` entries, asks before requesting a normal Chrome quit, then publishes the result as a separate UFO Profile only after Cookie verification succeeds.
+Open Profile management in Overview and choose **从 Chrome 导入登录状态**. UFO-Browser discovers Chrome Stable `Default` and `Profile N` entries, asks before requesting a normal Chrome quit, then publishes the result as a separate UFO Profile only after Cookie verification succeeds. Publishing a partial Profile requires an explicit opt-in that is disabled by default.
 
 Chrome session Cookies are converted to a 30-day expiry so they survive UFO-Browser restarts. The import is a one-time snapshot: automatic periodic synchronization is disabled, and signing out inside UFO-Browser does not resurrect an older Chrome Cookie. Some Passkey, device-bound, client-certificate, or risk-controlled sites may still require a new login.
 
