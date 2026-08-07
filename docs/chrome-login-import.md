@@ -58,6 +58,8 @@ Before import, the UI states that processing stays on the current Mac, that pass
 
 During snapshotting, the UI advances across the fixed allowlisted datasets (Cookies, Local Storage, IndexedDB, WebStorage, File System/OPFS, storage/quota metadata, and compatible Service Worker data). Progress events contain only these stable dataset labels and numeric counters; they never expose source paths, origins, domains, or stored values, and a failed progress observer cannot abort the transaction.
 
+Cookie rows are streamed from SQLite inside the Worker instead of materializing the full query result before conversion. The 10,000-Cookie gate therefore keeps parsing off the main event loop and avoids holding both a complete raw-row array and the converted import array at once.
+
 ## Source consistency and file safety
 
 Chrome must be normally closed before the snapshot. If `SingletonLock` points to a live process, the UI offers **退出 Chrome 并继续** or cancel. The quit action uses a normal macOS application quit request and waits for the lock to clear; it never uses `killall` or `SIGKILL`.

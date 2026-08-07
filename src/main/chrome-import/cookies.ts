@@ -80,7 +80,9 @@ export async function readChromeCookies(
         .map((row: any) => String(row.name)),
     );
     assertRequiredCookieColumns(columns);
-    const rows = database.prepare(cookieSelect(columns)).all() as CookieRow[];
+    const rows = database
+      .prepare(cookieSelect(columns))
+      .iterate() as IterableIterator<CookieRow>;
     const cookies: ImportedChromeCookie[] = [];
     const warningCounts = new Map<CookieImportWarningCode, number>();
 

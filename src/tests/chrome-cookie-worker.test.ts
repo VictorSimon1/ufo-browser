@@ -14,7 +14,7 @@ test("Chrome Cookie parsing stays off the main event loop", async () => {
   const databasePath = join(root, "Cookies");
   const secret = Buffer.from("worker-safe-storage");
   try {
-    createCookieFixture(databasePath, secret, 2_500);
+    createCookieFixture(databasePath, secret, 10_000);
     const keychain = new MockKeychainProvider(secret);
     const readCookies = createChromeCookieWorkerReader(
       join(process.cwd(), "dist", "main", "chrome-cookie-worker.js"),
@@ -25,7 +25,7 @@ test("Chrome Cookie parsing stays off the main event loop", async () => {
     const result = await readCookies(databasePath);
     clearInterval(timer);
 
-    assert.equal(result.cookies.length, 2_500);
+    assert.equal(result.cookies.length, 10_000);
     assert.equal(result.warnings.length, 0);
     assert.deepEqual(keychain.requests, ["Chrome Safe Storage"]);
     assert.ok(eventLoopTicks >= 5, `event loop advanced only ${eventLoopTicks} ticks`);
