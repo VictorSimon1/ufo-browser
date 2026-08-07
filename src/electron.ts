@@ -270,7 +270,6 @@ async function start() {
     profiles,
     partitionsRoot,
     pagePreload,
-    newTabFile: renderer("newtab.html"),
     captureWindow,
     forcedPreviewSpaceId:
       isTestApp && Number.isSafeInteger(requestedOverviewSpaceId)

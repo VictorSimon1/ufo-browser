@@ -22,6 +22,7 @@ import type {
   TabRecord,
 } from "./types.js";
 import {
+  isDefaultNewTabUrl,
   isInternalNewTabUrl,
   logicalNavigationUrl,
   normalizeNavigationUrl,
@@ -90,7 +91,6 @@ type ManagerOptions = {
   profiles: BrowserProfileRegistry;
   partitionsRoot: string;
   pagePreload: string;
-  newTabFile: string;
   captureWindow: BaseWindow;
   publishPreviewFrame: (frame: PreviewFrame) => void;
   forcedPreviewSpaceId?: number;
@@ -313,7 +313,7 @@ export class TaskSpaceManager {
     const canReuseInitialTab =
       space.tabs.length === 1 &&
       space.activeTabId === initialTab?.targetId &&
-      isInternalNewTabUrl(initialTab?.url || "");
+      isDefaultNewTabUrl(initialTab?.url || "");
     if (!canReuseInitialTab) {
       return this.createTab(spaceId, input);
     }
@@ -325,7 +325,7 @@ export class TaskSpaceManager {
       if (
         current.tabs.length !== 1 ||
         current.activeTabId !== tab?.targetId ||
-        !isInternalNewTabUrl(tab?.url || "")
+        !isDefaultNewTabUrl(tab?.url || "")
       ) {
         return;
       }
@@ -342,10 +342,9 @@ export class TaskSpaceManager {
 
     const existing = this.runtimes.get(reused.targetId);
     if (existing) {
-      // A visible Overview may already be hydrating the local New Tab. Let
-      // that bounded load settle before issuing the real navigation so the
-      // fallback from the older load cannot overwrite the requested URL.
-      await existing.loading.catch(() => undefined);
+      // A visible Overview may already be loading Google. A new explicit
+      // navigation safely interrupts that request; do not wait on the network
+      // before allowing an Agent to reuse the pristine initial tab.
       existing.loaded = false;
       existing.retained = true;
       existing.loading = this.loadTab(existing, url);
@@ -1173,10 +1172,8 @@ export class TaskSpaceManager {
         // meaningful compositor frame instead of publishing white pixels.
         if (coldStart) {
           if (isInternalNewTabUrl(tab.url)) {
-            // The bundled New Tab has no remote resources. Waiting the remote
-            // page settle budget here makes a grid of fresh Spaces hydrate one
-            // by one for several seconds even though Chromium has already
-            // committed the local document.
+            // A legacy persisted local New Tab is migrated to Google by the
+            // loader. Keep a short first attempt before the remote retry path.
             await Promise.all([
               Promise.race([runtime.loading, delay(240)]),
               delay(80),
@@ -1764,20 +1761,15 @@ export class TaskSpaceManager {
     try {
       await this.loadNavigation(runtime.view, url);
     } catch {
-      try {
-        await runtime.view.webContents.loadFile(this.options.newTabFile);
-      } catch {
-        // A renderer can replace its navigation context while the fallback is
-        // committing. Keep the managed tab usable; a later reload or capture
-        // will recover without turning startup into an unhandled rejection.
-      }
+      // Chromium owns the navigation error page. Do not replace a failed real
+      // Google load with a local imitation or let startup reject globally.
     }
     runtime.loaded = true;
   }
 
   private async loadNavigation(view: WebContentsView, url: string) {
     if (isInternalNewTabUrl(url)) {
-      await view.webContents.loadFile(this.options.newTabFile);
+      await view.webContents.loadURL(X_BROWSER_DEFAULT_NEW_TAB_URL);
       return;
     }
     await view.webContents.loadURL(url);

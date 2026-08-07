@@ -149,6 +149,9 @@ async function verifyArtifacts(appRoot, expectArchives) {
       throw new Error(`Required App ASAR entry was not packaged: ${entry}`);
     }
   }
+  if (asarEntries.has("/dist/renderer/newtab.html")) {
+    throw new Error("Legacy local New Tab wrapper must not be packaged");
+  }
 
   const packageInfo = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const archives = files.filter((path) => /\.(dmg|zip)$/.test(path));

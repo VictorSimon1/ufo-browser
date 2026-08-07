@@ -1,4 +1,4 @@
-export const X_BROWSER_DEFAULT_NEW_TAB_URL = "x-browser://newtab/";
+export const X_BROWSER_DEFAULT_NEW_TAB_URL = "https://www.google.com/";
 
 const INTERNAL_NEW_TAB_PATH = /(?:^|\/)newtab\.html$/i;
 
@@ -14,14 +14,35 @@ export function isInternalNewTabUrl(value: string) {
   }
 }
 
+export function isDefaultNewTabUrl(value: string) {
+  if (isInternalNewTabUrl(value)) return true;
+  try {
+    const url = new URL(value);
+    return isGoogleHomeUrl(url);
+  } catch {
+    return false;
+  }
+}
+
 export function logicalNavigationUrl(value: string, fallback: string) {
   if (isInternalNewTabUrl(value)) {
+    return X_BROWSER_DEFAULT_NEW_TAB_URL;
+  }
+  if (isDefaultNewTabUrl(fallback) && isDefaultNewTabUrl(value)) {
     return X_BROWSER_DEFAULT_NEW_TAB_URL;
   }
   if (value) return value;
   return isInternalNewTabUrl(fallback)
     ? X_BROWSER_DEFAULT_NEW_TAB_URL
     : fallback;
+}
+
+function isGoogleHomeUrl(url: URL) {
+  return (
+    url.protocol === "https:" &&
+    /^(?:www\.)?google\.[a-z.]{2,12}$/i.test(url.hostname) &&
+    (url.pathname === "/" || url.pathname === "/webhp")
+  );
 }
 
 export function normalizeNavigationUrl(input: string) {

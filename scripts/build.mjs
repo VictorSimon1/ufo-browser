@@ -89,7 +89,7 @@ await build({
   external: ["electron"],
 });
 
-for (const name of ["agent-overlay", "chat", "overview", "browser", "newtab"]) {
+for (const name of ["agent-overlay", "chat", "overview", "browser"]) {
   await cp(`src/renderer/${name}.html`, `dist/renderer/${name}.html`);
 }
 await cp("src/renderer/agent-overlay.css", "dist/renderer/agent-overlay.css");

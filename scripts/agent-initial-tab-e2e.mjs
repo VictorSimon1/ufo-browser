@@ -34,23 +34,18 @@ try {
     await runCli(`
 const task = await useOrCreateTaskSpace('agent initial tab parity')
 const before = await listTabs()
-const initialPage = await pageInfo()
 const first = await openOrReuseTab('http://127.0.0.1:${port}/first', { wait: true, timeout: 10 })
 const afterFirst = await listTabs()
 const firstPage = await pageInfo()
 const second = await openOrReuseTab('http://127.0.0.1:${port}/second', { wait: true, timeout: 10 })
 const afterSecond = await listTabs()
-cliLog(JSON.stringify({ taskId: task.id, before, initialPage, first, afterFirst, firstPage, second, afterSecond }, null, 2))
+cliLog(JSON.stringify({ taskId: task.id, before, first, afterFirst, firstPage, second, afterSecond }, null, 2))
 `),
   );
   taskId = audit.taskId;
 
   assert.equal(audit.before.length, 1);
-  assert.equal(audit.before[0].url, "x-browser://newtab/");
-  assert.equal(audit.initialPage.url, "x-browser://newtab/");
-  assert.equal(audit.initialPage.title, "新标签页");
-  assert.ok(audit.initialPage.w >= 1100);
-  assert.ok(audit.initialPage.h >= 700);
+  assert.equal(audit.before[0].url, "https://www.google.com/");
   assert.equal(audit.afterFirst.length, 1);
   assert.equal(audit.afterFirst[0].targetId, audit.before[0].targetId);
   assert.equal(audit.first.targetId, audit.before[0].targetId);
@@ -64,7 +59,6 @@ cliLog(JSON.stringify({ taskId: task.id, before, initialPage, first, afterFirst,
         ok: true,
         taskId: audit.taskId,
         initialTargetId: audit.before[0].targetId,
-        initialViewport: `${audit.initialPage.w}x${audit.initialPage.h}`,
         firstTargetId: audit.first.targetId,
         tabsAfterFirstOpen: audit.afterFirst.length,
         tabsAfterSecondOpen: audit.afterSecond.length,
