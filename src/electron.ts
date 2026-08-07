@@ -1901,6 +1901,7 @@ async function runChromeImportUiAudit(context: {
           phase: String(progress?.phase || ''),
           completed: Number(progress?.completed || 0),
           total: Number(progress?.total || 0),
+          detailCode: String(progress?.detailCode || ''),
         });
       });
       document.querySelector('#profile-button')?.click();
@@ -2017,6 +2018,17 @@ async function runChromeImportUiAudit(context: {
     await captureWebContentsPng(overviewView),
   );
   const phases = result.progress.map((progress: any) => progress.phase);
+  const phaseSequence = phases.filter(
+    (phase: string, index: number) => index === 0 || phase !== phases[index - 1],
+  );
+  const snapshotProgress = result.progress.filter(
+    (progress: any) => progress.phase === "snapshotting",
+  );
+  const snapshotProgressMonotonic = snapshotProgress.every(
+    (progress: any, index: number) =>
+      index === 0 ||
+      Number(progress.completed) >= Number(snapshotProgress[index - 1].completed),
+  );
   const ok =
     profileHome.dialogVisible === true &&
     profileHome.profileRows === 1 &&
@@ -2032,8 +2044,13 @@ async function runChromeImportUiAudit(context: {
     discovery.partialAllowed === false &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
-    phases.join(",") ===
+    phaseSequence.join(",") ===
       "snapshotting,importing-cookies,verifying,committed" &&
+    snapshotProgress.length >= 4 &&
+    snapshotProgressMonotonic &&
+    snapshotProgress.some(
+      (progress: any) => progress.detailCode === "Local Storage",
+    ) &&
     importedCookies.length === 2 &&
     originStorage.localStorage === "fixture-local-storage" &&
     originStorage.indexedDb === "fixture-indexeddb" &&

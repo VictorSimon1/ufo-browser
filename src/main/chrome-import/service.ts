@@ -22,6 +22,7 @@ export type ChromeImportProgress = {
   phase: string;
   completed: number;
   total: number;
+  detailCode?: string;
 };
 
 export type ChromeImportResult = {
@@ -102,18 +103,38 @@ export class ChromeLoginImportService {
     let transaction: ChromeImportTransaction | undefined;
     let target: CookieWriteTarget | undefined;
     let targetCreated = false;
+    const reportProgress = (progress: ChromeImportProgress) => {
+      try {
+        onProgress(progress);
+      } catch {
+        // Renderer progress observers are not part of the import transaction.
+      }
+    };
     try {
-      onProgress({ phase: "snapshotting", completed: 0, total: 4 });
+      reportProgress({
+        phase: "snapshotting",
+        completed: 0,
+        total: 4,
+        detailCode: "preparing",
+      });
       transaction = await ChromeImportTransaction.create({
         jobsRoot: join(this.options.userDataPath, "Chrome Import", "jobs"),
         partitionsRoot: this.options.partitionsRoot,
         source,
         targetChromiumVersion: this.options.targetChromiumVersion,
+        onSnapshotProgress: (progress) =>
+          reportProgress({
+            phase: "snapshotting",
+            completed:
+              progress.total > 0 ? progress.completed / progress.total : 0,
+            total: 4,
+            detailCode: progress.item,
+          }),
       });
       const snapshot = await transaction.snapshot();
       await transaction.activateStorage();
 
-      onProgress({ phase: "importing-cookies", completed: 1, total: 4 });
+      reportProgress({ phase: "importing-cookies", completed: 1, total: 4 });
       await transaction.setPhase("importing-cookies");
       const cookieResult = snapshot.storage.cookieDatabasePresent
         ? await (this.options.readCookies
@@ -142,7 +163,7 @@ export class ChromeLoginImportService {
       targetCreated = true;
       const writeResult = await writeAndVerifyCookies(target, cookieResult.cookies);
 
-      onProgress({ phase: "verifying", completed: 3, total: 4 });
+      reportProgress({ phase: "verifying", completed: 3, total: 4 });
       const significantWarnings = cookieResult.warnings.filter(
         (warning) => warning.code !== "expired-cookie",
       );
@@ -163,7 +184,7 @@ export class ChromeLoginImportService {
         status,
         makeDefault,
       );
-      onProgress({ phase: "committed", completed: 4, total: 4 });
+      reportProgress({ phase: "committed", completed: 4, total: 4 });
       return {
         status,
         profile: {

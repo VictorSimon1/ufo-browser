@@ -51,17 +51,25 @@ test("Chrome import service commits verified Cookies and storage through a mock 
     const progress: string[] = [];
     const result = await service.importProfile("Default", true, true, (event) => {
       progress.push(event.phase);
+      if (event.detailCode === "IndexedDB") {
+        throw new Error("fixture progress observer failure");
+      }
     });
     assert.equal(result.status, "success");
     assert.equal(result.cookies.imported, 2);
     assert.equal(result.cookies.partitioned, 1);
     assert.equal(result.profile.isDefault, true);
-    assert.deepEqual(progress, [
-      "snapshotting",
-      "importing-cookies",
-      "verifying",
-      "committed",
-    ]);
+    assert.deepEqual(
+      progress.filter(
+        (phase, index) => index === 0 || phase !== progress[index - 1],
+      ),
+      [
+        "snapshotting",
+        "importing-cookies",
+        "verifying",
+        "committed",
+      ],
+    );
     assert.equal(keychain.requests.length, 1);
     assert.equal(target.disposed, 1);
     assert.equal(JSON.stringify(result).includes("secret-cookie-value"), false);

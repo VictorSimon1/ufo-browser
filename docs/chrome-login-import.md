@@ -52,6 +52,8 @@ The Profile Registry is `profiles.json`. Each imported Profile owns a generated 
 
 The selection screen shows the Chrome directory, last-used date, and estimated import size. It also requires an explicit checkbox decision about whether UFO-Browser may publish a partial Profile when a small subset cannot be migrated safely. This consent is off by default, so a partial Profile is never published unless the user actively opts in.
 
+During snapshotting, the UI advances across the fixed allowlisted datasets (Cookies, Local Storage, IndexedDB, WebStorage, File System/OPFS, storage/quota metadata, and compatible Service Worker data). Progress events contain only these stable dataset labels and numeric counters; they never expose source paths, origins, domains, or stored values, and a failed progress observer cannot abort the transaction.
+
 ## Source consistency and file safety
 
 Chrome must be normally closed before the snapshot. If `SingletonLock` points to a live process, the UI offers **退出 Chrome 并继续** or cancel. The quit action uses a normal macOS application quit request and waits for the lock to clear; it never uses `killall` or `SIGKILL`.

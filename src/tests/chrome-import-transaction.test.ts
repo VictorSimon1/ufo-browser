@@ -25,6 +25,11 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
   const jobsRoot = join(root, "UFO", "Chrome Import", "jobs");
   const partitionsRoot = join(root, "UFO", "Partitions");
   const registry = new BrowserProfileRegistry(join(root, "UFO", "profiles.json"));
+  const snapshotProgress: Array<{
+    completed: number;
+    total: number;
+    item: string;
+  }> = [];
   try {
     await registry.initialize();
     await mkdir(join(profilePath, "Local Storage", "leveldb"), { recursive: true });
@@ -48,6 +53,7 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
       targetChromiumVersion: "150.0.0.0",
       id: "11111111-2222-3333-4444-555555555555",
       now: () => 1234,
+      onSnapshotProgress: (progress) => snapshotProgress.push(progress),
     });
     const snapshot = await transaction.snapshot();
     assert.equal(snapshot.phase, "preparing-profile");
@@ -61,6 +67,12 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
       "IndexedDB",
       "Service Worker",
     ]);
+    assert.equal(snapshotProgress[0].completed, 1);
+    assert.equal(snapshotProgress.at(-1)?.completed, snapshotProgress.at(-1)?.total);
+    assert.ok(snapshotProgress.some((progress) => progress.item === "Cookies"));
+    assert.ok(
+      snapshotProgress.some((progress) => progress.item === "Local Storage"),
+    );
     assert.equal(await readFile(transaction.stagedCookieDatabasePath, "utf8"), "encrypted-cookie-db");
     await assert.rejects(access(join(transaction.stagedPartitionPath, "History")));
     await assert.rejects(

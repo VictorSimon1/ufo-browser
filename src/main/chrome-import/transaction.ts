@@ -72,6 +72,11 @@ export type ChromeImportTransactionOptions = {
   source: DiscoveredChromeProfile;
   targetChromiumVersion: string;
   copyStorageTree?: (sourcePath: string, targetPath: string) => Promise<void>;
+  onSnapshotProgress?: (progress: {
+    completed: number;
+    total: number;
+    item: string;
+  }) => void;
   id?: string;
   now?: () => number;
 };
@@ -175,7 +180,6 @@ export class ChromeImportTransaction {
       const sourceProfilePath = await validateSourceProfile(this.options.source);
       await mkdir(join(this.jobRoot, "source"), { recursive: true, mode: 0o700 });
       await mkdir(this.stagedPartitionPath, { recursive: false, mode: 0o700 });
-      await this.copyCookieDatabase(sourceProfilePath);
 
       const paths: string[] = [...REQUIRED_STORAGE_PATHS];
       if (serviceWorkerCompatible(
@@ -189,11 +193,24 @@ export class ChromeImportTransaction {
           "service-worker-version-mismatch",
         );
       }
+      const progressTotal = paths.length + 1;
+      let progressCompleted = 0;
+      await this.copyCookieDatabase(sourceProfilePath);
+      this.reportSnapshotProgress(
+        ++progressCompleted,
+        progressTotal,
+        "Cookies",
+      );
       for (const relativePath of paths) {
         const sourcePath = join(sourceProfilePath, relativePath);
         const targetPath = join(this.stagedPartitionPath, relativePath);
         if (!(await pathExists(sourcePath))) {
           this.manifest.storage.skipped.push(relativePath);
+          this.reportSnapshotProgress(
+            ++progressCompleted,
+            progressTotal,
+            relativePath,
+          );
           continue;
         }
         try {
@@ -210,6 +227,11 @@ export class ChromeImportTransaction {
             "service-worker-copy-failed",
           );
         }
+        this.reportSnapshotProgress(
+          ++progressCompleted,
+          progressTotal,
+          relativePath,
+        );
       }
       await this.setPhase("preparing-profile");
       return this.state();
@@ -311,6 +333,18 @@ export class ChromeImportTransaction {
     });
     await chmod(temporaryPath, 0o600);
     await rename(temporaryPath, path);
+  }
+
+  private reportSnapshotProgress(
+    completed: number,
+    total: number,
+    item: string,
+  ) {
+    try {
+      this.options.onSnapshotProgress?.({ completed, total, item });
+    } catch {
+      // Progress is observational and must never decide transaction outcome.
+    }
   }
 }
 

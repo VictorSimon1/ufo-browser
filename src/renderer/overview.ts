@@ -752,7 +752,23 @@ function updateImportProgress(progress: any) {
     verifying: ["正在验证登录状态", "逐项核对 Cookie 与分区属性"],
     committed: ["导入完成", "新的 Profile 已可用于 Task Space"],
   };
-  const [title, detail] = copy[phase] ?? copy.snapshotting;
+  const snapshotDetails: Record<string, string> = {
+    preparing: "正在检查可安全迁移的数据",
+    Cookies: "正在复制 Chrome Cookie 数据库",
+    "Local Storage": "正在复制 Local Storage",
+    IndexedDB: "正在复制 IndexedDB",
+    WebStorage: "正在复制 WebStorage",
+    "File System": "正在复制 File System / OPFS",
+    Storage: "正在复制存储元数据",
+    QuotaManager: "正在复制配额元数据",
+    "QuotaManager-journal": "正在复制配额日志",
+    "Service Worker": "正在复制兼容的 Service Worker 数据",
+  };
+  const [title, defaultDetail] = copy[phase] ?? copy.snapshotting;
+  const detail =
+    phase === "snapshotting"
+      ? snapshotDetails[String(progress?.detailCode || "")] ?? defaultDetail
+      : defaultDetail;
   document.querySelector<HTMLElement>("#import-progress-number")!.textContent = `${percent}%`;
   document.querySelector<HTMLElement>("#import-progress-title")!.textContent = title;
   document.querySelector<HTMLElement>("#import-progress-detail")!.textContent = detail;
