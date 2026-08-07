@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld("xBrowser", {
       ipcRenderer.invoke("x-browser:profiles:set-default", profileId),
     remove: (profileId: string) =>
       ipcRenderer.invoke("x-browser:profiles:remove", profileId),
+    setSync: (profileId: string, enabled: boolean) =>
+      ipcRenderer.invoke("x-browser:profiles:sync-set", profileId, enabled),
+    syncNow: (profileId: string) =>
+      ipcRenderer.invoke("x-browser:profiles:sync-now", profileId),
     discoverChrome: () =>
       ipcRenderer.invoke("x-browser:profiles:chrome-discover"),
     quitChrome: () => ipcRenderer.invoke("x-browser:profiles:chrome-quit"),
@@ -51,6 +55,8 @@ contextBridge.exposeInMainWorld("xBrowser", {
       ),
     onImportProgress: (listener: (progress: any) => void) =>
       on("x-browser:chrome-import-progress", listener),
+    onSyncProgress: (listener: (progress: any) => void) =>
+      on("x-browser:profile-sync-progress", listener),
   },
   browser: {
     state: () => ipcRenderer.invoke("x-browser:browser:state"),

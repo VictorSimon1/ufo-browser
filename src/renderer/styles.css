@@ -87,6 +87,56 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 .overview-actions button:not(:disabled):hover { transform: translateY(-1px); background: #fff; box-shadow: 0 12px 28px rgba(27, 50, 43, 0.1); }
 .overview-actions button:not(:disabled):active { transform: scale(0.97); }
+.profile-sync-strip {
+  position: absolute;
+  left: 78px;
+  right: 24px;
+  bottom: -1px;
+  height: 3px;
+  pointer-events: none;
+  transition: opacity .22s ease;
+}
+.profile-sync-strip[hidden] { display: none; }
+.profile-sync-strip > span {
+  position: absolute;
+  right: 0;
+  bottom: 7px;
+  padding: 3px 7px;
+  border: 1px solid rgba(48, 76, 67, .09);
+  border-radius: 999px;
+  background: rgba(250, 252, 251, .92);
+  color: #7c8985;
+  box-shadow: 0 4px 14px rgba(27, 49, 42, .045);
+  font-size: 9px;
+  font-weight: 560;
+  letter-spacing: .01em;
+}
+.profile-sync-strip > b {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(62, 102, 89, .07);
+}
+.profile-sync-strip > b > i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #89b7a8, #4b907c 58%, #78ae9e);
+  box-shadow: 0 0 8px rgba(68, 139, 117, .2);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .34s cubic-bezier(.2,.75,.2,1);
+}
+.profile-sync-strip.running > b > i::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.58), transparent);
+  animation: profile-sync-glide 1.35s ease-in-out infinite;
+}
 .grid-button { width: 44px; padding: 0; display: grid; place-items: center; cursor: pointer; }
 .grid-button svg { width: 19px; height: 19px; fill: none; stroke: #45554f; stroke-width: 1.55; stroke-linecap: round; }
 .profile-button {
@@ -271,12 +321,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   background: conic-gradient(#d9574e 0 33%, #e9b949 0 66%, #4b9b6c 0);
 }
 .chrome-mark i { position: absolute; inset: 8px; border: 2px solid #fff; border-radius: 50%; background: #4c79c7; }
-.coming-soon-row { min-height: 52px; margin-top: 9px; padding: 8px 11px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-.coming-soon-row > span { display: flex; flex-direction: column; gap: 3px; }
-.coming-soon-row strong { font-size: 12px; font-weight: 610; }
-.coming-soon-row small { color: #8c9894; font-size: 10px; }
-.coming-soon-row button { position: relative; width: 34px; height: 20px; padding: 0; border: 0; border-radius: 10px; background: #d9dfdd; }
-.coming-soon-row button i { position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(25,42,36,.18); }
+.profile-sync-toggle { position: relative; flex: 0 0 auto; width: 34px; height: 20px; padding: 0; border: 0; border-radius: 10px; background: #d9dfdd; cursor: pointer; transition: background .16s ease; }
+.profile-sync-toggle i { position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(25,42,36,.18); transition: transform .18s cubic-bezier(.2,.8,.2,1); }
+.profile-sync-toggle[aria-checked="true"] { background: #3e9279; }
+.profile-sync-toggle[aria-checked="true"] i { transform: translateX(14px); }
+.profile-sync-toggle:disabled { cursor: default; opacity: .55; }
+.profile-sync-note { margin: 9px 4px 0; color: #84918d; font-size: 10px; line-height: 1.5; }
 .source-status { min-height: 56px; margin-bottom: 14px; padding: 10px 11px 10px 13px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid; border-radius: 8px; }
 .source-status > span { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .source-status strong { font-size: 12px; font-weight: 640; }
@@ -344,6 +394,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 @keyframes dialog-backdrop-in { from { opacity: 0; } }
 @keyframes dialog-panel-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
 @keyframes dialog-spin { to { transform: rotate(360deg); } }
+@keyframes profile-sync-glide { from { transform: translateX(-120%); } to { transform: translateX(430%); } }
 
 .spaces-grid {
   display: grid;

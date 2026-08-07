@@ -10,6 +10,7 @@ import {
 import {
   readChromeCookies,
   type ChromeCookieReadResult,
+  type ImportedChromeCookie,
 } from "./cookies.js";
 import {
   writeAndVerifyCookies,
@@ -18,6 +19,7 @@ import {
 import { ChromeImportTransaction } from "./transaction.js";
 import type { StoragePreflightResult } from "./storage-preflight.js";
 import type { BrowserProfileRegistry } from "../profile-registry.js";
+import type { BrowserProfileRecord } from "../profile-registry.js";
 
 export type ChromeImportProgress = {
   phase: string;
@@ -69,6 +71,10 @@ export type ChromeLoginImportServiceOptions = {
   ) => Promise<CookieWriteTarget>;
   readCookies?: (databasePath: string) => Promise<ChromeCookieReadResult>;
   sourceAdapter?: BrowserLoginSourceAdapter;
+  onProfileImported?: (
+    profile: BrowserProfileRecord,
+    cookies: ImportedChromeCookie[],
+  ) => Promise<void> | void;
 };
 
 export class ChromeLoginImportService {
@@ -238,6 +244,9 @@ export class ChromeLoginImportService {
         status,
         makeDefault,
       );
+      await Promise.resolve(
+        this.options.onProfileImported?.(profile, cookieResult.cookies),
+      ).catch(() => undefined);
       reportProgress({ phase: "committed", completed: 4, total: 4 });
       return {
         status,

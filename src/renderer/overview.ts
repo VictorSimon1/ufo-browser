@@ -16,6 +16,15 @@ const profileDialogTitle = document.querySelector<HTMLElement>(
 const profileDialogSubtitle = document.querySelector<HTMLElement>(
   "#profile-dialog-subtitle",
 )!;
+const profileSyncStrip = document.querySelector<HTMLElement>(
+  "#profile-sync-strip",
+)!;
+const profileSyncLabel = document.querySelector<HTMLElement>(
+  "#profile-sync-label",
+)!;
+const profileSyncFill = document.querySelector<HTMLElement>(
+  "#profile-sync-fill",
+)!;
 let spaces: any[] = [];
 let browserProfiles: any[] = [];
 let spacesResolved = false;
@@ -24,6 +33,8 @@ let visibilityFrame = 0;
 let visibilityFallback = 0;
 let openMenuCard: HTMLElement | undefined;
 let profileDialogLocked = false;
+let latestSyncProgress: any;
+let profileSyncHideTimer = 0;
 
 void api.app.info().then((info: any) => {
   const version = String(info?.version || "").trim();
@@ -52,6 +63,7 @@ profileDialogBackdrop.addEventListener("pointerdown", (event) => {
   if (event.target === profileDialogBackdrop) closeProfileDialog();
 });
 api.profiles.onImportProgress((progress: any) => updateImportProgress(progress));
+api.profiles.onSyncProgress((progress: any) => updateProfileSyncProgress(progress));
 document.addEventListener("pointerdown", (event) => {
   const target = event.target as Element | null;
   if (target?.closest(".card-menu")) return;
@@ -81,6 +93,7 @@ api.overview.onPreviewFrame((frame: any) => queuePreviewFrame(frame));
 
 api.onPresentation((presentation: any) => {
   overviewActive = presentation?.kind === "overview";
+  renderProfileSyncStrip();
   if (!overviewActive) {
     if (visibilityFrame) cancelAnimationFrame(visibilityFrame);
     if (visibilityFallback) clearTimeout(visibilityFallback);
@@ -507,6 +520,7 @@ function renderProfileHome() {
   for (const profile of browserProfiles) {
     const row = document.createElement("div");
     row.className = "profile-row";
+    row.dataset.profileId = String(profile.id);
     row.classList.toggle("selected", profile.isDefault);
     const select = document.createElement("button");
     select.className = "profile-row-select";
@@ -517,10 +531,7 @@ function renderProfileHome() {
     `;
     select.querySelector(".profile-row-avatar")!.textContent = profileInitial(profile.name);
     select.querySelector("strong")!.textContent = profile.name;
-    select.querySelector("small")!.textContent =
-      profile.kind === "imported"
-        ? `来自 Google Chrome · ${profile.source?.lastImportStatus === "partial" ? "部分导入" : "已导入"}`
-        : "UFO-Browser 本地 Profile";
+    select.querySelector("small")!.textContent = profileDetail(profile);
     select.setAttribute(
       "aria-label",
       profile.isDefault ? `${profile.name}，当前默认` : `将 ${profile.name} 设为默认`,
@@ -538,6 +549,28 @@ function renderProfileHome() {
     });
     row.append(select);
     if (profile.kind === "imported") {
+      const sync = document.createElement("button");
+      const syncEnabled = profile.source?.loginSyncEnabled === true;
+      sync.className = "profile-sync-toggle";
+      sync.title = syncEnabled ? "关闭自动登录态同步" : "开启自动登录态同步";
+      sync.setAttribute("role", "switch");
+      sync.setAttribute("aria-checked", String(syncEnabled));
+      sync.setAttribute(
+        "aria-label",
+        `${syncEnabled ? "关闭" : "开启"} ${profile.name} 的自动登录态同步`,
+      );
+      sync.innerHTML = "<i></i>";
+      sync.addEventListener("click", async () => {
+        sync.disabled = true;
+        try {
+          await api.profiles.setSync(profile.id, !syncEnabled);
+          await refreshProfiles();
+          renderProfileHome();
+        } catch {
+          sync.disabled = false;
+        }
+      });
+      row.append(sync);
       const remove = document.createElement("button");
       remove.className = "profile-row-remove";
       remove.title = "删除导入的 Profile";
@@ -579,10 +612,11 @@ function renderProfileHome() {
   importButton.addEventListener("click", () => void renderChromeDiscovery());
   importSection.append(importButton);
 
-  const sync = document.createElement("div");
-  sync.className = "coming-soon-row";
-  sync.innerHTML = '<span><strong>保持登录状态最新</strong><small>自动同步即将推出</small></span><button disabled role="switch" aria-checked="false"><i></i></button>';
-  importSection.append(sync);
+  const syncNote = document.createElement("p");
+  syncNote.className = "profile-sync-note";
+  syncNote.textContent =
+    "克隆 Profile 可独立开启自动同步；仅在来源真正变化时更新差异，UFO-Browser 内主动退出的登录不会被旧状态恢复。";
+  importSection.append(syncNote);
   profileDialogContent.append(profilesSection, importSection);
 }
 
@@ -893,6 +927,95 @@ function updateProfileButton() {
   if (!selected) return;
   document.querySelector("#profile-avatar")!.textContent = profileInitial(selected.name);
   document.querySelector("#profile-button-label")!.textContent = selected.name;
+}
+
+function profileDetail(profile: any) {
+  if (profile?.kind !== "imported") return "UFO-Browser 本地 Profile";
+  const source =
+    profile?.source?.type === "ufo"
+      ? `来自 ${profile.source?.displayName || "UFO-Browser Profile"}`
+      : "来自 Google Chrome";
+  const imported =
+    profile?.source?.lastImportStatus === "partial" ? "部分导入" : "已克隆";
+  if (profile?.source?.loginSyncEnabled !== true) {
+    return `${source} · ${imported} · 自动同步关闭`;
+  }
+  const status = profile?.syncStatus;
+  const resultLabels: Record<string, string> = {
+    unchanged: "已是最新",
+    baselined: "同步基线已建立",
+    updated: "刚刚更新",
+    conflict: "已保留 UFO 当前登录",
+    error: "稍后自动重试",
+  };
+  const phaseLabels: Record<string, string> = {
+    scanning: "正在检查变化",
+    comparing: "正在比较差异",
+    applying: "正在更新登录状态",
+  };
+  return `${source} · ${
+    phaseLabels[status?.phase] || resultLabels[status?.result] || "自动同步开启"
+  }`;
+}
+
+function updateProfileSyncProgress(progress: any) {
+  const profileId = String(progress?.profileId || "");
+  const profile = browserProfiles.find((candidate) => candidate.id === profileId);
+  if (profile) {
+    profile.syncStatus = { ...progress };
+    const row = profileDialogContent.querySelector<HTMLElement>(
+      `.profile-row[data-profile-id="${CSS.escape(profileId)}"]`,
+    );
+    if (row) {
+      const detail = row.querySelector<HTMLElement>(".profile-row-copy small");
+      if (detail) detail.textContent = profileDetail(profile);
+    }
+  }
+  latestSyncProgress = progress;
+  renderProfileSyncStrip();
+}
+
+function renderProfileSyncStrip() {
+  if (profileSyncHideTimer) {
+    clearTimeout(profileSyncHideTimer);
+    profileSyncHideTimer = 0;
+  }
+  const progress = latestSyncProgress;
+  if (!overviewActive || !progress) {
+    profileSyncStrip.hidden = true;
+    profileSyncStrip.classList.remove("running");
+    return;
+  }
+  const phase = String(progress.phase || "");
+  const active = ["scanning", "comparing", "applying"].includes(phase);
+  const labels: Record<string, string> = {
+    scanning: "正在无感检查登录状态",
+    comparing: "正在比较登录状态差异",
+    applying: "正在更新变化的登录状态",
+    unchanged: "登录状态已是最新",
+    baselined: "自动同步已开启",
+    updated: "登录状态已更新",
+    conflict: "已保留 UFO-Browser 当前登录",
+    error: "登录状态同步稍后自动重试",
+    disabled: "自动同步已关闭",
+  };
+  const percent = active
+    ? Math.max(
+        0.08,
+        Math.min(0.94, Number(progress.completed || 0) / Number(progress.total || 4)),
+      )
+    : 1;
+  profileSyncStrip.hidden = false;
+  profileSyncStrip.classList.toggle("running", active);
+  profileSyncLabel.textContent = labels[phase] || labels[progress.result] || "登录状态同步";
+  profileSyncFill.style.transform = `scaleX(${percent})`;
+  if (!active) {
+    profileSyncHideTimer = window.setTimeout(() => {
+      profileSyncStrip.hidden = true;
+      profileSyncStrip.classList.remove("running");
+      profileSyncHideTimer = 0;
+    }, phase === "error" ? 2800 : 1800);
+  }
 }
 
 function profileName(profileId: string) {

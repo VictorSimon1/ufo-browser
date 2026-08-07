@@ -26,6 +26,13 @@ import { createElectronCookieWriteTarget } from "./main/chrome-import/electron-t
 import { createChromeStoragePreflightWorker } from "./main/chrome-import/storage-preflight-worker.js";
 import { readChromeCookies } from "./main/chrome-import/cookies.js";
 import { createChromeCookieWorkerReader } from "./main/chrome-import/worker-reader.js";
+import { ProfileSyncCheckpointStore } from "./main/profile-sync/checkpoint-store.js";
+import { createProfileCookieDiffWorker } from "./main/profile-sync/cookie-diff-worker-reader.js";
+import { ProfileSyncService } from "./main/profile-sync/service.js";
+import {
+  ChromeProfileCookieSourceProvider,
+  UfoProfileCookieSourceProvider,
+} from "./main/profile-sync/source-providers.js";
 import {
   MacKeychainProvider,
   MockKeychainProvider,
@@ -240,18 +247,61 @@ async function start() {
     isTestApp && testSafeStorageSecret
       ? new MockKeychainProvider(testSafeStorageSecret)
       : new MacKeychainProvider(keychainHelperPath);
+  const resolvedChromeSourceAdapter =
+    chromeSourceAdapter ?? createChromeStableSourceAdapter(chromeUserDataPath);
+  const readChromeCookiesWorker = createChromeCookieWorkerReader(
+    join(projectRoot, "dist", "main", "chrome-cookie-worker.js"),
+    keychain,
+  );
+  const createProfileTarget = (profile: {
+    id: string;
+    partitionId: string;
+  }) =>
+    createElectronCookieWriteTarget({
+      partitionsRoot,
+      profileId: profile.id,
+      partitionId: profile.partitionId,
+      copiedStorage: [],
+    });
+  const profileSync = new ProfileSyncService({
+    profiles,
+    checkpoints: new ProfileSyncCheckpointStore(
+      join(userDataPath, "Profile Sync", "checkpoints"),
+    ),
+    sourceProviders: [
+      new ChromeProfileCookieSourceProvider(
+        resolvedChromeSourceAdapter,
+        readChromeCookiesWorker,
+      ),
+      new UfoProfileCookieSourceProvider(
+        (profileId) => profiles.getOrThrow(profileId),
+        createProfileTarget,
+      ),
+    ],
+    createTarget: createProfileTarget,
+    diffCookies: createProfileCookieDiffWorker(
+      join(
+        projectRoot,
+        "dist",
+        "main",
+        "profile-sync-cookie-diff-worker.js",
+      ),
+    ),
+    onProgress: (status) => {
+      if (!overviewView.webContents.isDestroyed()) {
+        overviewView.webContents.send("x-browser:profile-sync-progress", status);
+      }
+    },
+  });
   const chromeImport = new ChromeLoginImportService({
     userDataPath,
     partitionsRoot,
     profiles,
     keychain,
-    readCookies: createChromeCookieWorkerReader(
-      join(projectRoot, "dist", "main", "chrome-cookie-worker.js"),
-      keychain,
-    ),
+    readCookies: readChromeCookiesWorker,
     targetChromiumVersion: process.versions.chrome,
     chromeUserDataPath,
-    sourceAdapter: chromeSourceAdapter,
+    sourceAdapter: resolvedChromeSourceAdapter,
     preflightStorage: createChromeStoragePreflightWorker(
       join(projectRoot, "dist", "main", "chrome-storage-preflight-worker.js"),
       partitionsRoot,
@@ -264,6 +314,8 @@ async function start() {
         copiedStorage,
         staticPreflight,
       }),
+    onProfileImported: (profile, cookies) =>
+      profileSync.seedProfile(profile.id, cookies),
   });
   const manager = new TaskSpaceManager({
     store,
@@ -366,6 +418,7 @@ async function start() {
     claude,
     profiles,
     chromeImport,
+    profileSync,
   });
   traceStart("ipc-registered");
   claude.onEvent((event) =>
@@ -393,6 +446,7 @@ async function start() {
     browserView.webContents.loadFile(renderer("browser.html")),
     overlayView.webContents.loadFile(renderer("agent-overlay.html")),
   ]);
+  profileSync.start();
   traceStart("shell-loaded");
   await presentation.showOverview();
   traceStart("overview-presented");
@@ -747,6 +801,7 @@ async function start() {
     shutdownPromise = server
       .close()
       .catch(() => undefined)
+      .then(() => profileSync.close().catch(() => undefined))
       .then(() => {
         if (!captureWindow.isDestroyed()) captureWindow.close();
       });
@@ -892,6 +947,7 @@ type IpcContext = {
   claude: ClaudeSessionManager;
   profiles: BrowserProfileRegistry;
   chromeImport: ChromeLoginImportService;
+  profileSync: ProfileSyncService;
 };
 
 function registerIpc(context: IpcContext) {
@@ -903,6 +959,7 @@ function registerIpc(context: IpcContext) {
     browserView,
     profiles,
     chromeImport,
+    profileSync,
   } = context;
   const shell = <T extends unknown[]>(
     channel: string,
@@ -919,17 +976,34 @@ function registerIpc(context: IpcContext) {
     name: app.getName(),
     version: app.getVersion(),
   }));
-  shell("x-browser:profiles:list", () => profiles.listPublic());
-  shell("x-browser:profiles:set-default", (_event, profileId: string) =>
-    profiles.setDefault(String(profileId)),
+  shell("x-browser:profiles:list", () =>
+    profiles.listPublic().map((profile) => ({
+      ...profile,
+      syncStatus: profileSync.status(profile.id),
+    })),
   );
-  shell("x-browser:profiles:remove", (_event, profileId: string) => {
+  shell("x-browser:profiles:set-default", async (_event, profileId: string) => {
+    const id = String(profileId);
+    await profiles.setDefault(id);
+    profileSync.notifyProfileActive(id);
+  });
+  shell("x-browser:profiles:remove", async (_event, profileId: string) => {
     const id = String(profileId);
     if (manager.listSpaces().some((space) => space.profileId === id)) {
       throw new Error("profile-in-use");
     }
-    return profiles.remove(id);
+    const removed = await profiles.remove(id);
+    await profileSync.removeProfile(id);
+    return removed;
   });
+  shell(
+    "x-browser:profiles:sync-set",
+    (_event, profileId: string, enabled: boolean) =>
+      profileSync.setEnabled(String(profileId), enabled === true),
+  );
+  shell("x-browser:profiles:sync-now", (_event, profileId: string) =>
+    profileSync.syncProfile(String(profileId), "manual"),
+  );
   shell("x-browser:profiles:chrome-discover", () => chromeImport.discover());
   shell("x-browser:profiles:chrome-quit", () => chromeImport.quitChrome());
   shell(
@@ -964,14 +1038,18 @@ function registerIpc(context: IpcContext) {
       selectedProfileId,
     );
     await presentation.showSpace(space.id);
+    profileSync.notifyProfileActive(space.profileId);
     browserView.webContents.send("x-browser:browser-state", manager.navigationState(space.id));
     return space;
   });
   shell("x-browser:overview:open", async (_event, spaceId: number) => {
-    await presentation.showSpace(assertSpaceId(spaceId));
+    const id = assertSpaceId(spaceId);
+    await presentation.showSpace(id);
+    const space = manager.getSpace(id);
+    if (space) profileSync.notifyProfileActive(space.profileId);
     browserView.webContents.send(
       "x-browser:browser-state",
-      manager.navigationState(spaceId),
+      manager.navigationState(id),
     );
   });
   shell("x-browser:overview:rename", (_event, spaceId: number, name: string) =>
@@ -2034,7 +2112,7 @@ async function runChromeImportUiAudit(context: {
       dialogVisible: !document.querySelector('#profile-dialog-backdrop')?.hidden,
       profileRows: document.querySelectorAll('.profile-row').length,
       importLabel: document.querySelector('.import-command strong')?.textContent || '',
-      syncDisabled: Boolean(document.querySelector('.coming-soon-row button')?.disabled),
+      syncNote: document.querySelector('.profile-sync-note')?.textContent || '',
     }))()`,
     true,
   );
@@ -2219,7 +2297,7 @@ async function runChromeImportUiAudit(context: {
     profileHome.dialogVisible === true &&
     profileHome.profileRows === 1 &&
     profileHome.importLabel === "从 Chrome 导入登录状态" &&
-    profileHome.syncDisabled === true &&
+    profileHome.syncNote.includes("仅在来源真正变化时更新差异") &&
     runningSource.warning === true &&
     runningSource.title === "Google Chrome 正在运行" &&
     runningSource.action === "退出 Chrome 并继续" &&

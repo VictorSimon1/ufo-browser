@@ -91,7 +91,10 @@ export class ProfileSyncService {
     if (this.scanTimer) clearInterval(this.scanTimer);
     this.startupTimer = undefined;
     this.scanTimer = undefined;
-    await Promise.allSettled(this.queues.values());
+    await Promise.race([
+      Promise.allSettled(this.queues.values()),
+      new Promise((resolve) => setTimeout(resolve, 1_500)),
+    ]);
   }
 
   status(profileId: string) {
