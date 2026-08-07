@@ -107,6 +107,7 @@ The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin sto
 Current isolated evidence proves:
 
 - two Cookies are persisted, including one CHIPS Cookie;
+- a 10,000-Cookie batch keeps writes at the configured concurrency limit and verifies through indexed identity lookups instead of quadratic scans;
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;
 - WebStorage and File System markers survive restart;
 - the imported Profile can become default and be selected by a new Space;

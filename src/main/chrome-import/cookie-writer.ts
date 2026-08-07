@@ -118,17 +118,80 @@ async function verifyCookies(
       ? result.cookies.filter((cookie: any) => cookie.partitionKey)
       : [];
   }
+  const regularIndex = indexCookies(regularActual, (cookie) =>
+    regularCookieIdentity(
+      String(cookie.name ?? ""),
+      String(cookie.domain ?? ""),
+      String(cookie.path ?? "/"),
+    ),
+  );
+  const partitionedIndex = indexCookies(partitionedActual, (cookie) =>
+    partitionedCookieIdentity(
+      String(cookie.name ?? ""),
+      String(cookie.domain ?? ""),
+      String(cookie.path ?? "/"),
+      cookie.partitionKey,
+    ),
+  );
   let verified = 0;
   for (const cookie of expected) {
     if (cookie.partitionKey) {
-      if (partitionedActual.some((actual) => cdpCookieMatches(cookie, actual))) {
+      const candidates =
+        partitionedIndex.get(
+          partitionedCookieIdentity(
+            cookie.name,
+            cookie.domain,
+            cookie.path,
+            cookie.partitionKey,
+          ),
+        ) ?? [];
+      if (candidates.some((actual) => cdpCookieMatches(cookie, actual))) {
         verified++;
       }
-    } else if (regularActual.some((actual) => electronCookieMatches(cookie, actual))) {
-      verified++;
+    } else {
+      const candidates =
+        regularIndex.get(
+          regularCookieIdentity(cookie.name, cookie.domain, cookie.path),
+        ) ?? [];
+      if (candidates.some((actual) => electronCookieMatches(cookie, actual))) {
+        verified++;
+      }
     }
   }
   return verified;
+}
+
+function indexCookies<T>(
+  cookies: readonly T[],
+  identity: (cookie: T) => string,
+) {
+  const index = new Map<string, T[]>();
+  for (const cookie of cookies) {
+    const key = identity(cookie);
+    const matches = index.get(key);
+    if (matches) matches.push(cookie);
+    else index.set(key, [cookie]);
+  }
+  return index;
+}
+
+function regularCookieIdentity(name: string, domain: string, path: string) {
+  return JSON.stringify([name, normalizeDomain(domain), path]);
+}
+
+function partitionedCookieIdentity(
+  name: string,
+  domain: string,
+  path: string,
+  partitionKey: { topLevelSite?: unknown; hasCrossSiteAncestor?: unknown } | undefined,
+) {
+  return JSON.stringify([
+    name,
+    normalizeDomain(domain),
+    path,
+    normalizePartitionSite(partitionKey?.topLevelSite),
+    Boolean(partitionKey?.hasCrossSiteAncestor),
+  ]);
 }
 
 function electronCookieMatches(

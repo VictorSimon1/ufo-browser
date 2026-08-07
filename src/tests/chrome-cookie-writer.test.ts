@@ -52,6 +52,27 @@ test("Cookie URLs normalize domain Cookies without weakening secure transport", 
   );
 });
 
+test("Cookie writer verifies 10,000 Cookies with bounded concurrency and indexed lookups", async () => {
+  const target = new LargeCookieTarget();
+  const cookies = Array.from({ length: 10_000 }, (_, index) =>
+    cookie({
+      name: `cookie-${index}`,
+      value: `value-${index}`,
+    }),
+  );
+  const result = await writeAndVerifyCookies(target, cookies, 8);
+  assert.deepEqual(result, {
+    written: 10_000,
+    partitioned: 0,
+    verified: 10_000,
+  });
+  assert.ok(target.maxInFlight <= 8, `observed ${target.maxInFlight} writes`);
+  assert.ok(
+    target.nameReads <= 30_000,
+    `verification used ${target.nameReads} Cookie name reads`,
+  );
+});
+
 class FakeCookieTarget implements CookieWriteTarget {
   regular: any[] = [];
   partitioned: any[] = [];
@@ -100,6 +121,49 @@ class FakeCookieTarget implements CookieWriteTarget {
   flush() {
     this.flushed++;
   }
+  dispose() {}
+}
+
+class LargeCookieTarget implements CookieWriteTarget {
+  private readonly regular: any[] = [];
+  inFlight = 0;
+  maxInFlight = 0;
+  nameReads = 0;
+  cookies = {
+    set: async (details: any) => {
+      this.inFlight++;
+      this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+      try {
+        await Promise.resolve();
+        this.regular.push({
+          ...details,
+          domain: details.domain ?? new URL(details.url).hostname,
+          hostOnly: !details.domain,
+          sameSite: details.sameSite ?? "unspecified",
+        });
+      } finally {
+        this.inFlight--;
+      }
+    },
+    get: async () =>
+      [...this.regular].reverse().map((cookie: any) => {
+        const actual = { ...cookie };
+        Object.defineProperty(actual, "name", {
+          enumerable: true,
+          get: () => {
+            this.nameReads++;
+            return cookie.name;
+          },
+        });
+        return actual;
+      }),
+  };
+  cdp = {
+    send: async () => {
+      throw new Error("unexpected CDP method");
+    },
+  };
+  flush() {}
   dispose() {}
 }
 
