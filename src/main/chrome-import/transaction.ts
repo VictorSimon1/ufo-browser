@@ -86,6 +86,21 @@ const REQUIRED_STORAGE_PATHS = [
   "QuotaManager-journal",
 ] as const;
 const OPTIONAL_SERVICE_WORKER_PATH = "Service Worker";
+const PERSISTED_FAILURE_CODES = new Set([
+  "chrome-import-failed",
+  "chrome-profile-not-found",
+  "chrome-running",
+  "cookie-database-invalid",
+  "cookie-decryption-failed",
+  "cookie-verification-failed",
+  "keychain-canceled",
+  "keychain-failed",
+  "keychain-item-missing",
+  "keychain-unavailable",
+  "partial-import-not-approved",
+  "snapshot-failed",
+  "target-profile-conflict",
+]);
 
 export class ChromeImportTransaction {
   readonly jobRoot: string;
@@ -427,6 +442,8 @@ function isDirectChild(parent: string, child: string) {
 }
 
 function sanitizeFailureCode(code: string) {
-  const sanitized = code.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 80);
-  return sanitized || "import-failed";
+  const normalized = String(code).trim().toLowerCase();
+  return PERSISTED_FAILURE_CODES.has(normalized)
+    ? normalized
+    : "chrome-import-failed";
 }

@@ -100,11 +100,18 @@ test("failed and abandoned import jobs recover without deleting published profil
     });
     await abandoned.snapshot();
     await abandoned.activateStorage();
-    await abandoned.fail("Cookie value must never be persisted", true);
+    await abandoned.fail(
+      "Cookie value authorization=do-not-persist must never be persisted",
+      true,
+    );
     const abandonedManifest = JSON.parse(
       await readFile(join(abandoned.jobRoot, "job.json"), "utf8"),
     );
-    assert.equal(abandonedManifest.failureCode, "cookie-value-must-never-be-persisted");
+    assert.equal(abandonedManifest.failureCode, "chrome-import-failed");
+    assert.doesNotMatch(
+      JSON.stringify(abandonedManifest),
+      /authorization|do-not-persist/i,
+    );
     assert.equal(abandonedManifest.phase, "cleanup-pending");
 
     const published = await ChromeImportTransaction.create({

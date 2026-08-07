@@ -68,6 +68,8 @@ The Safe Storage secret and Cookie values must not appear in logs, command-line 
 
 Failures are exposed as stable codes and counts such as `keychain-canceled`, `cookie-decryption-failed`, or `host-digest-mismatch`, without domain names or values.
 
+Persisted job manifests accept only an explicit allowlist of stable failure codes. Any unknown or dynamically generated error text is reduced to `chrome-import-failed` before `job.json` is written, so exception messages cannot persist Cookie, token, domain, or authorization fragments.
+
 ## Transaction and deletion behavior
 
 The job progresses through:
