@@ -92,13 +92,12 @@ export class ChromeLoginImportService {
     allowPartial: boolean,
     onProgress: (progress: ChromeImportProgress) => void = () => undefined,
   ): Promise<ChromeImportResult> {
-    if ((await this.source.running()).running) {
-      throw new ChromeImportError("chrome-running");
-    }
+    await this.assertSourceStopped();
     const source = (await this.source.discover()).find(
       (profile) => profile.profileDirName === profileDirName,
     );
     if (!source) throw new ChromeImportError("chrome-profile-not-found");
+    await this.assertSourceStopped();
 
     let transaction: ChromeImportTransaction | undefined;
     let target: CookieWriteTarget | undefined;
@@ -132,6 +131,7 @@ export class ChromeLoginImportService {
           }),
       });
       const snapshot = await transaction.snapshot();
+      await this.assertSourceStopped();
       await transaction.activateStorage();
 
       reportProgress({ phase: "importing-cookies", completed: 1, total: 4 });
@@ -217,6 +217,12 @@ export class ChromeLoginImportService {
       await transaction?.fail(importErrorCode(error), targetCreated);
       if (error instanceof ChromeImportError) throw error;
       throw new ChromeImportError(importErrorCode(error));
+    }
+  }
+
+  private async assertSourceStopped() {
+    if ((await this.source.running()).running) {
+      throw new ChromeImportError("chrome-running");
     }
   }
 }

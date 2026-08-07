@@ -20,6 +20,7 @@ import {
   ChromeLoginImportService,
 } from "../main/chrome-import/service.js";
 import type { CookieWriteTarget } from "../main/chrome-import/cookie-writer.js";
+import type { BrowserLoginSourceAdapter } from "../main/chrome-import/discovery.js";
 
 test("Chrome import service commits verified Cookies and storage through a mock Keychain", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
@@ -117,6 +118,64 @@ test("Chrome import refuses a running source before touching Keychain", async ()
       (error: ChromeImportError) => error.code === "chrome-running",
     );
     assert.deepEqual(keychain.requests, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Chrome import discards a snapshot if Chrome starts while it is copied", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  const userDataPath = join(root, "UFO");
+  try {
+    await mkdir(join(profilePath, "Local Storage"), { recursive: true });
+    await writeFile(join(profilePath, "Local Storage", "state"), "changing");
+    let runningChecks = 0;
+    let createdTargets = 0;
+    const sourceAdapter: BrowserLoginSourceAdapter = {
+      browser: "chrome",
+      browserName: "Google Chrome",
+      discover: async () => [
+        {
+          browser: "chrome",
+          browserName: "Google Chrome",
+          browserVersion: "151.0.0.0",
+          userDataPath: chromeRoot,
+          profilePath,
+          profileDirName: "Default",
+          displayName: "Personal",
+          isDefault: true,
+          isLastUsed: true,
+          approximateImportBytes: 8,
+        },
+      ],
+      running: async () => ({ running: ++runningChecks >= 3 }),
+      quit: async () => ({ done: true }),
+    };
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain: new MockKeychainProvider("must-not-run"),
+      targetChromiumVersion: "150.0.0.0",
+      sourceAdapter,
+      createTarget: async () => {
+        createdTargets++;
+        return new FakeCookieTarget();
+      },
+    });
+
+    await assert.rejects(
+      service.importProfile("Default", true, true),
+      (error: ChromeImportError) => error.code === "chrome-running",
+    );
+    assert.equal(runningChecks, 3);
+    assert.equal(createdTargets, 0);
+    assert.equal(registry.listPublic().length, 1);
+    assert.equal(registry.getDefault().id, "default");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
