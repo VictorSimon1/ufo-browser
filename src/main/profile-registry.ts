@@ -83,6 +83,10 @@ export class BrowserProfileRegistry {
     return this.getOrThrow(this.state.defaultProfileId);
   }
 
+  partitionIds() {
+    return new Set(this.state.profiles.map((profile) => profile.partitionId));
+  }
+
   getOrThrow(profileId: string): BrowserProfileRecord {
     const normalized = profileId === "Default" ? DEFAULT_PROFILE_ID : profileId;
     const profile = this.state.profiles.find((candidate) => candidate.id === normalized);

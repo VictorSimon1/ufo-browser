@@ -15,6 +15,7 @@ import { SnapshotService } from "./main/snapshot.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
 import { BrowserProfileRegistry } from "./main/profile-registry.js";
+import { recoverChromeImportJobs } from "./main/chrome-import/transaction.js";
 import { ClaudeSessionManager } from "./main/claude-chat/manager.js";
 import { visibleSpaceIds } from "./main/preview-visibility.js";
 import { BROWSER_CHROME_HEIGHT } from "./main/shell-page-bounds.js";
@@ -149,13 +150,19 @@ async function start() {
   traceStart("shell-created");
 
   const userDataPath = app.getPath("userData");
+  const partitionsRoot = join(userDataPath, "Partitions");
   const store = new BrowserStateStore(join(userDataPath, "browser-state.json"));
   const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
   await profiles.initialize();
+  await recoverChromeImportJobs(
+    join(userDataPath, "Chrome Import", "jobs"),
+    partitionsRoot,
+    profiles.partitionIds(),
+  );
   const manager = new TaskSpaceManager({
     store,
     profiles,
-    partitionsRoot: join(userDataPath, "Partitions"),
+    partitionsRoot,
     pagePreload,
     newTabFile: renderer("newtab.html"),
     captureWindow,
