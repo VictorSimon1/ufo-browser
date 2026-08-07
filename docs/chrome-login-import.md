@@ -52,6 +52,8 @@ The Profile Registry is `profiles.json`. Each imported Profile owns a generated 
 
 The selection screen shows the Chrome directory, last-used date, and estimated import size. It also requires an explicit checkbox decision about whether UFO-Browser may publish a partial Profile when a small subset cannot be migrated safely. This consent is off by default, so a partial Profile is never published unless the user actively opts in.
 
+Before import, the UI states that processing stays on the current Mac, that passwords, credit cards, history, and Google Sync state are excluded, and that Passkey-, device-bound-, or client-certificate-based sites may require a fresh login. A successful result therefore describes most sites as reusable instead of promising universal login continuity.
+
 During snapshotting, the UI advances across the fixed allowlisted datasets (Cookies, Local Storage, IndexedDB, WebStorage, File System/OPFS, storage/quota metadata, and compatible Service Worker data). Progress events contain only these stable dataset labels and numeric counters; they never expose source paths, origins, domains, or stored values, and a failed progress observer cannot abort the transaction.
 
 ## Source consistency and file safety

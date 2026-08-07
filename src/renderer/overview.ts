@@ -657,7 +657,7 @@ function renderChromeProfiles(discovery: any) {
   const scopeNote = document.createElement("p");
   scopeNote.className = "import-scope-note";
   scopeNote.textContent =
-    "仅复制网站登录状态；Chrome 临时会话 Cookie 将保留 30 天。不会导入密码、浏览记录或 Google 同步账号。";
+    "仅在这台 Mac 复制网站登录状态；Chrome 临时会话 Cookie 将保留 30 天。不会导入密码、信用卡、浏览记录或 Google 同步账号。Passkey、设备绑定或客户端证书网站可能需要重新登录。";
 
   const defaultChoice = document.createElement("label");
   defaultChoice.className = "default-profile-choice";
@@ -797,7 +797,9 @@ function renderImportResult(result: any) {
     </div>
   `;
   profileDialogContent.querySelector(".import-result-view > strong")!.textContent =
-    result?.status === "partial" ? "部分网站可能需要重新登录" : "新 Space 可以直接使用这份登录状态";
+    result?.status === "partial"
+      ? "部分网站可能需要重新登录"
+      : "大多数网站可在新 Space 使用这份登录状态";
   const warningLabels = [
     ...(Array.isArray(result?.cookies?.warningCodes)
       ? result.cookies.warningCodes

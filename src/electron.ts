@@ -2039,8 +2039,10 @@ async function runChromeImportUiAudit(context: {
     discovery.profiles[0].name === "Fixture Personal" &&
     discovery.profiles[0].selected === true &&
     discovery.profiles[0].detail.includes("最近使用") &&
+    discovery.scope.includes("仅在这台 Mac 复制") &&
     discovery.scope.includes("临时会话 Cookie 将保留 30 天") &&
-    discovery.scope.includes("不会导入密码、浏览记录或 Google 同步账号") &&
+    discovery.scope.includes("不会导入密码、信用卡、浏览记录或 Google 同步账号") &&
+    discovery.scope.includes("Passkey、设备绑定或客户端证书网站可能需要重新登录") &&
     discovery.partialAllowed === false &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
