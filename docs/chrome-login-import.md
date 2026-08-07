@@ -95,6 +95,7 @@ discovered → snapshotting → preparing-profile → importing-storage
 
 Failure states are `failed`, `partial`, or `cleanup-pending`.
 
+- Only one import job may run in the service at a time. A duplicate submission is rejected before discovery, snapshotting, or Keychain authorization, and the guard is released on every success or failure path.
 - The old default Profile and all existing Spaces are never overwritten.
 - A Profile is added to `profiles.json` only after verification. A partial result is published only when the user explicitly allowed partial import on the confirmation screen.
 - If the generated target partition path already exists, the transaction aborts and removes only its own staging job; the pre-existing partition is never treated as rollback-owned data.

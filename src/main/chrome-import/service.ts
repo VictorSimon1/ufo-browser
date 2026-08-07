@@ -62,6 +62,7 @@ export type ChromeLoginImportServiceOptions = {
 
 export class ChromeLoginImportService {
   private readonly source: BrowserLoginSourceAdapter;
+  private importInFlight = false;
 
   constructor(private readonly options: ChromeLoginImportServiceOptions) {
     this.source =
@@ -100,6 +101,10 @@ export class ChromeLoginImportService {
     allowPartial: boolean,
     onProgress: (progress: ChromeImportProgress) => void = () => undefined,
   ): Promise<ChromeImportResult> {
+    if (this.importInFlight) {
+      throw new ChromeImportError("chrome-import-in-progress");
+    }
+    this.importInFlight = true;
     let transaction: ChromeImportTransaction | undefined;
     let target: CookieWriteTarget | undefined;
     let targetCreated = false;
@@ -226,6 +231,8 @@ export class ChromeLoginImportService {
       );
       if (error instanceof ChromeImportError) throw error;
       throw new ChromeImportError(importErrorCode(error));
+    } finally {
+      this.importInFlight = false;
     }
   }
 

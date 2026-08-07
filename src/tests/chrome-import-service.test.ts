@@ -249,6 +249,55 @@ test("Chrome source failures cross IPC boundaries only as stable error codes", a
   }
 });
 
+test("Chrome import service rejects concurrent jobs before starting another preflight", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const userDataPath = join(root, "UFO");
+  try {
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    let releaseRunningCheck: ((state: { running: boolean }) => void) | undefined;
+    let runningChecks = 0;
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain: new MockKeychainProvider("must-not-run"),
+      targetChromiumVersion: "150.0.0.0",
+      sourceAdapter: {
+        browser: "chrome",
+        browserName: "Google Chrome",
+        discover: async () => [],
+        running: () => {
+          runningChecks++;
+          return new Promise((resolve) => {
+            releaseRunningCheck = resolve;
+          });
+        },
+        quit: async () => ({ done: true }),
+      },
+      createTarget: async () => new FakeCookieTarget(),
+    });
+
+    const firstResult = service
+      .importProfile("Default", true, true)
+      .catch((error) => error as ChromeImportError);
+    while (!releaseRunningCheck) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    await assert.rejects(
+      service.importProfile("Default", true, true),
+      (error: ChromeImportError) => error.code === "chrome-import-in-progress",
+    );
+    assert.equal(runningChecks, 1);
+    releaseRunningCheck({ running: false });
+    const firstError = await firstResult;
+    assert.ok(firstError instanceof ChromeImportError);
+    assert.equal(firstError.code, "chrome-profile-not-found");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Chrome import does not publish a Profile when every encrypted Cookie fails", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
   const chromeRoot = join(root, "Chrome");
