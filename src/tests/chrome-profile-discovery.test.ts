@@ -13,6 +13,7 @@ import {
   chromeTimeToUnixMilliseconds,
   detectChromeRunning,
   discoverChromeProfiles,
+  estimateChromeImportBytes,
 } from "../main/chrome-import/discovery.js";
 
 test("Chrome discovery returns only safe Local State profiles and sanitized metadata", async () => {
@@ -119,4 +120,38 @@ test("Chrome timestamps convert from the 1601 microsecond epoch", () => {
     1_000,
   );
   assert.equal(chromeTimeToUnixMilliseconds("invalid"), undefined);
+});
+
+test("Chrome import size estimation is bounded and prefers Network Cookies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-chrome-discovery-"));
+  const profilePath = join(root, "Default");
+  try {
+    await mkdir(join(profilePath, "Network"), { recursive: true });
+    await mkdir(join(profilePath, "Local Storage"), { recursive: true });
+    await writeFile(join(profilePath, "Cookies"), Buffer.alloc(100));
+    await writeFile(join(profilePath, "Network", "Cookies"), Buffer.alloc(40));
+    await Promise.all(
+      Array.from({ length: 100 }, (_, index) =>
+        writeFile(
+          join(profilePath, "Local Storage", `entry-${index}`),
+          Buffer.alloc(10),
+        ),
+      ),
+    );
+
+    const complete = await estimateChromeImportBytes(profilePath, {
+      budgetMs: 10_000,
+      maxEntries: 1_000,
+    });
+    assert.equal(complete, 1_040);
+
+    const bounded = await estimateChromeImportBytes(profilePath, {
+      budgetMs: 10_000,
+      maxEntries: 24,
+    });
+    assert.ok(bounded >= 40);
+    assert.ok(bounded < complete);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

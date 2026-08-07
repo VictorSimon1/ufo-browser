@@ -2,8 +2,8 @@ import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import {
   lstat,
+  opendir,
   readFile,
-  readdir,
   readlink,
   realpath,
 } from "node:fs/promises";
@@ -12,16 +12,19 @@ import { basename, join, relative, resolve, sep } from "node:path";
 export const CHROME_PROFILE_DIRECTORY_PATTERN = /^(Default|Profile [1-9][0-9]*)$/;
 
 const CHROME_EPOCH_OFFSET_MICROSECONDS = 11_644_473_600_000_000n;
-const IMPORT_SIZE_PATHS = [
-  "Cookies",
-  join("Network", "Cookies"),
+const IMPORT_STORAGE_SIZE_PATHS = [
   "Local Storage",
   "IndexedDB",
   "WebStorage",
   "File System",
   "Storage",
+  "QuotaManager",
+  "QuotaManager-journal",
   "Service Worker",
 ] as const;
+const DISCOVERY_SIZE_BUDGET_MS = 350;
+const DISCOVERY_SIZE_ENTRY_LIMIT = 20_000;
+const DISCOVERY_SIZE_BATCH_SIZE = 32;
 
 export type ChromeRunningState = {
   running: boolean;
@@ -94,6 +97,7 @@ export async function discoverChromeProfiles(
         : undefined;
   const browserVersion = await readBrowserVersion(userDataRealPath);
   const profiles: DiscoveredChromeProfile[] = [];
+  const sizeDeadline = Date.now() + DISCOVERY_SIZE_BUDGET_MS;
 
   for (const profileDirName of Object.keys(infoCache).sort(profileDirectoryOrder)) {
     if (!CHROME_PROFILE_DIRECTORY_PATTERN.test(profileDirName)) continue;
@@ -126,7 +130,10 @@ export async function discoverChromeProfiles(
       isDefault: profileDirName === "Default",
       isLastUsed: profileDirName === lastUsed,
       activeAt: chromeTimeToUnixMilliseconds(info?.active_time),
-      approximateImportBytes: await approximateImportSize(profileRealPath),
+      approximateImportBytes: await estimateChromeImportBytes(
+        profileRealPath,
+        { deadline: sizeDeadline },
+      ),
     });
   }
   return profiles;
@@ -221,31 +228,99 @@ async function readBrowserVersion(userDataPath: string) {
   }
 }
 
-async function approximateImportSize(profilePath: string) {
+export async function estimateChromeImportBytes(
+  profilePath: string,
+  options: {
+    budgetMs?: number;
+    deadline?: number;
+    maxEntries?: number;
+    now?: () => number;
+  } = {},
+) {
+  const now = options.now ?? Date.now;
+  const deadline =
+    options.deadline ?? now() + (options.budgetMs ?? DISCOVERY_SIZE_BUDGET_MS);
+  const maxEntries = Math.max(
+    1,
+    Math.floor(options.maxEntries ?? DISCOVERY_SIZE_ENTRY_LIMIT),
+  );
+  const modernCookies = join(profilePath, "Network", "Cookies");
+  const legacyCookies = join(profilePath, "Cookies");
+  const cookiePath = await firstSafeSizePath([
+    modernCookies,
+    legacyCookies,
+  ]);
+  const pending = [
+    ...(cookiePath ? [cookiePath] : []),
+    ...IMPORT_STORAGE_SIZE_PATHS.map((relativePath) =>
+      join(profilePath, relativePath),
+    ),
+  ];
+  let inspected = 0;
   let total = 0;
-  for (const relativePath of IMPORT_SIZE_PATHS) {
-    total += await safeTreeSize(join(profilePath, relativePath));
+
+  while (pending.length > 0 && inspected < maxEntries && now() < deadline) {
+    const batch = pending.splice(
+      0,
+      Math.min(
+        DISCOVERY_SIZE_BATCH_SIZE,
+        maxEntries - inspected,
+      ),
+    );
+    const nodes = await Promise.all(
+      batch.map(async (path) => {
+        try {
+          const info = await lstat(path);
+          if (info.isSymbolicLink()) return undefined;
+          return { path, info };
+        } catch (error: any) {
+          if (isSkippableSizeError(error)) return undefined;
+          throw error;
+        }
+      }),
+    );
+    inspected += batch.length;
+    for (const node of nodes) {
+      if (!node) continue;
+      if (node.info.isFile()) {
+        total += node.info.size;
+        continue;
+      }
+      if (!node.info.isDirectory() || now() >= deadline) continue;
+      try {
+        const directory = await opendir(node.path, {
+          bufferSize: DISCOVERY_SIZE_BATCH_SIZE,
+        });
+        for await (const entry of directory) {
+          if (now() >= deadline || inspected + pending.length >= maxEntries) {
+            break;
+          }
+          if (!entry.isSymbolicLink()) {
+            pending.push(join(node.path, entry.name));
+          }
+        }
+      } catch (error: any) {
+        if (!isSkippableSizeError(error)) throw error;
+      }
+    }
   }
   return total;
 }
 
-async function safeTreeSize(path: string): Promise<number> {
-  let info;
-  try {
-    info = await lstat(path);
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return 0;
-    throw error;
+async function firstSafeSizePath(paths: readonly string[]) {
+  for (const path of paths) {
+    try {
+      const info = await lstat(path);
+      if (!info.isSymbolicLink() && info.isFile()) return path;
+    } catch (error: any) {
+      if (!isSkippableSizeError(error)) throw error;
+    }
   }
-  if (info.isSymbolicLink()) return 0;
-  if (info.isFile()) return info.size;
-  if (!info.isDirectory()) return 0;
-  let total = 0;
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue;
-    total += await safeTreeSize(join(path, entry.name));
-  }
-  return total;
+  return undefined;
+}
+
+function isSkippableSizeError(error: any) {
+  return error?.code === "ENOENT" || error?.code === "EACCES" || error?.code === "EPERM";
 }
 
 function isDirectChild(parent: string, child: string) {
