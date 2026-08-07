@@ -15,6 +15,7 @@ import {
   inspectChromeStorageSnapshot,
   preflightChromeStorageSnapshot,
 } from "../main/chrome-import/storage-preflight.js";
+import { createChromeStoragePreflightWorker } from "../main/chrome-import/storage-preflight-worker.js";
 
 test("Chrome storage preflight discovers origins without exposing stored values", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-storage-preflight-"));
@@ -113,6 +114,66 @@ test("IndexedDB directory identifiers map only safe HTTP origins", () => {
     indexedDbDirectoryOrigin("chrome-extension_secret_0.indexeddb.leveldb"),
     undefined,
   );
+});
+
+test("static Chrome storage inspection stays off the main event loop", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-storage-worker-"));
+  const partitionsRoot = join(root, "Partitions");
+  const partitionId = "x-browser-profile-worker-fixture";
+  const localStorage = join(
+    partitionsRoot,
+    partitionId,
+    "Local Storage",
+    "leveldb",
+  );
+  try {
+    await createLevelDb(localStorage, "placeholder");
+    const largeLog = Buffer.alloc(16 * 1024 * 1024);
+    largeLog.write("META:https://worker.example\0private-value", 0, "latin1");
+    await writeFile(join(localStorage, "000003.log"), largeLog);
+    largeLog.fill(0);
+    const preflight = createChromeStoragePreflightWorker(
+      join(process.cwd(), "dist", "main", "chrome-storage-preflight-worker.js"),
+      partitionsRoot,
+    );
+    let eventLoopTicks = 0;
+    const timer = setInterval(() => eventLoopTicks++, 1);
+    const result = await preflight("profile", partitionId, ["Local Storage"]);
+    clearInterval(timer);
+
+    assert.deepEqual(result.failed, []);
+    assert.deepEqual(result.warningCodes, []);
+    assert.deepEqual(result.origins.localStorage, [
+      "https://worker.example",
+    ]);
+    assert.ok(
+      eventLoopTicks >= 1,
+      `event loop did not advance during storage preflight (${eventLoopTicks})`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("storage preflight Worker failures expose only a stable code", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-storage-worker-"));
+  try {
+    const missingWorkerPath = join(root, "private-worker-path.js");
+    const preflight = createChromeStoragePreflightWorker(
+      missingWorkerPath,
+      join(root, "Partitions"),
+    );
+    await assert.rejects(
+      preflight("profile", "partition", ["Local Storage"]),
+      (error: Error) => {
+        assert.equal(error.message, "storage-preflight-worker-failed");
+        assert.equal(String(error).includes(missingWorkerPath), false);
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 async function createLevelDb(path: string, logContents: string) {

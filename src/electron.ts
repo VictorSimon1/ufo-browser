@@ -22,7 +22,7 @@ import {
 import { recoverChromeImportJobs } from "./main/chrome-import/transaction.js";
 import { ChromeLoginImportService } from "./main/chrome-import/service.js";
 import { createElectronCookieWriteTarget } from "./main/chrome-import/electron-target.js";
-import { preflightChromeStorageSnapshot } from "./main/chrome-import/storage-preflight.js";
+import { createChromeStoragePreflightWorker } from "./main/chrome-import/storage-preflight-worker.js";
 import { readChromeCookies } from "./main/chrome-import/cookies.js";
 import { createChromeCookieWorkerReader } from "./main/chrome-import/worker-reader.js";
 import {
@@ -212,17 +212,17 @@ async function start() {
       isTestApp && process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
         ? process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
         : undefined,
-    preflightStorage: (_profileId, partitionId, copiedStorage) =>
-      preflightChromeStorageSnapshot(
-        join(partitionsRoot, partitionId),
-        copiedStorage,
-      ),
-    createTarget: (profileId, partitionId, copiedStorage) =>
+    preflightStorage: createChromeStoragePreflightWorker(
+      join(projectRoot, "dist", "main", "chrome-storage-preflight-worker.js"),
+      partitionsRoot,
+    ),
+    createTarget: (profileId, partitionId, copiedStorage, staticPreflight) =>
       createElectronCookieWriteTarget({
         partitionsRoot,
         profileId,
         partitionId,
         copiedStorage,
+        staticPreflight,
       }),
   });
   const manager = new TaskSpaceManager({

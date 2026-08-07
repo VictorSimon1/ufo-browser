@@ -35,6 +35,16 @@ await build({
 
 await build({
   ...shared,
+  entryPoints: [
+    "src/main/chrome-import/storage-preflight-worker-entry.ts",
+  ],
+  outfile: "dist/main/chrome-storage-preflight-worker.js",
+  platform: "node",
+  format: "esm",
+});
+
+await build({
+  ...shared,
   entryPoints: {
     shell: "src/preload/shell.ts",
     page: "src/preload/page.ts",

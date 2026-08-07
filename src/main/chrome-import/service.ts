@@ -65,6 +65,7 @@ export type ChromeLoginImportServiceOptions = {
     profileId: string,
     partitionId: string,
     copiedStorage: readonly string[],
+    staticPreflight?: StoragePreflightResult,
   ) => Promise<CookieWriteTarget>;
   readCookies?: (databasePath: string) => Promise<ChromeCookieReadResult>;
   sourceAdapter?: BrowserLoginSourceAdapter;
@@ -117,6 +118,7 @@ export class ChromeLoginImportService {
     this.importInFlight = true;
     let transaction: ChromeImportTransaction | undefined;
     let target: CookieWriteTarget | undefined;
+    let staticPreflight: StoragePreflightResult | undefined;
     let targetCreated = false;
     const reportProgress = (progress: ChromeImportProgress) => {
       try {
@@ -163,12 +165,13 @@ export class ChromeLoginImportService {
         detailCode: "compatibility",
       });
       if (this.options.preflightStorage) {
+        staticPreflight = await this.options.preflightStorage(
+          snapshot.target.profileId,
+          snapshot.target.partitionId,
+          snapshot.storage.copied,
+        );
         snapshot = await transaction.applyStoragePreflight(
-          await this.options.preflightStorage(
-            snapshot.target.profileId,
-            snapshot.target.partitionId,
-            snapshot.storage.copied,
-          ),
+          staticPreflight,
         );
       }
       if (knownPartial(snapshot) && !allowPartial) {
@@ -201,6 +204,7 @@ export class ChromeLoginImportService {
         snapshot.target.profileId,
         snapshot.target.partitionId,
         snapshot.storage.copied,
+        staticPreflight,
       );
       targetCreated = true;
       if (target.preflightStorage) {

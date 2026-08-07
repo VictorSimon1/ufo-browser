@@ -7,7 +7,6 @@ import {
 import type { CookieWriteTarget } from "./cookie-writer.js";
 import {
   CHROME_STORAGE_PATHS,
-  inspectChromeStorageSnapshot,
   removeFailedStoragePaths,
   type ChromeStorageInspection,
   type ChromeStoragePath,
@@ -25,24 +24,16 @@ export async function createElectronCookieWriteTarget(options: {
   profileId: string;
   partitionId: string;
   copiedStorage?: readonly string[];
+  staticPreflight?: StoragePreflightResult;
 }): Promise<CookieWriteTarget> {
   const copiedStorage = [...(options.copiedStorage ?? [])].filter(
     (value): value is ChromeStoragePath => STORAGE_PATH_SET.has(value),
   );
   const partitionPath = join(options.partitionsRoot, options.partitionId);
-  let inspection: ChromeStorageInspection;
-  try {
-    inspection = await inspectChromeStorageSnapshot(
-      partitionPath,
-      copiedStorage,
-    );
-  } catch {
-    inspection = {
-      failed: copiedStorage,
-      warningCodes: ["origin-storage-preflight-failed"],
-      origins: { localStorage: [], indexedDb: [], quota: [] },
-    };
-  }
+  const inspection = chromeStorageInspection(
+    options.staticPreflight,
+    copiedStorage,
+  );
   await removeFailedStoragePaths(partitionPath, inspection.failed);
   await ensureChromiumProfilePreferences(
     options.partitionsRoot,
@@ -92,6 +83,41 @@ export async function createElectronCookieWriteTarget(options: {
       }
       view.webContents.close();
     },
+  };
+}
+
+function chromeStorageInspection(
+  result: StoragePreflightResult | undefined,
+  copiedStorage: readonly ChromeStoragePath[],
+): ChromeStorageInspection {
+  const origins = (result as ChromeStorageInspection | undefined)?.origins;
+  if (
+    origins &&
+    Array.isArray(origins.localStorage) &&
+    Array.isArray(origins.indexedDb) &&
+    Array.isArray(origins.quota)
+  ) {
+    return {
+      failed: result?.failed ?? [],
+      warningCodes: result?.warningCodes ?? [],
+      origins: {
+        localStorage: origins.localStorage.filter(
+          (origin): origin is string => typeof origin === "string",
+        ),
+        indexedDb: origins.indexedDb.filter(
+          (origin): origin is string => typeof origin === "string",
+        ),
+        quota: origins.quota.filter(
+          (origin): origin is string => typeof origin === "string",
+        ),
+      },
+    };
+  }
+  return {
+    failed: [...copiedStorage],
+    warningCodes:
+      copiedStorage.length > 0 ? ["origin-storage-preflight-failed"] : [],
+    origins: { localStorage: [], indexedDb: [], quota: [] },
   };
 }
 

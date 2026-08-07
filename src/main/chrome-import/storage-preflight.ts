@@ -147,15 +147,26 @@ export async function preflightChromeStorageSnapshot(
   partitionPath: string,
   copiedStorage: readonly string[],
 ): Promise<StoragePreflightResult> {
+  const inspection = await inspectAndPruneChromeStorageSnapshot(
+    partitionPath,
+    copiedStorage,
+  );
+  return {
+    failed: inspection.failed,
+    warningCodes: inspection.warningCodes,
+  };
+}
+
+export async function inspectAndPruneChromeStorageSnapshot(
+  partitionPath: string,
+  copiedStorage: readonly string[],
+): Promise<ChromeStorageInspection> {
   const inspection = await inspectChromeStorageSnapshot(
     partitionPath,
     copiedStorage,
   );
   await removeFailedStoragePaths(partitionPath, inspection.failed);
-  return {
-    failed: inspection.failed,
-    warningCodes: inspection.warningCodes,
-  };
+  return inspection;
 }
 
 export function indexedDbDirectoryOrigin(name: string) {
