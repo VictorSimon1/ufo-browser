@@ -16,6 +16,7 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **Real Chromium input** — clicks, typing, wheel events, drag operations, screenshots, and OOPIF interaction flow through Chromium's DevTools Protocol.
 - **Human/Agent control isolation** — an App-level control layer blocks human input while an Agent is active without being injected into the website DOM or appearing in page screenshots.
 - **Reusable login state** — Agents can work with the browser's existing authenticated session while remaining separated from the user's current page flow.
+- **One-click Chrome login import** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile without modifying Chrome.
 - **No visible automation cursor** — Agent input never moves the macOS pointer and does not rely on OS-level keyboard or mouse automation.
 - **Bounded background rendering** — hidden Agent pages use a shared compositor surface only when required, then park again to reduce GPU usage.
 - **Live Overview** — persistent 3:2 Space previews update with page activity while using adaptive capture cadence and caching.
@@ -132,6 +133,9 @@ npm run verify:agent-focus-isolation
 npm run verify:helper-parity
 npm run verify:fingerprint
 npm run verify:janitor
+npm run verify:chrome-import
+npm run verify:chrome-import-restart
+npm run verify:chrome-import-rollback
 ```
 
 These suites cover Task Space leases, macOS foreground/cursor isolation, native input isolation, tab lifecycle, OOPIF routing, semantic snapshots, helper parity, Chromium fingerprint behavior, live page previews, GPU parking, and JanitorAI Turnstile completion. See [docs/agent-focus-isolation.md](docs/agent-focus-isolation.md) for the system-level focus contract and the review of `.x-browser-test/update.md`.
@@ -162,6 +166,15 @@ See [docs/macos-build.md](docs/macos-build.md) for target directories, ownership
 - Renderer access is exposed through context-isolated preload allowlists.
 - UFO-Browser does not enable Electron remote debugging or expose a general-purpose browser endpoint.
 - User takeover is a hard stop: Agent commands cannot silently reclaim a user-controlled Space.
+- Chrome login import is an explicit local transaction. It does not import passwords, payment data, history, bookmarks, extensions, Chrome Sync state, or device-bound credentials.
+
+## Chrome login-state import
+
+Open Profile management in Overview and choose **从 Chrome 导入登录状态**. UFO-Browser discovers Chrome Stable `Default` and `Profile N` entries, asks before requesting a normal Chrome quit, then publishes the result as a separate UFO Profile only after Cookie verification succeeds.
+
+Chrome session Cookies are converted to a 30-day expiry so they survive UFO-Browser restarts. The import is a one-time snapshot: automatic periodic synchronization is disabled, and signing out inside UFO-Browser does not resurrect an older Chrome Cookie. Some Passkey, device-bound, client-certificate, or risk-controlled sites may still require a new login.
+
+The automated suite uses an isolated Chrome fixture and Mock Keychain only. A final manual acceptance against the real macOS `Chrome Safe Storage` item is intentionally deferred until the user can approve the native password or Touch ID prompt. See [docs/chrome-login-import.md](docs/chrome-login-import.md) for the implementation and security contract.
 
 ## Project status
 
@@ -174,8 +187,7 @@ The current milestone focuses on the pure browser experience and Agent runtime:
 - OOPIF and Turnstile behavior
 - Fingerprint and helper parity regression gates
 - Bounded GPU and background compositor usage
-
-Chrome Profile/Cookie import is intentionally deferred. It will be implemented later as an explicit, one-time encrypted import flow rather than implicit access to another browser's profile.
+- Transactional Chrome login-state import with isolated Profiles, CHIPS support, Worker-based Cookie parsing, rollback, and restart persistence
 
 ## Ego compatibility
 

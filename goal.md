@@ -84,10 +84,9 @@ flowchart LR
 ```
 单实例锁
   → 确定 userData、同步受管能力
-  → 在任何 session.fromPartition 前应用待完成的 Profile 切换
+  → 初始化 Profile Registry，并在任何相关 session.fromPartition 前清理待删除 partition、恢复未完成导入 job
   → 创建隐藏 BrowserWindow 和三个持久 shell
   → 初始化 Store、TaskSpaceManager、Profile Session 与浏览器服务
-  → 完成待处理的浏览资料/Cookie 导入
   → 创建 Broker、Snapshot、Presentation、AgentServer、ClaudeSessionManager
   → 加载 shell 并提交初始 Overview
   → 最后监听 Unix socket
@@ -292,16 +291,17 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 ### 7.1 Chrome Profile 导入
 
 ```
-检测 Profile
-  → 复制到受保护 staging
-  → Keychain 解密 Cookie，并立即用 UFO-Browser safeStorage 重加密
-  → 下次启动、session.fromPartition 前原子激活
-  → 普通 Cookie / CHIPS 分别写入
-  → 按 domain + name + path + value + partition key 精确验证
-  → 保留导入前备份和回滚
+检测 Chrome Stable Profile
+  → 用户确认后请求 Chrome 正常退出
+  → allowlist 复制到受保护 staging
+  → 激活到全新 UFO partition
+  → Worker 请求 Keychain 并解析/解密 Cookie
+  → Electron API 写普通 Cookie，同 partition CDP 写 CHIPS
+  → flush 后按 Cookie 属性逐项验证
+  → 原子发布 Profile Registry；失败冷启动清理
 ```
 
-核心契约：不修改源 Chrome；导入是独立快照，不持续同步；session Cookie 按文档转为可跨重启的期限；用户登出后不重注入旧快照；当前窗口/Session、标签组、密码和扩展不在当前范围；History 不伪装成实时标签页。
+核心契约：不修改源 Chrome，不覆盖现有 UFO Profile；导入是独立快照，不持续同步；session Cookie 转为导入日起 30 天；用户登出后不重注入旧快照；密码、支付资料、Chrome 账号、历史、书签、扩展、窗口、标签页、Session Storage 与设备绑定凭据不在范围内。完整实现与验收见 `docs/chrome-login-import.md`。
 
 ### 7.2 Chromium/Turnstile 兼容
 
@@ -313,7 +313,7 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 - `navigator.webdriver` 保持 false，不增加自动化启动参数或异常全局。
 - Turnstile 的可信点击必须通过原始 page debugger `Input.*`；DOM 状态不能替代真实人工/Agent 点击回归。
 
-核心入口：`src/main/chrome-import.ts`、`chrome-library-import.ts`、`chromium-compat.ts`、`src/preload/chrome-compat.ts`。
+核心入口：`src/main/chrome-import/`、`src/main/profile-registry.ts`、`src/main/chromium-identity.ts`、`src/electron.ts`。
 
 ## 8. 左侧 Claude 工作台与受管能力
 
@@ -378,7 +378,7 @@ Renderer 只能通过 `src/preload/contracts.ts` 和 `src/preload/bridge.ts` 的
 3. 复现问题并保留可观察证据；优先增加失败回归。
 4. 在状态唯一所有层修改；使用事务、串行队列、generation fence、有界并发和增量 Renderer 更新。
 5. 跑覆盖本问题的最小确定性门禁，再执行 `git diff --check`。
-6. 每个独立问题形成一个 commit；测试通过后推送当前 `codex/*` 分支到项目配置的内部 GitLab。
+6. 每个独立问题形成一个 commit；测试通过后推送当前分支到 `https://github.com/VictorSimon1/x-browser`。
 7. 架构/API 行为变化时，同步对应 docs、Skill、测试和本文。
 
 ### 10.2 完成与发布门禁
@@ -427,7 +427,7 @@ X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/UFO-Browser.app/Contents/Resource
 - `docs/agent-focus-isolation.md`
 - `docs/live-space-previews.md`
 - `docs/claude-chat-sidebar.md`
-- `docs/chrome-profile-import.md`
+- `docs/chrome-login-import.md`
 - `docs/ego-runtime-parity-audit.md`
 - `docs/macos-build.md`
 
@@ -636,18 +636,18 @@ UFO-Browser 不启用 Electron 远程调试或常见自动化启动参数。浏�
 
 页面加载前的隔离 preload 为普通网页补齐 Chromium 的 `window.chrome.loadTimes()`、`chrome.csi()` 和 `chrome.app` 表面，不暴露 Node、Electron IPC 或 Agent API。smoke 测试同时检查 reduced UA、UAData、`window.chrome` shape、`navigator.webdriver === false` 和常见异常自动化全局不存在；Cloudflare demo 另保留一次人工点击回归，因为挑战结果不能由 DOM 状态替代。
 
-## 10. Chrome Profile 继承
+## 10. Chrome 登录态继承
 
-Chrome 导入采用“准备 → 重启前切换 → Chromium 写入 → 精确验证”四阶段：
+Chrome 导入采用“发现 → 一致性快照 → 隔离 partition → Cookie 写入/验证 → Profile 发布”事务：
 
-1. 检测 `Default` / `Profile N`；Chrome 运行时要求用户确认后正常退出。
-2. 从 macOS Keychain 读取 `Chrome Safe Storage`，支持 Cookie DB v24 host digest 与 AES-CBC 解密；明文 Cookie 立即通过 UFO-Browser `safeStorage` 重新加密后写入权限受限的 pending 文件。
-3. Local Storage、IndexedDB、Session Storage、Service Worker、Bookmarks、History 和 Favicons 等优先通过 APFS clone 复制到 staging；下载历史随 History 数据库迁移。
-4. 下一次启动、任何 `session.fromPartition()` 之前，重新解析 staging 中的书签和 SQLite 数据并核对计数，然后原子切换目标 Profile 目录并保留导入前备份。
-5. 普通 Cookie 通过 Electron Cookie API 写入；CHIPS/分区 Cookie 通过同一 Profile 的隐藏 WebContents 与 `Network.setCookie` 写入。
-6. 以 `domain + name + path + value + partition key` 精确验证 Cookie，并分别记录书签、历史、下载历史和 Favicons 的导入及验证计数。
+1. 从 Chrome Stable `Local State` 检测 `Default` / `Profile N`；Chrome 运行时只有用户确认后才请求正常退出。
+2. 复制 Cookies、Local Storage、IndexedDB、WebStorage、File System/OPFS、Storage 与 quota 元数据到权限受限 staging；不复制密码、历史、书签、扩展、窗口、Session Storage、缓存和 Chrome 账号状态。
+3. 从 macOS Keychain 读取 `Chrome Safe Storage`，在 Worker 中使用 `node:sqlite`、PBKDF2/AES-CBC 解密 v10/v11，并校验 Cookie DB v24 host digest；密钥只以内存 transferable 传递并在使用后清零。
+4. 站点存储在任何目标 Session 创建前激活到全新 partition；普通 Cookie 通过 Electron Cookie API 写入，CHIPS 通过同一 partition 的 CDP 写入，随后显式 flush 并逐项验证。
+5. 只有验证通过或明确的 partial 结果才原子发布到 `profiles.json`。失败不会改变旧 Profile/Space；已创建 Session 的废弃 partition 由 job journal 在下次冷启动清理。
+6. 新 Space 默认使用 Profile Registry 的当前默认项，也可在创建时选择；旧 Space 永远保留原 `profileId`。删除已导入 Profile 时先移除注册表记录，再在冷启动清理 partition；被 Space 使用时拒绝删除。
 
-Chrome session Cookie 导入时获得 30 天有效期，使其跨 UFO-Browser 重启保留。导入是一次性复制，站点后续删除 Cookie 或用户退出登录后不会从快照重复注入。当前 Sessions/窗口/标签组、密码与扩展明确不导入；History 最近记录不会被冒充为当前会话。详见 chrome-profile-import.md。
+Chrome session Cookie 导入时获得 30 天有效期。导入是一次性复制，`loginSyncEnabled` 固定为 `false`，用户退出登录后不会从旧快照重复注入。完整范围、安全边界和隔离 E2E 证据见 `docs/chrome-login-import.md`。
 
 ## 11. UI IPC 与安全边界
 
@@ -704,16 +704,16 @@ npm run package:mac
 
 当前包用于本地和内部测试，`identity: null` 表示尚未配置 Developer ID 签名与 notarization。完整命令、目标路径、安全规则、临时包与正式包差异见 `docs/macos-build.md`。
 
-## 13. 当前开发里程碑（2026-08-05）
+## 13. 当前开发里程碑（2026-08-07）
 
-- 当前阶段保持纯浏览器 Presentation，左侧聊天 View 继续保留在运行时但不 attach；Chrome Profile/Cookie 一键导入按用户要求延期，最终打包安装也继续延期。
+- 当前阶段保持纯浏览器 Presentation，左侧聊天 View 继续保留在运行时但不 attach。Chrome Stable 登录态一键导入的 Profile Registry、发现、快照、Keychain helper、Worker 解密、普通 Cookie/CHIPS 写入、站点存储复制、UI、回滚与冷启动恢复已经实现；真实 Chrome/Keychain 手工验收等待用户可输入密码或 Touch ID 时执行。
 - Ego-compatible Skill/helper、Agent Space ownership、JanitorAI Turnstile 与 fingerprint/OOPIF 回归已经建立独立验证路径。
 - Overview 卡片使用真实页面缩略图与一个有界主 screencast；Space 打开后再返回 Overview 时复用同一 WebContents，动态页面继续更新，不以重载或替换 renderer 伪造连续性。
 - Space 卡片右上角使用 macOS 风格省略号菜单，支持鼠标、右键、Shift+F10、F2、Escape 与内联重命名；关闭动作收敛到同一菜单，避免悬浮关闭按钮误触。
 - 所有 E2E 继续使用兼容目录 `.x-browser-test/runs/<suite>` 隔离 userData、PID 与 Unix socket。常驻临时 App 使用 `.x-browser-test` 根目录；测试清理只能终止自己 marker 中的 PID，不能再通过 `pgrep` 关闭用户正在看的预览窗口。
 - 对应回归命令新增 `npm run verify:space-ui`；`verify:preview-startup` 与 `verify:live-preview` 也在隔离实例中运行，后者要求打开/返回前后的 `webContentsId` 保持一致。
 - 新 Space 默认打开本地 `x-browser://newtab/`，物理 `newtab.html` 路径不会进入地址栏或持久状态。`verify:preview-startup` 每轮先清理自己独立的测试 Profile，连续冷启动均在约 2.8 秒采样前得到 ready canvas 与首帧，不再被旧 Google 状态或代理网络掩盖。
-- 当前回归为 38/38 单元测试通过；Space 菜单、冷启动、实时预览往返、fingerprint/OOPIF 和 JanitorAI Turnstile 均通过。常驻临时 App 已更新到本轮构建，纯浏览器 Overview 全宽运行，12 秒 settled 采样中首屏 8 张可见卡片全部 ready、无 preview error。
+- 当前回归为 77/77 单元测试通过；Chrome 导入 success/restart/rollback 使用隔离 fixture 与 Mock Keychain，验证 2 条 Cookie（含 1 条 CHIPS）、Local Storage、IndexedDB、OPFS、WebStorage/File System 标记、默认 Profile、新 Space 选择和失败无泄漏。Space 菜单、冷启动、实时预览往返、fingerprint/OOPIF 和 JanitorAI Turnstile 继续保留独立门禁。
 - UFO-Browser CLI 现在完整暴露 Ego `LEGACY_GLOBAL_HELPERS` 调用表面，包括 `check`、`selectOption`、`textContent`、`waitForURL`、`waitForRequest/Response` 等，不再只覆盖 Skill 常用别名。脚本执行也改为与 Ego 一致的全局 helper 绑定，用户可正常声明 `const screenshot`、`const count` 等同名局部变量；真实表单 helper 审计与 Janitor 回归均已验证。
 - Overview 预览缓存采用 24 项与 8 MiB 双上限 LRU，保护当前可见卡片、正在 Presentation/预留的页面、pending capture 与主 screencast；本地 New Tab 冷捕获使用短提交预算。新增 `npm run verify:restart-scale`：64 个持久 Space 冷启动在 2.8 秒采样前首屏 8 张全部 ready，滚动到 Space 64 时仍保持 renderer ≤ 1、隐藏 surface ≤ 1、业务 capture ≤ 2、冷 capture ≤ 1，缓存严格停在 24 项并发生真实 LRU 淘汰，证明总 Space 数不会线性扩大后台页面与预览内存。
 - Agent 控制态的页面反馈已按 Ego Lite 收敛：只有用户真正进入受控 Space 后才创建点阵保护层，Overview 卡片与后台 Agent 页面不绘制遮罩或运行其动画；前台保护层使用静态高密度点阵、冷色边缘光和仅由 transform/opacity 驱动的低成本流动高光，无全屏模糊。底部只保留一套接近 macOS 原生质感的深色控制胶囊；Agent 的鼠标移动/点击会显示带“正在浏览网页”标签的可见指针反馈，坐标经过页面视口约束，不再从左上角闪入或落到页面外。遮罩宿主始终允许网页命中，只有胶囊按钮自身接收用户点击。
