@@ -134,6 +134,7 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
   } finally {
     socket?.destroy();
     await server.close();
+    await server.close();
     await rm(root, { recursive: true, force: true });
   }
 });

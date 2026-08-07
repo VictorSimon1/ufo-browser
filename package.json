@@ -26,6 +26,7 @@
     "verify:agent-focus-isolation": "npm run build && node scripts/agent-focus-isolation-e2e.mjs",
     "verify:helper-parity": "npm run build && node scripts/helper-parity-e2e.mjs",
     "verify:window-lifecycle": "npm run build && node scripts/window-lifecycle-e2e.mjs",
+    "verify:app-quit": "npm run build && node scripts/app-quit-e2e.mjs",
     "verify:popup-download": "npm run build && node scripts/popup-download-e2e.mjs",
     "verify:fingerprint": "npm run build && node scripts/fingerprint-parity-e2e.mjs",
     "verify:janitor": "npm run build && node scripts/janitor-turnstile-e2e.mjs",

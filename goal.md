@@ -357,7 +357,7 @@ Renderer 只能通过 `src/preload/contracts.ts` 和 `src/preload/bridge.ts` 的
 
 | 修改目标 | 首先阅读 | 必跑门禁 |
 | --- | --- | --- |
-| 启动、单实例、最小化恢复 | `electron.ts`、`window-visibility.ts`、Presentation | `npm run verify:mac-restore` |
+| 启动、单实例、最小化恢复、退出 | `electron.ts`、`window-visibility.ts`、Presentation | `npm run verify:window-lifecycle`、`npm run verify:app-quit` |
 | 页面 bounds、Chat/Library 布局 | `shell-page-bounds.ts`、`space-viewport.ts`、Browser renderer | `npm run verify:page-layout` |
 | Space/Tab/Profile | `manager.ts`、`task-space.ts`、`state-store.ts` | 相邻 unit tests |
 | 多 Agent/lease/CDP 顺序 | `agent-server.ts`、`space-lease.ts`、`cdp-broker.ts` | `npm run verify:multi-agent` |
@@ -388,6 +388,7 @@ cd /Users/a111/workspace/x-browser
 git diff --check
 npm run typecheck
 npm test
+npm run verify:app-quit
 npm run verify:agent-focus-isolation
 npm run dist:mac
 npm run smoke
@@ -405,7 +406,7 @@ X_BROWSER_REAL_E2E_CLI="$PWD/release/mac-arm64/UFO-Browser.app/Contents/Resource
 - 迭代使用 `npm run test:app` / `test:app:reuse` / `test:app:stop`，隔离 Profile 与 mock Keychain。
 - 测试期保持 `/Applications/UFO-Browser.app` 关闭且不变，只运行一个测试实例。
 - `npm run dist:mac` 只生成临时 staging App；`npm run package:mac:test` 生成临时 DMG/ZIP。两者都不会同步用户级 Agent Skill，也不代表已经安装。
-- `npm run package:mac` 是低频正式内部发包入口：完整门禁通过后，才会原子更新已安装 Claude Code、Codex 等 Agent 的受管 `ufo-browser` Skill，并生成、校验 App、DMG 和 ZIP。
+- `npm run package:mac` 是低频正式内部发包入口：完整门禁通过后，才会原子更新已安装 Claude Code、Codex 等 Agent 的受管 `ufo-browser` Skill，并生成、校验 App、DMG 和 ZIP；打包版还必须连续通过带 `beforeunload` 页面时的正常退出审计。
 - 只有用户在完整验证后的后续消息明确要求替换，才执行 `npm run install:mac:final`。
 - 替换前退出旧进程；替换后再次核对签名、bundle/hash、准确可执行路径与实例数。
 - 永远保留正式 `~/Library/Application Support/UFO-Browser/` 数据、安装脚本回滚副本和稳定本地 designated requirement。

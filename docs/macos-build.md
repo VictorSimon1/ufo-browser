@@ -61,6 +61,7 @@ npm run package:mac
 6. 使用 electron-builder 生成 UFO-Browser App，再由 macOS `ditto` 和 `hdiutil` 生成 ZIP 与 DMG。
 7. 验证 App 内的 `app.asar`、App Icon、Skill、OpenAI Agent manifest、可执行 `ufo-keychain-helper`、`chrome-cookie-worker.js` 及 DMG/ZIP 均存在。
 8. 使用隔离 Chrome fixture 与 Mock Keychain 直接启动打包后的 App，完成一次 Chrome 登录态导入成功 E2E，证明 ASAR Worker、打包路径、Cookie/CHIPS 与站点存储导入在正式 Bundle 结构中可运行。
+9. 连续三次在页面注册 `beforeunload` 的情况下执行原生 `app.quit()`，要求打包 App 均以退出码 0 结束且不出现 macOS `NSAlert` 与窗口销毁重入崩溃。
 
 `npm run release:mac` 是同一正式流程的别名。
 

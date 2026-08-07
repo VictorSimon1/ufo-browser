@@ -182,6 +182,17 @@ async function verifyPackagedChromeImport(appRoot) {
   });
 }
 
+async function verifyPackagedQuit(appRoot) {
+  const executable = join(appRoot, "Contents/MacOS/UFO-Browser");
+  console.log("Running packaged graceful-quit audit with guarded pages");
+  await run(process.execPath, ["scripts/app-quit-e2e.mjs"], {
+    env: {
+      ...process.env,
+      X_BROWSER_TEST_EXECUTABLE: executable,
+    },
+  });
+}
+
 console.log(`UFO-Browser macOS packaging mode: ${mode}`);
 if (mode === "release") {
   await resetReleaseDirectory();
@@ -194,6 +205,7 @@ if (mode === "release") {
   await createArchives(appRoot);
   await verifyArtifacts(appRoot, true);
   await verifyPackagedChromeImport(appRoot);
+  await verifyPackagedQuit(appRoot);
 } else if (mode === "temporary") {
   await run("npm", ["run", "typecheck"]);
   await run("npm", ["run", "build"]);
@@ -202,6 +214,7 @@ if (mode === "release") {
   await createArchives(appRoot);
   await verifyArtifacts(appRoot, true);
   await verifyPackagedChromeImport(appRoot);
+  await verifyPackagedQuit(appRoot);
 } else {
   await run("npm", ["run", "build"]);
   await packageApplication();

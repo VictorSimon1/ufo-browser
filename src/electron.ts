@@ -43,8 +43,21 @@ const isTestApp =
   process.env.UFO_BROWSER_TEST_APP === "1" ||
   process.env.X_BROWSER_TEST_APP === "1";
 let appIsQuitting = false;
-app.on("before-quit", () => {
+let appQuitReady = false;
+let beginAppShutdown: (() => Promise<void>) | undefined;
+app.on("before-quit", (event) => {
   appIsQuitting = true;
+  if (appQuitReady || !beginAppShutdown) return;
+  event.preventDefault();
+  void beginAppShutdown().finally(() => {
+    appQuitReady = true;
+    app.quit();
+  });
+});
+app.on("web-contents-created", (_event, webContents) => {
+  webContents.on("will-prevent-unload", (event) => {
+    if (appIsQuitting) event.preventDefault();
+  });
 });
 const projectRoot = app.getAppPath();
 const testNamespace = String(process.env.X_BROWSER_TEST_NAMESPACE || "")
@@ -528,6 +541,20 @@ async function start() {
   await server.listen();
   traceStart("agent-server-listening");
 
+  if (isTestApp && process.env.X_BROWSER_TEST_APP_QUIT_AUDIT === "1") {
+    setTimeout(() => {
+      void runAppQuitAudit({ testRoot, manager, presentation }).catch(
+        async (error) => {
+          await writeFile(
+            join(testRoot, "app-quit-audit.json"),
+            `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+          ).catch(() => undefined);
+          app.quit();
+        },
+      );
+    }, 350);
+  }
+
   if (isTestApp && process.env.X_BROWSER_TEST_INTERACTION_AUDIT === "1") {
     setTimeout(() => {
       void runBrowserInteractionAudit({
@@ -713,6 +740,19 @@ async function start() {
   };
   app.on("second-instance", revealWindow);
   app.on("activate", revealWindow);
+  let shutdownPromise: Promise<void> | undefined;
+  beginAppShutdown = () => {
+    if (shutdownPromise) return shutdownPromise;
+    manager.setOverviewPreviewActive(false);
+    claude.stop();
+    shutdownPromise = server
+      .close()
+      .catch(() => undefined)
+      .then(() => {
+        if (!captureWindow.isDestroyed()) captureWindow.close();
+      });
+    return shutdownPromise;
+  };
   window.on("close", (event) => {
     if (process.platform !== "darwin" || appIsQuitting) return;
     event.preventDefault();
@@ -725,12 +765,45 @@ async function start() {
   });
   window.on("closed", () => {
     if (testDiagnosticsTimer) clearInterval(testDiagnosticsTimer);
-    captureWindow.close();
-    void server
-      .close()
-      .catch(() => undefined)
-      .finally(() => app.quit());
   });
+}
+
+async function runAppQuitAudit(context: {
+  testRoot: string;
+  manager: TaskSpaceManager;
+  presentation: PresentationCoordinator;
+}) {
+  const { testRoot, manager, presentation } = context;
+  const space = manager.listSpaces()[0];
+  if (!space) throw new Error("quit audit requires a Space");
+  const tab = await manager.createTab(
+    space.id,
+    "data:text/html,<title>Quit%20Guard</title><main>quit%20guard</main>",
+  );
+  await presentation.showSpace(space.id);
+  const view = manager.getView(tab.targetId);
+  if (!view) throw new Error("quit audit page was not created");
+  await view.webContents.executeJavaScript(
+    `window.addEventListener('beforeunload', event => {
+      event.preventDefault();
+      event.returnValue = 'quit guard';
+    }); true`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "app-quit-audit.json"),
+    `${JSON.stringify(
+      {
+        ok: true,
+        armed: true,
+        spaceId: space.id,
+        webContentsId: view.webContents.id,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  setImmediate(() => app.quit());
 }
 
 async function runWindowLifecycleAudit(context: {

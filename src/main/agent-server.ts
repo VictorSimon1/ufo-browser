@@ -19,6 +19,7 @@ type Connection = {
 export class AgentServer {
   private readonly server = createServer((socket) => this.accept(socket));
   private readonly connections = new Map<string, Connection>();
+  private closePromise?: Promise<void>;
 
   constructor(
     readonly socketPath: string,
@@ -45,9 +46,19 @@ export class AgentServer {
   }
 
   async close() {
-    for (const connection of this.connections.values()) connection.socket.end();
-    await new Promise<void>((resolve) => this.server.close(() => resolve()));
-    await unlink(this.socketPath).catch(() => undefined);
+    if (this.closePromise) return this.closePromise;
+    this.closePromise = (async () => {
+      for (const connection of this.connections.values()) {
+        connection.socket.destroy();
+      }
+      if (this.server.listening) {
+        await new Promise<void>((resolve, reject) =>
+          this.server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+      await unlink(this.socketPath).catch(() => undefined);
+    })();
+    return this.closePromise;
   }
 
   private accept(socket: Socket) {
