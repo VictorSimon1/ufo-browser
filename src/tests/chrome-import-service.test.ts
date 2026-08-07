@@ -14,7 +14,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { BrowserProfileRegistry } from "../main/profile-registry.js";
 import { deriveChromeCookieKey } from "../main/chrome-import/cookies.js";
-import { MockKeychainProvider } from "../main/chrome-import/keychain.js";
+import {
+  KeychainError,
+  MockKeychainProvider,
+} from "../main/chrome-import/keychain.js";
 import {
   ChromeImportError,
   ChromeLoginImportService,
@@ -205,6 +208,50 @@ test("Chrome import does not publish a Profile when every encrypted Cookie fails
     assert.equal(registry.listPublic().length, 1);
     assert.equal(registry.getDefault().id, "default");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("canceling Keychain authorization aborts once without publishing a partial Profile", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  const userDataPath = join(root, "UFO");
+  const secret = Buffer.from("fixture-safe-storage");
+  try {
+    await createChromeFixture(chromeRoot, profilePath, secret);
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    let authorizationRequests = 0;
+    let createdTargets = 0;
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain: {
+        readSecret: async () => {
+          authorizationRequests++;
+          throw new KeychainError("keychain-canceled");
+        },
+      },
+      targetChromiumVersion: "150.0.0.0",
+      chromeUserDataPath: chromeRoot,
+      createTarget: async () => {
+        createdTargets++;
+        return new FakeCookieTarget();
+      },
+    });
+
+    await assert.rejects(
+      service.importProfile("Default", true, true),
+      (error: ChromeImportError) => error.code === "keychain-canceled",
+    );
+    assert.equal(authorizationRequests, 1);
+    assert.equal(createdTargets, 0);
+    assert.equal(registry.listPublic().length, 1);
+    assert.equal(registry.getDefault().id, "default");
+  } finally {
+    secret.fill(0);
     await rm(root, { recursive: true, force: true });
   }
 });

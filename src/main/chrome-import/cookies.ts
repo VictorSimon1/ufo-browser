@@ -85,21 +85,25 @@ export async function readChromeCookies(
     const warningCounts = new Map<CookieImportWarningCode, number>();
 
     for (const row of rows) {
+      const encryptedValue = asBuffer(row.encrypted_value);
+      if (encryptedValue.length && !hasSupportedEncryptionPrefix(encryptedValue)) {
+        incrementWarning(warningCounts, "unsupported-encryption");
+        continue;
+      }
+      if (encryptedValue.length && !derivedKey) {
+        safeStorageSecret = await keychain.readSecret(
+          CHROME_SAFE_STORAGE_SERVICE,
+        );
+        derivedKey = deriveChromeCookieKey(safeStorageSecret);
+        safeStorageSecret.fill(0);
+        safeStorageSecret = undefined;
+      }
       try {
-        const encryptedValue = asBuffer(row.encrypted_value);
         let value = String(row.value ?? "");
         if (encryptedValue.length) {
-          if (!derivedKey) {
-            safeStorageSecret = await keychain.readSecret(
-              CHROME_SAFE_STORAGE_SERVICE,
-            );
-            derivedKey = deriveChromeCookieKey(safeStorageSecret);
-            safeStorageSecret.fill(0);
-            safeStorageSecret = undefined;
-          }
           const decrypted = decryptChromeCookieValue(
             encryptedValue,
-            derivedKey,
+            derivedKey!,
             String(row.host_key ?? ""),
             databaseVersion,
           );
@@ -132,6 +136,11 @@ export async function readChromeCookies(
     derivedKey?.fill(0);
     database.close();
   }
+}
+
+function hasSupportedEncryptionPrefix(encryptedValue: Buffer) {
+  const prefix = encryptedValue.subarray(0, 3).toString("ascii");
+  return prefix === "v10" || prefix === "v11";
 }
 
 export function deriveChromeCookieKey(secret: Buffer) {
