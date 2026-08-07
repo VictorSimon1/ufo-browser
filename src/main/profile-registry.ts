@@ -59,7 +59,7 @@ export function isValidPartitionId(value: string) {
 
 export class BrowserProfileRegistry {
   private state: BrowserProfileState = createDefaultProfileState();
-  private writeQueue = Promise.resolve();
+  private mutationQueue = Promise.resolve();
 
   constructor(readonly path: string) {}
 
@@ -70,7 +70,7 @@ export class BrowserProfileRegistry {
     } catch (error: any) {
       if (error?.code !== "ENOENT") throw error;
       this.state = createDefaultProfileState();
-      await this.save();
+      await this.writeAtomically(this.state);
     }
   }
 
@@ -105,44 +105,47 @@ export class BrowserProfileRegistry {
 
   async add(profile: BrowserProfileRecord, makeDefault = false) {
     validateProfileRecord(profile);
-    if (this.state.profiles.some((candidate) => candidate.id === profile.id)) {
-      throw new Error(`browser profile already exists: ${profile.id}`);
-    }
-    if (
-      this.state.profiles.some(
-        (candidate) => candidate.partitionId === profile.partitionId,
-      )
-    ) {
-      throw new Error(`browser partition already exists: ${profile.partitionId}`);
-    }
-    this.state.profiles.push(structuredClone(profile));
-    if (makeDefault) this.state.defaultProfileId = profile.id;
-    await this.save();
-    return this.getOrThrow(profile.id);
+    return this.commitMutation((state) => {
+      if (state.profiles.some((candidate) => candidate.id === profile.id)) {
+        throw new Error(`browser profile already exists: ${profile.id}`);
+      }
+      if (
+        state.profiles.some(
+          (candidate) => candidate.partitionId === profile.partitionId,
+        )
+      ) {
+        throw new Error(`browser partition already exists: ${profile.partitionId}`);
+      }
+      state.profiles.push(structuredClone(profile));
+      if (makeDefault) state.defaultProfileId = profile.id;
+      return structuredClone(profile);
+    });
   }
 
   async setDefault(profileId: string) {
-    const profile = this.getOrThrow(profileId);
-    this.state.defaultProfileId = profile.id;
-    await this.save();
+    await this.commitMutation((state) => {
+      const profile = getProfileFromState(state, profileId);
+      state.defaultProfileId = profile.id;
+    });
   }
 
   async remove(profileId: string) {
-    const profile = this.getOrThrow(profileId);
-    if (profile.kind !== "imported") {
-      throw new Error("local browser profile cannot be removed");
-    }
-    this.state.profiles = this.state.profiles.filter(
-      (candidate) => candidate.id !== profile.id,
-    );
-    if (this.state.defaultProfileId === profile.id) {
-      this.state.defaultProfileId = DEFAULT_PROFILE_ID;
-    }
-    if (!this.state.pendingPartitionCleanup.includes(profile.partitionId)) {
-      this.state.pendingPartitionCleanup.push(profile.partitionId);
-    }
-    await this.save();
-    return structuredClone(profile);
+    return this.commitMutation((state) => {
+      const profile = getProfileFromState(state, profileId);
+      if (profile.kind !== "imported") {
+        throw new Error("local browser profile cannot be removed");
+      }
+      state.profiles = state.profiles.filter(
+        (candidate) => candidate.id !== profile.id,
+      );
+      if (state.defaultProfileId === profile.id) {
+        state.defaultProfileId = DEFAULT_PROFILE_ID;
+      }
+      if (!state.pendingPartitionCleanup.includes(profile.partitionId)) {
+        state.pendingPartitionCleanup.push(profile.partitionId);
+      }
+      return structuredClone(profile);
+    });
   }
 
   pendingPartitionCleanup() {
@@ -151,16 +154,26 @@ export class BrowserProfileRegistry {
 
   async completePartitionCleanup(partitionIds: readonly string[]) {
     const completed = new Set(partitionIds);
-    this.state.pendingPartitionCleanup = this.state.pendingPartitionCleanup.filter(
-      (partitionId) => !completed.has(partitionId),
-    );
-    await this.save();
+    await this.commitMutation((state) => {
+      state.pendingPartitionCleanup = state.pendingPartitionCleanup.filter(
+        (partitionId) => !completed.has(partitionId),
+      );
+    });
   }
 
-  private save(): Promise<void> {
-    const snapshot = structuredClone(this.state);
-    this.writeQueue = this.writeQueue.then(() => this.writeAtomically(snapshot));
-    return this.writeQueue;
+  private commitMutation<T>(mutation: (state: BrowserProfileState) => T) {
+    const operation = this.mutationQueue.then(async () => {
+      const next = structuredClone(this.state);
+      const result = mutation(next);
+      await this.writeAtomically(next);
+      this.state = next;
+      return result;
+    });
+    this.mutationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   private async writeAtomically(state: BrowserProfileState) {
@@ -172,6 +185,13 @@ export class BrowserProfileRegistry {
     await chmod(temporaryPath, 0o600);
     await rename(temporaryPath, this.path);
   }
+}
+
+function getProfileFromState(state: BrowserProfileState, profileId: string) {
+  const normalized = profileId === "Default" ? DEFAULT_PROFILE_ID : profileId;
+  const profile = state.profiles.find((candidate) => candidate.id === normalized);
+  if (!profile) throw new Error(`browser profile not found: ${profileId}`);
+  return profile;
 }
 
 function createDefaultProfileState(now = Date.now()): BrowserProfileState {

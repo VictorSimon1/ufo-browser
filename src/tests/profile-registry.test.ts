@@ -72,6 +72,30 @@ test("profile registry publishes an imported profile only after an atomic add", 
   }
 });
 
+test("profile registry keeps committed memory state on write failure and can retry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-profile-registry-"));
+  const path = join(root, "profiles.json");
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  try {
+    const registry = new BrowserProfileRegistry(path);
+    await registry.initialize();
+    const profile = importedProfile("chrome-retry", "x-browser-profile-chrome-retry");
+    await mkdir(temporaryPath);
+
+    await assert.rejects(registry.add(profile, true));
+    assert.equal(registry.listPublic().length, 1);
+    assert.equal(registry.getDefault().id, "default");
+    assert.equal(JSON.parse(await readFile(path, "utf8")).profiles.length, 1);
+
+    await rm(temporaryPath, { recursive: true, force: true });
+    await registry.add(profile, true);
+    assert.equal(registry.listPublic().length, 2);
+    assert.equal(registry.getDefault().id, profile.id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("removing an imported profile falls back to local and cleans its partition on cold start", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-profile-registry-"));
   const path = join(root, "profiles.json");
@@ -174,3 +198,23 @@ test("profile registry rejects traversal, duplicate partitions, and enabled sync
     await rm(root, { recursive: true, force: true });
   }
 });
+
+function importedProfile(id: string, partitionId: string) {
+  const now = Date.now();
+  return {
+    id,
+    partitionId,
+    name: "Chrome Personal",
+    kind: "imported" as const,
+    source: {
+      browser: "chrome" as const,
+      profileDirName: "Default",
+      displayName: "Personal",
+      importedAt: now,
+      lastImportStatus: "success" as const,
+      loginSyncEnabled: false as const,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
