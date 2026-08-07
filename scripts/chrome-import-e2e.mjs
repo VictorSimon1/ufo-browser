@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createCipheriv, createHash, pbkdf2Sync } from "node:crypto";
 import { execFile } from "node:child_process";
+import { createServer } from "node:http";
 import {
   mkdir,
   readFile,
@@ -32,9 +33,11 @@ process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 
 let child;
 let stderr = "";
+let storageServer;
 try {
   await stopTestApp();
   await rm(testRoot, { recursive: true, force: true });
+  storageServer = await startStorageServer();
   await createChromeFixture(chromeRoot, safeStorageSecret);
 
   if (mode === "success") {
@@ -83,6 +86,7 @@ try {
   throw error;
 } finally {
   await terminatePhase().catch(() => undefined);
+  await storageServer?.close().catch(() => undefined);
 }
 
 async function runPhase(auditFlag, auditName, secret) {
@@ -95,6 +99,7 @@ async function runPhase(auditFlag, auditName, secret) {
       X_BROWSER_TEST_APP: "1",
       X_BROWSER_TEST_CHROME_USER_DATA_PATH: chromeRoot,
       X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET: secret,
+      X_BROWSER_TEST_CHROME_STORAGE_ORIGIN: storageServer.origin,
       [auditFlag]: "1",
     },
     stdio: ["ignore", "ignore", "pipe"],
@@ -138,12 +143,16 @@ async function freshJson(name, launchedAt, timeoutMs) {
 
 async function createChromeFixture(chromeRoot, secretText) {
   const profilePath = join(chromeRoot, "Default");
-  await mkdir(join(profilePath, "Local Storage", "leveldb"), {
-    recursive: true,
-  });
+  await mkdir(profilePath, { recursive: true });
+  await mkdir(join(profilePath, "WebStorage"), { recursive: true });
   await writeFile(
-    join(profilePath, "Local Storage", "leveldb", "fixture-state"),
-    "fixture-login-storage",
+    join(profilePath, "WebStorage", "ufo-fixture-marker"),
+    "fixture-web-storage-copy",
+  );
+  await mkdir(join(profilePath, "File System"), { recursive: true });
+  await writeFile(
+    join(profilePath, "File System", "ufo-fixture-marker"),
+    "fixture-file-system-copy",
   );
   await writeFile(join(chromeRoot, "Last Version"), "151.0.0.0");
   await writeFile(
@@ -214,4 +223,30 @@ async function createChromeFixture(chromeRoot, secretText) {
   secret.fill(0);
   key.fill(0);
   database.close();
+}
+
+async function startStorageServer() {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    response.end("<!doctype html><meta charset=utf-8><title>UFO import storage fixture</title>");
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Chrome import storage fixture server did not bind");
+  }
+  return {
+    origin: `http://127.0.0.1:${address.port}/`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
 }

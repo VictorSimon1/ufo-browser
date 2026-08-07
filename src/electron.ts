@@ -1878,6 +1878,7 @@ async function runChromeImportUiAudit(context: {
   overviewView: WebContentsView;
 }) {
   const { testRoot, userDataPath, manager, profiles, overviewView } = context;
+  await seedChromeFixtureOriginStorage();
   const initialSpaceCount = manager.listSpaces().length;
   await overviewView.webContents.executeJavaScript(
     `(() => {
@@ -1962,6 +1963,11 @@ async function runChromeImportUiAudit(context: {
   const importedCookies = await session
     .fromPartition(`persist:${imported.partitionId}`)
     .cookies.get({});
+  const originStorage = await readImportedOriginStorage(imported.partitionId);
+  const copiedStorageMarkers = await readImportedStorageMarkers(
+    userDataPath,
+    imported.partitionId,
+  );
 
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('.import-result-view button')?.click(); document.querySelector('#quick-create')?.click()`,
@@ -2010,6 +2016,11 @@ async function runChromeImportUiAudit(context: {
     phases.join(",") ===
       "snapshotting,importing-cookies,verifying,committed" &&
     importedCookies.length === 2 &&
+    originStorage.localStorage === "fixture-local-storage" &&
+    originStorage.indexedDb === "fixture-indexeddb" &&
+    originStorage.opfs === "fixture-opfs" &&
+    copiedStorageMarkers.webStorage === "fixture-web-storage-copy" &&
+    copiedStorageMarkers.fileSystem === "fixture-file-system-copy" &&
     profiles.getDefault().id === imported.id &&
     created.profileId === imported.id &&
     String(removeWhileUsed).includes("profile-in-use");
@@ -2025,6 +2036,8 @@ async function runChromeImportUiAudit(context: {
           id: imported.id,
           isDefault: profiles.getDefault().id === imported.id,
           cookieCount: importedCookies.length,
+          originStorage,
+          copiedStorageMarkers,
         },
         createdSpace: { id: created.id, profileId: created.profileId },
         removeWhileUsed: String(removeWhileUsed).includes("profile-in-use"),
@@ -2033,6 +2046,72 @@ async function runChromeImportUiAudit(context: {
       2,
     )}\n`,
   );
+}
+
+async function seedChromeFixtureOriginStorage() {
+  const chromeUserDataPath = process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH;
+  const origin = process.env.X_BROWSER_TEST_CHROME_STORAGE_ORIGIN;
+  if (!chromeUserDataPath || !origin) {
+    throw new Error("missing isolated Chrome storage fixture configuration");
+  }
+  const sourceSession = session.fromPath(join(chromeUserDataPath, "Default"));
+  const view = new WebContentsView({
+    webPreferences: {
+      session: sourceSession,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    await view.webContents.loadURL(origin);
+    const seeded = await view.webContents.executeJavaScript(
+      `(() => (async () => {
+        localStorage.setItem('ufo-login-state', 'fixture-local-storage');
+        const indexedDb = await new Promise((resolve, reject) => {
+          const request = indexedDB.open('ufo-login-state', 1);
+          request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
+          request.onupgradeneeded = () => {
+            if (!request.result.objectStoreNames.contains('session')) {
+              request.result.createObjectStore('session');
+            }
+          };
+          request.onsuccess = () => {
+            const database = request.result;
+            const transaction = database.transaction('session', 'readwrite');
+            transaction.objectStore('session').put('fixture-indexeddb', 'login');
+            transaction.oncomplete = () => {
+              database.close();
+              resolve('fixture-indexeddb');
+            };
+            transaction.onerror = () => reject(transaction.error || new Error('IndexedDB write failed'));
+          };
+        });
+        const root = await navigator.storage.getDirectory();
+        const handle = await root.getFileHandle('ufo-login-state.txt', { create: true });
+        const writable = await handle.createWritable();
+        await writable.write('fixture-opfs');
+        await writable.close();
+        return {
+          localStorage: localStorage.getItem('ufo-login-state'),
+          indexedDb,
+          opfs: await (await handle.getFile()).text(),
+        };
+      })())()`,
+      true,
+    );
+    if (
+      seeded.localStorage !== "fixture-local-storage" ||
+      seeded.indexedDb !== "fixture-indexeddb" ||
+      seeded.opfs !== "fixture-opfs"
+    ) {
+      throw new Error("isolated Chrome storage fixture verification failed");
+    }
+    sourceSession.flushStorageData();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  } finally {
+    view.webContents.close();
+  }
 }
 
 async function diagnoseChromeImportFailure(userDataPath: string) {
@@ -2142,16 +2221,10 @@ async function runChromeImportRestartAudit(context: {
   const cookies = await session
     .fromPartition(`persist:${imported.partitionId}`)
     .cookies.get({});
-  const storage = await readFile(
-    join(
-      userDataPath,
-      "Partitions",
-      imported.partitionId,
-      "Local Storage",
-      "leveldb",
-      "fixture-state",
-    ),
-    "utf8",
+  const originStorage = await readImportedOriginStorage(imported.partitionId);
+  const copiedStorageMarkers = await readImportedStorageMarkers(
+    userDataPath,
+    imported.partitionId,
   );
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('#profile-button')?.click()`,
@@ -2180,7 +2253,11 @@ async function runChromeImportRestartAudit(context: {
     .filter((space) => space.profileId === imported.id);
   const ok =
     cookies.length === 2 &&
-    storage === "fixture-login-storage" &&
+    originStorage.localStorage === "fixture-local-storage" &&
+    originStorage.indexedDb === "fixture-indexeddb" &&
+    originStorage.opfs === "fixture-opfs" &&
+    copiedStorageMarkers.webStorage === "fixture-web-storage-copy" &&
+    copiedStorageMarkers.fileSystem === "fixture-file-system-copy" &&
     profiles.getDefault().id === imported.id &&
     importedSpaces.length === 1 &&
     dom.profiles.length === 2 &&
@@ -2194,7 +2271,8 @@ async function runChromeImportRestartAudit(context: {
           id: imported.id,
           name: imported.name,
           cookieCount: cookies.length,
-          storageRestored: storage === "fixture-login-storage",
+          originStorage,
+          copiedStorageMarkers,
         },
         importedSpaceIds: importedSpaces.map((space) => space.id),
         dom,
@@ -2203,6 +2281,80 @@ async function runChromeImportRestartAudit(context: {
       2,
     )}\n`,
   );
+}
+
+async function readImportedOriginStorage(partitionId: string) {
+  const origin = process.env.X_BROWSER_TEST_CHROME_STORAGE_ORIGIN;
+  if (!origin) throw new Error("missing Chrome storage fixture origin");
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: `persist:${partitionId}`,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    await view.webContents.loadURL(origin);
+    return await view.webContents.executeJavaScript(
+      `(() => (async () => {
+        const indexedDb = await new Promise((resolve) => {
+          const request = indexedDB.open('ufo-login-state');
+          request.onerror = () => resolve(null);
+          request.onsuccess = () => {
+            const database = request.result;
+            if (!database.objectStoreNames.contains('session')) {
+              database.close();
+              resolve(null);
+              return;
+            }
+            const transaction = database.transaction('session', 'readonly');
+            const get = transaction.objectStore('session').get('login');
+            get.onerror = () => {
+              database.close();
+              resolve(null);
+            };
+            get.onsuccess = () => {
+              const value = get.result ?? null;
+              database.close();
+              resolve(value);
+            };
+          };
+        });
+        let opfs = null;
+        try {
+          const root = await navigator.storage.getDirectory();
+          const handle = await root.getFileHandle('ufo-login-state.txt');
+          opfs = await (await handle.getFile()).text();
+        } catch {}
+        return {
+          localStorage: localStorage.getItem('ufo-login-state'),
+          indexedDb,
+          opfs,
+        };
+      })())()`,
+      true,
+    );
+  } finally {
+    view.webContents.close();
+  }
+}
+
+async function readImportedStorageMarkers(
+  userDataPath: string,
+  partitionId: string,
+) {
+  const partitionPath = join(userDataPath, "Partitions", partitionId);
+  return {
+    webStorage: await readFile(
+      join(partitionPath, "WebStorage", "ufo-fixture-marker"),
+      "utf8",
+    ),
+    fileSystem: await readFile(
+      join(partitionPath, "File System", "ufo-fixture-marker"),
+      "utf8",
+    ),
+  };
 }
 
 async function runChromeImportRollbackAudit(context: {
