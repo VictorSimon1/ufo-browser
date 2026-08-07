@@ -8,7 +8,10 @@ import {
   requestChromeQuit,
   type DiscoveredChromeProfile,
 } from "./discovery.js";
-import { readChromeCookies } from "./cookies.js";
+import {
+  readChromeCookies,
+  type ChromeCookieReadResult,
+} from "./cookies.js";
 import {
   writeAndVerifyCookies,
   type CookieWriteTarget,
@@ -49,6 +52,7 @@ export type ChromeLoginImportServiceOptions = {
   targetChromiumVersion: string;
   chromeUserDataPath?: string;
   createTarget: (profileId: string, partitionId: string) => Promise<CookieWriteTarget>;
+  readCookies?: (databasePath: string) => Promise<ChromeCookieReadResult>;
 };
 
 export class ChromeLoginImportService {
@@ -105,10 +109,12 @@ export class ChromeLoginImportService {
       onProgress({ phase: "importing-cookies", completed: 1, total: 4 });
       await transaction.setPhase("importing-cookies");
       const cookieResult = snapshot.storage.cookieDatabasePresent
-        ? await readChromeCookies(
-            transaction.stagedCookieDatabasePath,
-            this.options.keychain,
-          )
+        ? await (this.options.readCookies
+            ? this.options.readCookies(transaction.stagedCookieDatabasePath)
+            : readChromeCookies(
+                transaction.stagedCookieDatabasePath,
+                this.options.keychain,
+              ))
         : { databaseVersion: 0, cookies: [], warnings: [] };
       if (
         cookieResult.cookies.length === 0 &&

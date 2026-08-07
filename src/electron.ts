@@ -23,6 +23,7 @@ import { recoverChromeImportJobs } from "./main/chrome-import/transaction.js";
 import { ChromeLoginImportService } from "./main/chrome-import/service.js";
 import { createElectronCookieWriteTarget } from "./main/chrome-import/electron-target.js";
 import { readChromeCookies } from "./main/chrome-import/cookies.js";
+import { createChromeCookieWorkerReader } from "./main/chrome-import/worker-reader.js";
 import {
   MacKeychainProvider,
   MockKeychainProvider,
@@ -185,14 +186,19 @@ async function start() {
       )
     : join(projectRoot, "dist", "bin", "ufo-keychain-helper");
   const testSafeStorageSecret = process.env.X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET;
+  const keychain =
+    isTestApp && testSafeStorageSecret
+      ? new MockKeychainProvider(testSafeStorageSecret)
+      : new MacKeychainProvider(keychainHelperPath);
   const chromeImport = new ChromeLoginImportService({
     userDataPath,
     partitionsRoot,
     profiles,
-    keychain:
-      isTestApp && testSafeStorageSecret
-        ? new MockKeychainProvider(testSafeStorageSecret)
-        : new MacKeychainProvider(keychainHelperPath),
+    keychain,
+    readCookies: createChromeCookieWorkerReader(
+      join(projectRoot, "dist", "main", "chrome-cookie-worker.js"),
+      keychain,
+    ),
     targetChromiumVersion: process.versions.chrome,
     chromeUserDataPath:
       isTestApp && process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH

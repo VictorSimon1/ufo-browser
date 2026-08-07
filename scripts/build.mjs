@@ -27,6 +27,14 @@ await build({
 
 await build({
   ...shared,
+  entryPoints: ["src/main/chrome-import/cookie-worker.ts"],
+  outfile: "dist/main/chrome-cookie-worker.js",
+  platform: "node",
+  format: "esm",
+});
+
+await build({
+  ...shared,
   entryPoints: {
     shell: "src/preload/shell.ts",
     page: "src/preload/page.ts",
