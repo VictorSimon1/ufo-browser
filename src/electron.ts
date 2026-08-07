@@ -1955,6 +1955,7 @@ async function runChromeImportUiAudit(context: {
     }))()`,
     true,
   );
+  const discoveryStartedAt = performance.now();
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('.import-command')?.click()`,
     true,
@@ -1962,6 +1963,9 @@ async function runChromeImportUiAudit(context: {
   await waitForRenderer(
     overviewView,
     `Boolean(document.querySelector('.chrome-profile-row'))`,
+  );
+  const discoveryElapsedMs = Number(
+    (performance.now() - discoveryStartedAt).toFixed(1),
   );
   const runningSource = await overviewView.webContents.executeJavaScript(
     `(() => ({
@@ -2006,15 +2010,36 @@ async function runChromeImportUiAudit(context: {
     }))()`,
     true,
   );
-  await overviewView.webContents.executeJavaScript(
-    `document.querySelector('.chrome-import-form')?.requestSubmit()`,
-    true,
-  );
-  await waitForRenderer(
-    overviewView,
-    `Boolean(document.querySelector('.import-result-view, .dialog-error-view'))`,
-    12_000,
-  );
+  const heartbeatIntervalMs = 5;
+  let heartbeatTicks = 0;
+  let maxHeartbeatGapMs = 0;
+  let previousHeartbeatAt = performance.now();
+  const heartbeat = setInterval(() => {
+    const now = performance.now();
+    maxHeartbeatGapMs = Math.max(maxHeartbeatGapMs, now - previousHeartbeatAt);
+    previousHeartbeatAt = now;
+    heartbeatTicks += 1;
+  }, heartbeatIntervalMs);
+  try {
+    await overviewView.webContents.executeJavaScript(
+      `document.querySelector('.chrome-import-form')?.requestSubmit()`,
+      true,
+    );
+    await waitForRenderer(
+      overviewView,
+      `Boolean(document.querySelector('.import-result-view, .dialog-error-view'))`,
+      12_000,
+    );
+  } finally {
+    clearInterval(heartbeat);
+  }
+  const mainThreadResponsiveness = {
+    heartbeatTicks,
+    maxGapMs: Number(maxHeartbeatGapMs.toFixed(1)),
+    maxStallMs: Number(
+      Math.max(0, maxHeartbeatGapMs - heartbeatIntervalMs).toFixed(1),
+    ),
+  };
   const importFailed = await overviewView.webContents.executeJavaScript(
     `Boolean(document.querySelector('.dialog-error-view'))`,
     true,
@@ -2119,6 +2144,9 @@ async function runChromeImportUiAudit(context: {
     sourceReady.ready === true &&
     sourceReady.title === "可以开始导入" &&
     sourceReady.submitDisabled === false &&
+    discoveryElapsedMs < 500 &&
+    mainThreadResponsiveness.heartbeatTicks >= 5 &&
+    mainThreadResponsiveness.maxStallMs < 50 &&
     discovery.title === "从 Chrome 导入" &&
     discovery.profiles.length === 1 &&
     discovery.profiles[0].name === "Fixture Personal" &&
@@ -2158,6 +2186,10 @@ async function runChromeImportUiAudit(context: {
         profileHome,
         runningSource,
         sourceReady,
+        performance: {
+          discoveryElapsedMs,
+          mainThreadResponsiveness,
+        },
         discovery,
         result,
         importedProfile: {

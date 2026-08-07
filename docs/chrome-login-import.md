@@ -134,9 +134,12 @@ npm run verify:chrome-import-rollback
 
 The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin storage through Chromium. The success and restart audits load the same fixture origin from the imported partition and semantically read Local Storage, IndexedDB, and OPFS. WebStorage and File System allowlist copying also has file markers. The fixture server counts requests to the reserved preflight path and requires the count to remain zero, proving that CDP fulfilled the compatibility page before it reached the network. Comparisons happen only in memory; audit JSON and command output persist booleans, never the Cookie, origin-storage, file-marker, domain, or Mock Keychain values. The E2E runner rejects any audit containing one of those fixture values. Rollback uses the wrong mock key and verifies that no Profile, partition, or job leaks.
 
+The success audit measures the real App path from the import command to the rendered Chrome Profile list and requires it to complete within the 500 ms normal-Profile discovery budget. During the complete snapshot, Worker preflight, Cookie import, verification, and commit path, a 5 ms Electron main-process heartbeat records the longest scheduling gap; after subtracting the heartbeat interval, any stall of 50 ms or more fails the audit. This is a direct runtime gate rather than an inference from Worker unit tests.
+
 Current isolated evidence proves:
 
 - a running source disables import until the user explicitly chooses **退出 Chrome 并继续**, after which discovery is repeated and the same Profile becomes importable;
+- normal fixture Profile discovery stays below 500 ms and the complete import keeps every measured main-process event-loop stall below 50 ms;
 - two Cookies are persisted, including one CHIPS Cookie;
 - a 10,000-Cookie batch keeps writes at the configured concurrency limit and verifies through indexed identity lookups instead of quadratic scans;
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;
