@@ -817,7 +817,12 @@ function registerIpc(context: IpcContext) {
   shell("x-browser:profiles:chrome-quit", () => chromeImport.quitChrome());
   shell(
     "x-browser:profiles:chrome-import",
-    (event, profileDirName: string, makeDefault: boolean) => {
+    (
+      event,
+      profileDirName: string,
+      makeDefault: boolean,
+      allowPartial: boolean,
+    ) => {
       const directory = String(profileDirName);
       if (!/^(Default|Profile [1-9][0-9]*)$/.test(directory)) {
         throw new Error("invalid Chrome profile directory");
@@ -825,6 +830,7 @@ function registerIpc(context: IpcContext) {
       return chromeImport.importProfile(
         directory,
         makeDefault === true,
+        allowPartial === true,
         (progress) => {
           if (!event.sender.isDestroyed()) {
             event.sender.send("x-browser:chrome-import-progress", progress);
@@ -1924,6 +1930,7 @@ async function runChromeImportUiAudit(context: {
         selected: Boolean(row.querySelector('input')?.checked),
       })),
       scope: document.querySelector('.import-scope-note')?.textContent || '',
+      partialAllowed: Boolean(document.querySelector('.partial-import-choice input')?.checked),
       submitEnabled: !document.querySelector('.chrome-import-form button[type="submit"]')?.disabled,
     }))()`,
     true,
@@ -2012,8 +2019,10 @@ async function runChromeImportUiAudit(context: {
     discovery.profiles.length === 1 &&
     discovery.profiles[0].name === "Fixture Personal" &&
     discovery.profiles[0].selected === true &&
+    discovery.profiles[0].detail.includes("最近使用") &&
     discovery.scope.includes("临时会话 Cookie 将保留 30 天") &&
     discovery.scope.includes("不会导入密码、浏览记录或 Google 同步账号") &&
+    discovery.partialAllowed === true &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
     phases.join(",") ===

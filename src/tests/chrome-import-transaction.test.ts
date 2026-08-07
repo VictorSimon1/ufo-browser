@@ -49,6 +49,10 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
     });
     const snapshot = await transaction.snapshot();
     assert.equal(snapshot.phase, "preparing-profile");
+    assert.deepEqual(snapshot.compatibility, {
+      sourceChromiumVersion: "151.0.0.0",
+      targetChromiumVersion: "150.0.0.0",
+    });
     assert.equal(snapshot.storage.cookieDatabasePresent, true);
     assert.deepEqual(snapshot.storage.copied, [
       "Local Storage",
@@ -143,6 +147,9 @@ test("newer Chrome Service Worker data is skipped instead of risking corruption"
     const snapshot = await transaction.snapshot();
     assert.equal(snapshot.storage.copied.includes("Service Worker"), false);
     assert.equal(snapshot.storage.skipped.includes("Service Worker"), true);
+    assert.deepEqual(snapshot.storage.warningCodes, [
+      "service-worker-version-mismatch",
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

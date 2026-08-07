@@ -33,7 +33,11 @@ export type ChromeImportResult = {
     skipped: number;
     warningCodes: Array<{ code: string; count: number }>;
   };
-  storage: { copied: string[]; skipped: string[] };
+  storage: {
+    copied: string[];
+    skipped: string[];
+    warningCodes: Array<{ code: string; count: number }>;
+  };
 };
 
 export class ChromeImportError extends Error {
@@ -84,6 +88,7 @@ export class ChromeLoginImportService {
   async importProfile(
     profileDirName: string,
     makeDefault: boolean,
+    allowPartial: boolean,
     onProgress: (progress: ChromeImportProgress) => void = () => undefined,
   ): Promise<ChromeImportResult> {
     if ((await this.source.running()).running) {
@@ -142,9 +147,14 @@ export class ChromeLoginImportService {
         (warning) => warning.code !== "expired-cookie",
       );
       const status =
-        !snapshot.storage.cookieDatabasePresent || significantWarnings.length
+        !snapshot.storage.cookieDatabasePresent ||
+        significantWarnings.length ||
+        snapshot.storage.warningCodes.length
           ? "partial"
           : "success";
+      if (status === "partial" && !allowPartial) {
+        throw new ChromeImportError("partial-import-not-approved");
+      }
       await transaction.setPhase(status === "partial" ? "partial" : "verifying");
       await target.dispose();
       target = undefined;
@@ -173,6 +183,7 @@ export class ChromeLoginImportService {
         storage: {
           copied: snapshot.storage.copied,
           skipped: snapshot.storage.skipped,
+          warningCodes: countWarningCodes(snapshot.storage.warningCodes),
         },
       };
     } catch (error) {
@@ -187,6 +198,12 @@ export class ChromeLoginImportService {
       throw new ChromeImportError(importErrorCode(error));
     }
   }
+}
+
+function countWarningCodes(codes: readonly string[]) {
+  const counts = new Map<string, number>();
+  for (const code of codes) counts.set(code, (counts.get(code) ?? 0) + 1);
+  return [...counts.entries()].map(([code, count]) => ({ code, count }));
 }
 
 function sanitizeDiscoveredProfile(profile: DiscoveredChromeProfile) {

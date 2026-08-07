@@ -35,11 +35,16 @@ contextBridge.exposeInMainWorld("xBrowser", {
     discoverChrome: () =>
       ipcRenderer.invoke("x-browser:profiles:chrome-discover"),
     quitChrome: () => ipcRenderer.invoke("x-browser:profiles:chrome-quit"),
-    importChrome: (profileDirName: string, makeDefault: boolean) =>
+    importChrome: (
+      profileDirName: string,
+      makeDefault: boolean,
+      allowPartial: boolean,
+    ) =>
       ipcRenderer.invoke(
         "x-browser:profiles:chrome-import",
         profileDirName,
         makeDefault,
+        allowPartial,
       ),
     onImportProgress: (listener: (progress: any) => void) =>
       on("x-browser:chrome-import-progress", listener),

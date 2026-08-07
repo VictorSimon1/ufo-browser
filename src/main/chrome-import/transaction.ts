@@ -46,6 +46,10 @@ export type ChromeImportManifest = {
     displayName: string;
     browserVersion?: string;
   };
+  compatibility: {
+    sourceChromiumVersion?: string;
+    targetChromiumVersion: string;
+  };
   target: {
     profileId: string;
     partitionId: string;
@@ -54,6 +58,7 @@ export type ChromeImportManifest = {
   storage: {
     copied: string[];
     skipped: string[];
+    warningCodes: string[];
     cookieDatabasePresent: boolean;
   };
   failureCode?: string;
@@ -114,8 +119,17 @@ export class ChromeImportTransaction {
         displayName: options.source.displayName,
         browserVersion: options.source.browserVersion,
       },
+      compatibility: {
+        sourceChromiumVersion: options.source.browserVersion,
+        targetChromiumVersion: options.targetChromiumVersion,
+      },
       target: { profileId, partitionId, activated: false },
-      storage: { copied: [], skipped: [], cookieDatabasePresent: false },
+      storage: {
+        copied: [],
+        skipped: [],
+        warningCodes: [],
+        cookieDatabasePresent: false,
+      },
       createdAt: now,
       updatedAt: now,
     };
@@ -155,6 +169,9 @@ export class ChromeImportTransaction {
         paths.push(OPTIONAL_SERVICE_WORKER_PATH);
       } else {
         this.manifest.storage.skipped.push(OPTIONAL_SERVICE_WORKER_PATH);
+        this.manifest.storage.warningCodes.push(
+          "service-worker-version-mismatch",
+        );
       }
       for (const relativePath of paths) {
         const sourcePath = join(sourceProfilePath, relativePath);

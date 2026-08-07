@@ -50,6 +50,8 @@ The implementation lives under `src/main/chrome-import/`:
 
 The Profile Registry is `profiles.json`. Each imported Profile owns a generated partition such as `x-browser-profile-chrome-<id>`. New Spaces use the current default Profile unless the user explicitly selects another one; existing Spaces retain their original `profileId`.
 
+The selection screen shows the Chrome directory, last-used date, and estimated import size. It also requires an explicit checkbox decision about whether UFO-Browser may publish a partial Profile when a small subset cannot be migrated safely.
+
 ## Source consistency and file safety
 
 Chrome must be normally closed before the snapshot. If `SingletonLock` points to a live process, the UI offers **退出 Chrome 并继续** or cancel. The quit action uses a normal macOS application quit request and waits for the lock to clear; it never uses `killall` or `SIGKILL`.
@@ -78,7 +80,8 @@ discovered → snapshotting → preparing-profile → importing-storage
 Failure states are `failed`, `partial`, or `cleanup-pending`.
 
 - The old default Profile and all existing Spaces are never overwritten.
-- A Profile is added to `profiles.json` only after verification.
+- A Profile is added to `profiles.json` only after verification. A partial result is published only when the user explicitly allowed partial import on the confirmation screen.
+- The job manifest records both source and target Chromium versions. An incompatible Service Worker dataset is skipped with the sanitized `service-worker-version-mismatch` warning and makes the result partial.
 - If a target Session was created before failure, the partition is left journaled and removed on the next cold start before reuse.
 - Published partitions are preserved during job recovery.
 - Removing an imported Profile immediately removes it from the registry and queues its partition for cold-start deletion.
@@ -105,6 +108,8 @@ Current isolated evidence proves:
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;
 - WebStorage and File System markers survive restart;
 - the imported Profile can become default and be selected by a new Space;
+- the UI displays last-used metadata and records explicit partial-import consent;
+- an unapproved partial result publishes no Profile;
 - an incorrect key publishes nothing and is cleaned on restart.
 
 ## Remaining real-machine acceptance

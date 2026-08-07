@@ -49,7 +49,7 @@ test("Chrome import service commits verified Cookies and storage through a mock 
     assert.equal("userDataPath" in discovered.profiles[0], false);
 
     const progress: string[] = [];
-    const result = await service.importProfile("Default", true, (event) => {
+    const result = await service.importProfile("Default", true, true, (event) => {
       progress.push(event.phase);
     });
     assert.equal(result.status, "success");
@@ -105,7 +105,7 @@ test("Chrome import refuses a running source before touching Keychain", async ()
       createTarget: async () => new FakeCookieTarget(),
     });
     await assert.rejects(
-      service.importProfile("Default", true),
+      service.importProfile("Default", true, true),
       (error: ChromeImportError) => error.code === "chrome-running",
     );
     assert.deepEqual(keychain.requests, []);
@@ -132,11 +132,54 @@ test("Chrome import does not publish a Profile when every encrypted Cookie fails
       createTarget: async () => new FakeCookieTarget(),
     });
     await assert.rejects(
-      service.importProfile("Default", true),
+      service.importProfile("Default", true, true),
       (error: ChromeImportError) => error.code === "cookie-decryption-failed",
     );
     assert.equal(registry.listPublic().length, 1);
     assert.equal(registry.getDefault().id, "default");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Chrome partial import requires explicit approval before publishing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-service-"));
+  const chromeRoot = join(root, "Chrome");
+  const profilePath = join(chromeRoot, "Default");
+  try {
+    await createChromeFixture(chromeRoot, profilePath, Buffer.from("unused"));
+    await rm(join(profilePath, "Cookies"));
+    await writeFile(join(chromeRoot, "Last Version"), "154.0.0.0");
+    await mkdir(join(profilePath, "Service Worker"), { recursive: true });
+    const userDataPath = join(root, "UFO");
+    const registry = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+    await registry.initialize();
+    const keychain = new MockKeychainProvider("must-not-run");
+    const service = new ChromeLoginImportService({
+      userDataPath,
+      partitionsRoot: join(userDataPath, "Partitions"),
+      profiles: registry,
+      keychain,
+      targetChromiumVersion: "150.0.0.0",
+      chromeUserDataPath: chromeRoot,
+      createTarget: async () => new FakeCookieTarget(),
+    });
+
+    await assert.rejects(
+      service.importProfile("Default", false, false),
+      (error: ChromeImportError) =>
+        error.code === "partial-import-not-approved",
+    );
+    assert.equal(registry.listPublic().length, 1);
+    assert.deepEqual(keychain.requests, []);
+
+    const approved = await service.importProfile("Default", false, true);
+    assert.equal(approved.status, "partial");
+    assert.equal(approved.profile.isDefault, false);
+    assert.deepEqual(approved.storage.warningCodes, [
+      { code: "service-worker-version-mismatch", count: 1 },
+    ]);
+    assert.equal(registry.listPublic().length, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

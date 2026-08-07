@@ -644,7 +644,13 @@ function renderChromeProfiles(discovery: any) {
       profile.displayName,
     );
     label.querySelector("strong")!.textContent = profile.displayName;
-    label.querySelector("small")!.textContent = `${profile.profileDirName} · ${formatBytes(profile.approximateImportBytes)}`;
+    label.querySelector("small")!.textContent = [
+      profile.profileDirName,
+      formatProfileLastUsed(profile),
+      formatBytes(profile.approximateImportBytes),
+    ]
+      .filter(Boolean)
+      .join(" · ");
     choices.append(label);
   }
 
@@ -656,6 +662,9 @@ function renderChromeProfiles(discovery: any) {
   const defaultChoice = document.createElement("label");
   defaultChoice.className = "default-profile-choice";
   defaultChoice.innerHTML = '<input type="checkbox" checked /><span><i>✓</i></span><b>设为新 Task Space 的默认 Profile</b>';
+  const partialChoice = document.createElement("label");
+  partialChoice.className = "default-profile-choice partial-import-choice";
+  partialChoice.innerHTML = '<input type="checkbox" checked /><span><i>✓</i></span><b>若少量数据无法安全迁移，仍创建部分导入 Profile</b>';
   const actions = document.createElement("div");
   actions.className = "dialog-actions";
   const back = document.createElement("button");
@@ -669,7 +678,7 @@ function renderChromeProfiles(discovery: any) {
   submit.textContent = discovery.running ? "等待 Chrome 退出" : "导入登录状态";
   submit.disabled = Boolean(discovery.running);
   actions.append(back, submit);
-  form.append(choices, scopeNote, defaultChoice, actions);
+  form.append(choices, scopeNote, defaultChoice, partialChoice, actions);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const selected = form.querySelector<HTMLInputElement>(
@@ -679,19 +688,28 @@ function renderChromeProfiles(discovery: any) {
     void runChromeImport(
       selected.value,
       defaultChoice.querySelector<HTMLInputElement>("input")!.checked,
+      partialChoice.querySelector<HTMLInputElement>("input")!.checked,
     );
   });
   profileDialogContent.append(runningNotice, form);
 }
 
-async function runChromeImport(profileDirName: string, makeDefault: boolean) {
+async function runChromeImport(
+  profileDirName: string,
+  makeDefault: boolean,
+  allowPartial: boolean,
+) {
   profileDialogLocked = true;
   profileDialogTitle.textContent = "正在导入登录状态";
   profileDialogSubtitle.textContent = "数据始终保留在这台 Mac";
   profileDialogContent.innerHTML = importProgressMarkup();
   updateImportProgress({ phase: "snapshotting", completed: 0, total: 4 });
   try {
-    const result = await api.profiles.importChrome(profileDirName, makeDefault);
+    const result = await api.profiles.importChrome(
+      profileDirName,
+      makeDefault,
+      allowPartial,
+    );
     profileDialogLocked = false;
     await refreshProfiles();
     renderImportResult(result);
@@ -764,8 +782,20 @@ function renderImportResult(result: any) {
   `;
   profileDialogContent.querySelector(".import-result-view > strong")!.textContent =
     result?.status === "partial" ? "部分网站可能需要重新登录" : "新 Space 可以直接使用这份登录状态";
+  const warningLabels = [
+    ...(Array.isArray(result?.cookies?.warningCodes)
+      ? result.cookies.warningCodes
+      : []),
+    ...(Array.isArray(result?.storage?.warningCodes)
+      ? result.storage.warningCodes
+      : []),
+  ]
+    .map((warning: any) => importWarningLabel(String(warning?.code || "")))
+    .filter(Boolean);
   profileDialogContent.querySelector(".import-result-view > small")!.textContent =
-    `${Number(result?.cookies?.skipped) || 0} 项已过期或无法安全迁移`;
+    `${Number(result?.cookies?.skipped) || 0} 项已过期或无法安全迁移${
+      warningLabels.length ? `；${[...new Set(warningLabels)].join("、")}` : ""
+    }`;
   profileDialogContent.querySelector("button")!.addEventListener("click", () => {
     renderProfileHome();
   });
@@ -857,6 +887,32 @@ function formatBytes(value: unknown) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function formatProfileLastUsed(profile: any) {
+  const activeAt = Number(profile?.activeAt);
+  if (!Number.isFinite(activeAt) || activeAt <= 0) {
+    return profile?.isLastUsed ? "最近使用" : "";
+  }
+  const date = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(activeAt));
+  return profile?.isLastUsed ? `最近使用 ${date}` : `上次使用 ${date}`;
+}
+
+function importWarningLabel(code: string) {
+  const labels: Record<string, string> = {
+    "expired-cookie": "已跳过过期 Cookie",
+    "unsupported-encryption": "存在暂不支持的 Cookie 加密格式",
+    "decryption-failed": "部分 Cookie 无法解密",
+    "host-digest-mismatch": "部分 Cookie 主机校验失败",
+    "invalid-utf8": "部分 Cookie 文本格式无效",
+    "invalid-cookie-row": "存在无效 Cookie 记录",
+    "service-worker-version-mismatch": "Service Worker 版本不兼容，已跳过",
+  };
+  return labels[code] || "";
+}
+
 function importErrorMessage(error: unknown) {
   const value = String(error);
   if (value.includes("chrome-running")) return "Google Chrome 仍在运行";
@@ -866,6 +922,9 @@ function importErrorMessage(error: unknown) {
     return "无法解密 Chrome Cookie，现有 UFO-Browser 数据未受影响";
   }
   if (value.includes("cookie-verification-failed")) return "Cookie 验证未通过，现有 Profile 未受影响";
+  if (value.includes("partial-import-not-approved")) {
+    return "检测到只能部分迁移的数据；未创建 Profile，因为你没有允许部分导入";
+  }
   if (value.includes("chrome-profile-not-found")) return "Chrome Profile 已发生变化，请重新检测";
   return "导入没有完成，现有 UFO-Browser 数据未受影响";
 }
