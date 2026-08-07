@@ -174,7 +174,9 @@ export class ChromeImportTransaction {
   static async create(options: ChromeImportTransactionOptions) {
     const transaction = new ChromeImportTransaction(options);
     await mkdir(options.jobsRoot, { recursive: true, mode: 0o700 });
+    await chmod(options.jobsRoot, 0o700);
     await mkdir(transaction.jobRoot, { recursive: false, mode: 0o700 });
+    await chmod(transaction.jobRoot, 0o700);
     await transaction.writeManifest();
     return transaction;
   }
@@ -264,6 +266,7 @@ export class ChromeImportTransaction {
       throw new Error("target browser profile partition already exists");
     }
     await mkdir(this.options.partitionsRoot, { recursive: true, mode: 0o700 });
+    await chmod(this.options.partitionsRoot, 0o700);
     await rename(this.stagedPartitionPath, this.targetPartitionPath);
     this.manifest.target.activated = true;
     await this.setPhase("importing-storage");
@@ -376,6 +379,7 @@ export class ChromeImportTransaction {
 
   private async writeManifest() {
     await mkdir(this.jobRoot, { recursive: true, mode: 0o700 });
+    await chmod(this.jobRoot, 0o700);
     const path = join(this.jobRoot, "job.json");
     const temporaryPath = `${path}.${process.pid}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(this.manifest, null, 2)}\n`, {
@@ -475,7 +479,9 @@ async function copyTreeSafely(sourcePath: string, targetPath: string): Promise<v
     return;
   }
   if (!info.isFile()) return;
-  await mkdir(dirname(targetPath), { recursive: true, mode: 0o700 });
+  const targetDirectory = dirname(targetPath);
+  await mkdir(targetDirectory, { recursive: true, mode: 0o700 });
+  await chmod(targetDirectory, 0o700);
   await copyFile(sourcePath, targetPath, fsConstants.COPYFILE_FICLONE);
   await chmod(targetPath, 0o600);
 }

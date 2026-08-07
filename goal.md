@@ -641,7 +641,7 @@ UFO-Browser 不启用 Electron 远程调试或常见自动化启动参数。浏�
 Chrome 导入采用“发现 → 一致性快照 → 隔离 partition → Cookie 写入/验证 → Profile 发布”事务：
 
 1. 从 Chrome Stable `Local State` 检测 `Default` / `Profile N`；Chrome 运行时只有用户确认后才请求正常退出。
-2. 复制 Cookies、Local Storage、IndexedDB、WebStorage、File System/OPFS、Storage 与 quota 元数据到权限受限 staging；不复制密码、历史、书签、扩展、窗口、Session Storage、缓存和 Chrome 账号状态。
+2. 复制 Cookies、Local Storage、IndexedDB、WebStorage、File System/OPFS、Storage 与 quota 元数据到权限受限 staging；导入 job、partition、Profile Registry 与复制目标目录在创建和原子写入边界显式收紧为 `0700`，敏感文件为 `0600`，不能只依赖对已存在目录无效的 `mkdir mode`；不复制密码、历史、书签、扩展、窗口、Session Storage、缓存和 Chrome 账号状态。
 3. 从 macOS Keychain 读取 `Chrome Safe Storage`，在 Worker 中使用 `node:sqlite`、PBKDF2/AES-CBC 解密 v10/v11，并校验 Cookie DB v24 host digest；密钥只以内存 transferable 传递并在使用后清零。
 4. 站点存储在任何目标 Session 创建前激活到全新 partition；普通 Cookie 通过 Electron Cookie API 写入，CHIPS 通过同一 partition 的 CDP 写入，随后显式 flush 并逐项验证。
 5. 只有验证通过，或用户在确认页明确允许 partial 后，才原子发布到 `profiles.json`。job manifest 记录源/目标 Chromium 版本；Service Worker 版本不兼容会产生 sanitized warning 并把结果标成 partial。失败不会改变旧 Profile/Space；已创建 Session 的废弃 partition 由 job journal 在下次冷启动清理。

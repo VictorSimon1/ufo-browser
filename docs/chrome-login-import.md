@@ -77,7 +77,7 @@ The isolated success/restart E2E begins with a `SingletonLock` that points to th
 
 The source lock is checked before discovery, immediately before snapshotting, and again after the snapshot completes. If Chrome starts while LevelDB, IndexedDB, or Service Worker data is being copied, the snapshot is discarded before the target partition is activated.
 
-Import jobs are stored below the UFO-Browser user-data directory with directory mode `0700` and file mode `0600`. Source Profiles must be direct, non-symlink children of Chrome User Data. The copy skips symlinks, copies only an allowlist, and uses `COPYFILE_FICLONE` so APFS can clone-on-write with a normal-copy fallback.
+Import jobs are stored below the UFO-Browser user-data directory with directory mode `0700` and file mode `0600`. Creation and every atomic journal/copy boundary explicitly tighten pre-existing job, partition, registry, and copied-file parent directories instead of relying on `mkdir` mode for directories that may already exist. Source Profiles must be direct, non-symlink children of Chrome User Data. The copy skips symlinks, copies only an allowlist, and uses `COPYFILE_FICLONE` so APFS can clone-on-write with a normal-copy fallback.
 
 The Chrome Cookies database itself is never installed into the destination partition. The snapshot prefers the modern `Network/Cookies` location and falls back to the legacy root `Cookies` database only when needed. It is read from staging, decrypted, converted, and written through the target Chromium session so UFO-Browser owns the resulting Cookie store.
 

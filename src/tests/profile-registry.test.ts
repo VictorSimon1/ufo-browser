@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +23,7 @@ test("profile registry creates a private default profile atomically", async () =
   const root = await mkdtemp(join(tmpdir(), "ufo-profile-registry-"));
   const path = join(root, "profiles.json");
   try {
+    await chmod(root, 0o755);
     const registry = new BrowserProfileRegistry(path);
     await registry.initialize();
     assert.deepEqual(registry.listPublic(), [
@@ -27,6 +36,7 @@ test("profile registry creates a private default profile atomically", async () =
       },
     ]);
     assert.equal(registry.getDefault().partitionId, DEFAULT_PROFILE_PARTITION_ID);
+    assert.equal((await stat(root)).mode & 0o777, 0o700);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
     assert.equal(JSON.parse(await readFile(path, "utf8")).version, 1);
   } finally {

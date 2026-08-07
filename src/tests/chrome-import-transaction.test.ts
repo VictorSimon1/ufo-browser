@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -32,6 +34,10 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
   }> = [];
   try {
     await registry.initialize();
+    await mkdir(jobsRoot, { recursive: true });
+    await chmod(jobsRoot, 0o755);
+    await mkdir(partitionsRoot, { recursive: true });
+    await chmod(partitionsRoot, 0o755);
     await mkdir(join(profilePath, "Local Storage", "leveldb"), { recursive: true });
     await mkdir(join(profilePath, "IndexedDB"), { recursive: true });
     await mkdir(join(profilePath, "Network"), { recursive: true });
@@ -73,6 +79,37 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
     assert.ok(
       snapshotProgress.some((progress) => progress.item === "Local Storage"),
     );
+    assert.equal((await stat(jobsRoot)).mode & 0o777, 0o700);
+    assert.equal((await stat(transaction.jobRoot)).mode & 0o777, 0o700);
+    assert.equal(
+      (await stat(join(transaction.jobRoot, "job.json"))).mode & 0o777,
+      0o600,
+    );
+    assert.equal(
+      (await stat(join(transaction.jobRoot, "source"))).mode & 0o777,
+      0o700,
+    );
+    assert.equal(
+      (await stat(transaction.stagedCookieDatabasePath)).mode & 0o777,
+      0o600,
+    );
+    assert.equal(
+      (await stat(transaction.stagedPartitionPath)).mode & 0o777,
+      0o700,
+    );
+    assert.equal(
+      (await stat(join(transaction.stagedPartitionPath, "Local Storage"))).mode &
+        0o777,
+      0o700,
+    );
+    assert.equal(
+      (
+        await stat(
+          join(transaction.stagedPartitionPath, "Local Storage", "leveldb", "data"),
+        )
+      ).mode & 0o777,
+      0o600,
+    );
     assert.equal(await readFile(transaction.stagedCookieDatabasePath, "utf8"), "encrypted-cookie-db");
     await assert.rejects(access(join(transaction.stagedPartitionPath, "History")));
     await assert.rejects(
@@ -80,6 +117,11 @@ test("Chrome import snapshots only login storage and publishes an isolated profi
     );
 
     await transaction.activateStorage();
+    assert.equal((await stat(partitionsRoot)).mode & 0o777, 0o700);
+    assert.equal(
+      (await stat(transaction.targetPartitionPath)).mode & 0o777,
+      0o700,
+    );
     await transaction.setPhase("importing-cookies");
     await transaction.setPhase("verifying");
     const profile = await transaction.publish(registry, "success", true);

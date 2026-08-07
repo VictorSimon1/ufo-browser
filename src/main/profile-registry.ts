@@ -177,7 +177,9 @@ export class BrowserProfileRegistry {
   }
 
   private async writeAtomically(state: BrowserProfileState) {
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+    const directory = dirname(this.path);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
     const temporaryPath = `${this.path}.${process.pid}.tmp`;
     await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
       mode: 0o600,
