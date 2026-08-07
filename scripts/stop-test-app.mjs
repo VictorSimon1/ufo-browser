@@ -1,20 +1,28 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 try {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
   const testNamespace = String(process.env.X_BROWSER_TEST_NAMESPACE || "")
     .replace(/[^a-zA-Z0-9_-]/g, "")
     .slice(0, 64);
-  const testRoot = testNamespace
-    ? join(root, ".x-browser-test", "runs", testNamespace)
-    : join(root, ".x-browser-test");
-  const executable = join(
-    root,
-    "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-  );
+  const requestedTestRoot = process.env.X_BROWSER_TEST_ROOT;
+  const testRoot =
+    requestedTestRoot && isAbsolute(requestedTestRoot)
+      ? resolve(requestedTestRoot)
+      : testNamespace
+        ? join(root, ".x-browser-test", "runs", testNamespace)
+        : join(root, ".x-browser-test");
+  const configuredExecutable = process.env.X_BROWSER_TEST_EXECUTABLE;
+  const executable = configuredExecutable
+    ? resolve(configuredExecutable)
+    : join(
+        root,
+        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+      );
+  const expectedCommand = configuredExecutable ? executable : `${executable} .`;
   const candidates = new Set();
   const stopped = [];
   try {
@@ -34,7 +42,7 @@ try {
     } catch {
       continue;
     }
-    if (command !== `${executable} .`) continue;
+    if (command !== expectedCommand) continue;
     execFileSync("kill", ["-TERM", String(pid)]);
     stopped.push(pid);
   }

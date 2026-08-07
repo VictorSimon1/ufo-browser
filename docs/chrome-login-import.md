@@ -112,6 +112,8 @@ Current isolated evidence proves:
 - an unapproved partial result publishes no Profile;
 - an incorrect key publishes nothing and is cleaned on restart.
 
+`npm run package:mac:test` additionally starts the packaged `UFO-Browser.app` with the same isolated fixture and completes the success audit. This verifies that `chrome-cookie-worker.js` can run from `app.asar`, the unpacked Keychain helper path resolves, and the packaged Bundle can persist Cookie/CHIPS and origin storage without using the real Keychain.
+
 ## Remaining real-machine acceptance
 
 The only intentionally deferred acceptance step is a user-initiated import from the formal UI against a real Chrome Stable Profile. The user must be present to approve the native Keychain password or Touch ID prompt. That check should confirm that the real `Chrome Safe Storage` item decrypts the installed Chrome Cookie database without printing sensitive material.

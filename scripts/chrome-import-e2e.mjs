@@ -10,7 +10,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 
@@ -24,10 +24,14 @@ const testNamespace = `chrome-import-${mode}`;
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 const chromeRoot = join(testRoot, "chrome-fixture");
 const safeStorageSecret = "ufo-fixture-safe-storage";
-const electron = join(
-  root,
-  "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-);
+const configuredExecutable = process.env.X_BROWSER_TEST_EXECUTABLE;
+const executable = configuredExecutable
+  ? resolve(configuredExecutable)
+  : join(
+      root,
+      "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    );
+const executableArguments = configuredExecutable ? [] : ["."];
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
 process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 
@@ -92,11 +96,12 @@ try {
 async function runPhase(auditFlag, auditName, secret) {
   const launchedAt = Date.now();
   stderr = "";
-  child = spawn(electron, ["."], {
+  child = spawn(executable, executableArguments, {
     cwd: root,
     env: {
       ...process.env,
       X_BROWSER_TEST_APP: "1",
+      X_BROWSER_TEST_ROOT: testRoot,
       X_BROWSER_TEST_CHROME_USER_DATA_PATH: chromeRoot,
       X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET: secret,
       X_BROWSER_TEST_CHROME_STORAGE_ORIGIN: storageServer.origin,

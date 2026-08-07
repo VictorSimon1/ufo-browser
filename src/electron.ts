@@ -1,5 +1,5 @@
 import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   app,
   BaseWindow,
@@ -48,9 +48,16 @@ const projectRoot = app.getAppPath();
 const testNamespace = String(process.env.X_BROWSER_TEST_NAMESPACE || "")
   .replace(/[^a-zA-Z0-9_-]/g, "")
   .slice(0, 64);
-const testRoot = testNamespace
-  ? join(projectRoot, ".x-browser-test", "runs", testNamespace)
-  : join(projectRoot, ".x-browser-test");
+const requestedTestRoot = process.env.X_BROWSER_TEST_ROOT;
+const explicitTestRoot =
+  isTestApp && requestedTestRoot && isAbsolute(requestedTestRoot)
+    ? resolve(requestedTestRoot)
+    : undefined;
+const testRoot =
+  explicitTestRoot ??
+  (testNamespace
+    ? join(projectRoot, ".x-browser-test", "runs", testNamespace)
+    : join(projectRoot, ".x-browser-test"));
 if (isTestApp) app.setPath("userData", join(testRoot, "user-data"));
 
 app.setName("UFO-Browser");

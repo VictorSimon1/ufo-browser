@@ -168,6 +168,17 @@ async function verifyArtifacts(appRoot, expectArchives) {
   }
 }
 
+async function verifyPackagedChromeImport(appRoot) {
+  const executable = join(appRoot, "Contents/MacOS/UFO-Browser");
+  console.log("Running packaged Chrome import smoke test with isolated fixture");
+  await run(process.execPath, ["scripts/chrome-import-e2e.mjs", "success"], {
+    env: {
+      ...process.env,
+      X_BROWSER_TEST_EXECUTABLE: executable,
+    },
+  });
+}
+
 console.log(`UFO-Browser macOS packaging mode: ${mode}`);
 if (mode === "release") {
   await resetReleaseDirectory();
@@ -179,6 +190,7 @@ if (mode === "release") {
   const appRoot = await findPackagedApp();
   await createArchives(appRoot);
   await verifyArtifacts(appRoot, true);
+  await verifyPackagedChromeImport(appRoot);
 } else if (mode === "temporary") {
   await run("npm", ["run", "typecheck"]);
   await run("npm", ["run", "build"]);
@@ -186,6 +198,7 @@ if (mode === "release") {
   const appRoot = await findPackagedApp();
   await createArchives(appRoot);
   await verifyArtifacts(appRoot, true);
+  await verifyPackagedChromeImport(appRoot);
 } else {
   await run("npm", ["run", "build"]);
   await packageApplication();
