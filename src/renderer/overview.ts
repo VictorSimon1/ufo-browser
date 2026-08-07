@@ -25,6 +25,11 @@ let visibilityFallback = 0;
 let openMenuCard: HTMLElement | undefined;
 let profileDialogLocked = false;
 
+void api.app.info().then((info: any) => {
+  const version = String(info?.version || "").trim();
+  if (version) document.querySelector("#app-version")!.textContent = `v${version}`;
+});
+
 type PreviewPaintState = {
   drawing: boolean;
   lastRevision: number;
@@ -185,7 +190,7 @@ function spaceCard(spaceId: number) {
   const info = document.createElement("div");
   info.className = "space-info";
   info.innerHTML = `
-    <div class="space-title-line"><strong></strong><input class="space-title-editor" aria-label="Space 名称" maxlength="80" /></div>
+    <div class="space-title-line"><strong></strong><span class="space-id-badge" title="Agent 调度使用的数字 Space ID"></span><input class="space-title-editor" aria-label="Space 名称" maxlength="80" /></div>
     <div class="space-meta"><span></span><span><b class="space-profile">UFO-Browser</b>&nbsp;&nbsp;<b>▢</b> <em></em></span></div>
   `;
 
@@ -367,6 +372,7 @@ function updateSpaceCard(card: HTMLElement, space: any) {
     controlled ? `打开 ${space.name}，Agent 正在浏览` : `打开 ${space.name}`,
   );
   card.querySelector(".space-title-line strong")!.textContent = space.name;
+  card.querySelector(".space-id-badge")!.textContent = `ID ${space.id}`;
   const editor = card.querySelector<HTMLInputElement>(".space-title-editor")!;
   if (!card.classList.contains("renaming")) editor.value = space.name;
   card.querySelector(".space-meta span:first-child")!.textContent = controlled

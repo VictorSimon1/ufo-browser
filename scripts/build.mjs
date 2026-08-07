@@ -94,6 +94,7 @@ for (const name of ["agent-overlay", "chat", "overview", "browser", "newtab"]) {
 }
 await cp("src/renderer/agent-overlay.css", "dist/renderer/agent-overlay.css");
 await cp("src/renderer/styles.css", "dist/renderer/styles.css");
+await cp("resources/icon.png", "dist/renderer/app-icon.png");
 
 await mkdir(join(dist, "bin"), { recursive: true });
 if (process.platform === "darwin") {

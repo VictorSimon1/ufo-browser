@@ -916,6 +916,10 @@ function registerIpc(context: IpcContext) {
   };
 
   shell("x-browser:overview:list", () => manager.listSpaces());
+  shell("x-browser:app:info", () => ({
+    name: app.getName(),
+    version: app.getVersion(),
+  }));
   shell("x-browser:profiles:list", () => profiles.listPublic());
   shell("x-browser:profiles:set-default", (_event, profileId: string) =>
     profiles.setDefault(String(profileId)),
@@ -1899,9 +1903,13 @@ async function runSpaceUiAudit(context: {
       const title = card?.querySelector('.space-title-line strong');
       const create = document.querySelector('.create-space-card');
       const plus = create?.querySelector(':scope > span');
+      const brandIcon = document.querySelector('.overview-brand > img');
       return {
         brandName: document.querySelector('.overview-brand strong')?.textContent || '',
-        brandMark: document.querySelector('.overview-brand .brand-mark')?.textContent || '',
+        brandVersion: document.querySelector('#app-version')?.textContent || '',
+        brandIconReady: Boolean(brandIcon?.complete && brandIcon?.naturalWidth),
+        brandIconSource: brandIcon?.getAttribute('src') || '',
+        spaceId: card?.querySelector('.space-id-badge')?.textContent || '',
         titleX: title?.getBoundingClientRect().x || 0,
         previewRadius: preview ? getComputedStyle(preview).borderRadius : '',
         previewShadow: preview ? getComputedStyle(preview).boxShadow : '',
@@ -1958,7 +1966,10 @@ async function runSpaceUiAudit(context: {
     finalDom.title === renamedValue &&
     finalDom.menuHidden === true &&
     visualBefore.brandName === "UFO-Browser" &&
-    visualBefore.brandMark === "U" &&
+    visualBefore.brandVersion === `v${app.getVersion()}` &&
+    visualBefore.brandIconReady === true &&
+    visualBefore.brandIconSource === "./app-icon.png" &&
+    visualBefore.spaceId === `ID ${initial.id}` &&
     visualBefore.previewRadius === "18px" &&
     visualBefore.createRadius === "18px" &&
     visualBefore.plusBorder === "none" &&

@@ -7,6 +7,9 @@ function on(channel: string, listener: (payload: any) => void) {
 }
 
 contextBridge.exposeInMainWorld("xBrowser", {
+  app: {
+    info: () => ipcRenderer.invoke("x-browser:app:info"),
+  },
   overview: {
     list: () => ipcRenderer.invoke("x-browser:overview:list"),
     create: (name?: string, profileId?: string) =>
