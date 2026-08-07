@@ -140,6 +140,43 @@ test("failed and abandoned import jobs recover without deleting published profil
   }
 });
 
+test("a published Profile remains committed when final job journaling fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
+  const sourceRoot = join(root, "Chrome");
+  const profilePath = join(sourceRoot, "Default");
+  const jobsRoot = join(root, "UFO", "Chrome Import", "jobs");
+  const partitionsRoot = join(root, "UFO", "Partitions");
+  const registry = new BrowserProfileRegistry(join(root, "UFO", "profiles.json"));
+  try {
+    await mkdir(profilePath, { recursive: true });
+    await registry.initialize();
+    const transaction = await ChromeImportTransaction.create({
+      jobsRoot,
+      partitionsRoot,
+      source: sourceProfile(sourceRoot, profilePath),
+      targetChromiumVersion: "150.0.0.0",
+      id: "abababab-cdcd-efef-1212-343434343434",
+    });
+    await transaction.snapshot();
+    await transaction.activateStorage();
+    await transaction.setPhase("verifying");
+
+    const originalAdd = registry.add.bind(registry);
+    registry.add = async (...args) => {
+      const profile = await originalAdd(...args);
+      await mkdir(join(transaction.jobRoot, `job.json.${process.pid}.tmp`));
+      return profile;
+    };
+
+    const profile = await transaction.publish(registry, "success", true);
+    assert.equal(profile.id, registry.getDefault().id);
+    assert.equal(registry.listPublic().length, 2);
+    await assert.rejects(access(transaction.jobRoot));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("newer Chrome Service Worker data is skipped instead of risking corruption", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
   const sourceRoot = join(root, "Chrome");

@@ -262,8 +262,16 @@ export class ChromeImportTransaction {
       updatedAt: now,
     };
     await registry.add(profile, makeDefault);
-    await this.setPhase("committed");
-    await rm(this.jobRoot, { recursive: true, force: true });
+    // The Registry write is the transaction's durable commit point. A later
+    // journal or cleanup failure must not turn a published Profile into a UI
+    // failure; cold-start recovery recognizes its partition as published and
+    // safely removes any leftover job.
+    this.manifest.phase = "committed";
+    this.manifest.updatedAt = (this.options.now ?? Date.now)();
+    await this.writeManifest().catch(() => undefined);
+    await rm(this.jobRoot, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
     return profile;
   }
 
