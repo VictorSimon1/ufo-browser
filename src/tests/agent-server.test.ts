@@ -25,6 +25,13 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
   const agentConnectionStates: boolean[] = [];
   const manager = {
     listSpaces: () => [structuredClone(space)],
+    listProfiles: () => [
+      {
+        id: "Default",
+        isDefault: true,
+        name: "您的 UFO-Browser",
+      },
+    ],
     getSpaceOrThrow: (id: number) => {
       if (id !== space.id) throw new Error("task space not found");
       return space;

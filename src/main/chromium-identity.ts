@@ -66,9 +66,13 @@ export function mergeChromiumClientHintHeaders(
 export async function ensureChromiumProfilePreferences(
   partitionsRoot: string,
   profileId: string,
+  partitionId = `x-browser-profile-${profileId}`,
 ) {
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(profileId)) return;
-  const directory = join(partitionsRoot, `x-browser-profile-${profileId}`);
+  if (!/^x-browser-profile-[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(partitionId)) {
+    return;
+  }
+  const directory = join(partitionsRoot, partitionId);
   const preferencesPath = join(directory, "Preferences");
   let preferences: Record<string, any> = {};
   try {

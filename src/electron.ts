@@ -14,6 +14,7 @@ import { PresentationCoordinator } from "./main/presentation-coordinator.js";
 import { SnapshotService } from "./main/snapshot.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
+import { BrowserProfileRegistry } from "./main/profile-registry.js";
 import { ClaudeSessionManager } from "./main/claude-chat/manager.js";
 import { visibleSpaceIds } from "./main/preview-visibility.js";
 import { BROWSER_CHROME_HEIGHT } from "./main/shell-page-bounds.js";
@@ -147,10 +148,14 @@ async function start() {
   overlayView.setVisible(false);
   traceStart("shell-created");
 
-  const store = new BrowserStateStore(join(app.getPath("userData"), "browser-state.json"));
+  const userDataPath = app.getPath("userData");
+  const store = new BrowserStateStore(join(userDataPath, "browser-state.json"));
+  const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+  await profiles.initialize();
   const manager = new TaskSpaceManager({
     store,
-    partitionsRoot: join(app.getPath("userData"), "Partitions"),
+    profiles,
+    partitionsRoot: join(userDataPath, "Partitions"),
     pagePreload,
     newTabFile: renderer("newtab.html"),
     captureWindow,

@@ -134,15 +134,7 @@ export class AgentServer {
       case "listTaskSpaces":
         return { taskSpaces: this.manager.listSpaces() };
       case "listProfiles":
-        return {
-          profiles: [
-            {
-              id: "Default",
-              isDefault: true,
-              name: "您的 UFO-Browser",
-            },
-          ],
-        };
+        return { profiles: this.manager.listProfiles() };
       case "createTaskSpace": {
         const space = await this.manager.createSpace(String(args[0] || "Agent Space"), "agent");
         await this.select(connection, space.id);

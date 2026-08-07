@@ -12,6 +12,7 @@ import {
   WebContentsView as ElectronWebContentsView,
 } from "electron";
 import { BrowserStateStore } from "./state-store.js";
+import { BrowserProfileRegistry } from "./profile-registry.js";
 import type {
   BrowserState,
   PublicSpace,
@@ -86,6 +87,7 @@ type OverviewScreencastState = {
 
 type ManagerOptions = {
   store: BrowserStateStore;
+  profiles: BrowserProfileRegistry;
   partitionsRoot: string;
   pagePreload: string;
   newTabFile: string;
@@ -188,6 +190,14 @@ export class TaskSpaceManager {
     }));
   }
 
+  listProfiles() {
+    return this.options.profiles.listPublic().map(({ id, isDefault, name }) => ({
+      id,
+      isDefault,
+      name,
+    }));
+  }
+
   getSpace(spaceId: number) {
     return this.state.spaces.find((space) => space.id === spaceId);
   }
@@ -219,8 +229,11 @@ export class TaskSpaceManager {
   async createSpace(
     name: string,
     createdBy: "agent" | "user" = "user",
-    profileId = "default",
+    profileId?: string,
   ) {
+    const profile = profileId
+      ? this.options.profiles.getOrThrow(profileId)
+      : this.options.profiles.getDefault();
     const trimmed = name.trim() || `Space ${this.state.nextSpaceId}`;
     const now = Date.now();
     const tab = this.newTabRecord(X_BROWSER_DEFAULT_NEW_TAB_URL);
@@ -231,7 +244,7 @@ export class TaskSpaceManager {
       createdBy,
       ownership: createdBy === "agent" ? "agent" : "user",
       lifecycle: "active",
-      profileId,
+      profileId: profile.id,
       tabs: [tab],
       activeTabId: tab.targetId,
       agentTask:
@@ -2316,12 +2329,14 @@ export class TaskSpaceManager {
     let setup = this.profileSessionSetup.get(profileId);
     if (!setup) {
       setup = (async () => {
+        const profile = this.options.profiles.getOrThrow(profileId);
         await ensureChromiumProfilePreferences(
           this.options.partitionsRoot,
           profileId,
+          profile.partitionId,
         );
         const chromiumSession = session.fromPartition(
-          `persist:x-browser-profile-${profileId}`,
+          `persist:${profile.partitionId}`,
         );
         await configureChromiumSession(chromiumSession);
       })();
