@@ -54,7 +54,7 @@ The selection screen shows the Chrome directory, last-used date, and estimated i
 
 Profile discovery gives all listed Profiles one shared 350 ms size-estimation budget and a bounded filesystem-entry budget. It prefers `Network/Cookies` over the legacy root database, includes quota metadata, skips symlinks and inaccessible estimate-only entries, and may conservatively undercount very large Profiles rather than blocking the selection UI.
 
-Before import, the UI states that processing stays on the current Mac, that passwords, credit cards, history, and Google Sync state are excluded, and that Passkey-, device-bound-, or client-certificate-based sites may require a fresh login. A successful result therefore describes most sites as reusable instead of promising universal login continuity.
+Before import, the UI states that processing stays on the current Mac, that passwords, credit cards, history, and Google Sync state are excluded, and that Passkey-, device-bound-, or client-certificate-based sites may require a fresh login. A successful result therefore describes most sites as reusable instead of promising universal login continuity, and explicitly reports whether the imported Profile became the default for new Task Spaces.
 
 During snapshotting, the UI advances across the fixed allowlisted datasets (Cookies, Local Storage, IndexedDB, WebStorage, File System/OPFS, storage/quota metadata, and compatible Service Worker data). Progress events contain only these stable dataset labels and numeric counters; they never expose source paths, origins, domains, or stored values, and a failed progress observer cannot abort the transaction.
 
@@ -129,6 +129,7 @@ Current isolated evidence proves:
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;
 - WebStorage and File System markers survive restart;
 - the imported Profile can become default and be selected by a new Space;
+- the success result visibly reports `默认 Profile：是/否`;
 - the UI displays last-used metadata and records explicit partial-import consent;
 - an unapproved partial result publishes no Profile;
 - an incorrect key publishes nothing and is cleaned on restart.

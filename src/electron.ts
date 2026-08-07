@@ -1974,6 +1974,10 @@ async function runChromeImportUiAudit(context: {
     }))()`,
     true,
   );
+  await writeFile(
+    join(testRoot, "chrome-import-result.png"),
+    await captureWebContentsPng(overviewView),
+  );
   const imported = profiles.list().find((profile) => profile.kind === "imported");
   if (!imported) throw new Error("Chrome import UI did not publish a Profile");
   const importedCookies = await session
@@ -2046,6 +2050,9 @@ async function runChromeImportUiAudit(context: {
     discovery.partialAllowed === false &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
+    result.stats.some(
+      (stat: any) => stat.label === "默认 Profile" && stat.value === "是",
+    ) &&
     phaseSequence.join(",") ===
       "snapshotting,importing-cookies,verifying,committed" &&
     snapshotProgress.length >= 4 &&

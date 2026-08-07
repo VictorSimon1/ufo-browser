@@ -792,6 +792,7 @@ function renderImportResult(result: any) {
         <span><b>${Number(result?.cookies?.imported) || 0}</b><small>Cookie</small></span>
         <span><b>${Number(result?.cookies?.partitioned) || 0}</b><small>CHIPS</small></span>
         <span><b>${Array.isArray(result?.storage?.copied) ? result.storage.copied.length : 0}</b><small>存储类型</small></span>
+        <span><b>${result?.profile?.isDefault === true ? "是" : "否"}</b><small>默认 Profile</small></span>
       </div>
       <button class="primary-button">完成</button>
     </div>
