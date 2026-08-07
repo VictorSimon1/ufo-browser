@@ -144,6 +144,7 @@ async function verifyArtifacts(appRoot, expectArchives) {
   for (const entry of [
     "/dist/main/chrome-cookie-worker.js",
     "/dist/main/chrome-storage-preflight-worker.js",
+    "/dist/main/profile-sync-cookie-diff-worker.js",
   ]) {
     if (!asarEntries.has(entry)) {
       throw new Error(`Required App ASAR entry was not packaged: ${entry}`);

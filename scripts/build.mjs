@@ -45,6 +45,14 @@ await build({
 
 await build({
   ...shared,
+  entryPoints: ["src/main/profile-sync/cookie-diff-worker.ts"],
+  outfile: "dist/main/profile-sync-cookie-diff-worker.js",
+  platform: "node",
+  format: "esm",
+});
+
+await build({
+  ...shared,
   entryPoints: {
     shell: "src/preload/shell.ts",
     page: "src/preload/page.ts",
