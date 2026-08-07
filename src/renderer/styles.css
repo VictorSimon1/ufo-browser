@@ -289,6 +289,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .chrome-profile-row:has(input:checked) { background: #edf5f2; }
 .chrome-profile-row input:checked ~ .radio-indicator { border-color: #16856c; }
 .chrome-profile-row input:checked ~ .radio-indicator i { transform: scale(1); }
+.import-scope-note { margin: 11px 3px 0; color: #74827d; font-size: 10px; line-height: 1.5; }
 .default-profile-choice { position: relative; min-height: 46px; display: flex; align-items: center; gap: 9px; padding: 12px 3px 4px; color: #42524d; cursor: pointer; }
 .default-profile-choice > span { width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid #aab5b1; border-radius: 5px; background: #fff; }
 .default-profile-choice > span i { color: #fff; font-size: 11px; font-style: normal; opacity: 0; }

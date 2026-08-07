@@ -648,6 +648,11 @@ function renderChromeProfiles(discovery: any) {
     choices.append(label);
   }
 
+  const scopeNote = document.createElement("p");
+  scopeNote.className = "import-scope-note";
+  scopeNote.textContent =
+    "仅复制网站登录状态；Chrome 临时会话 Cookie 将保留 30 天。不会导入密码、浏览记录或 Google 同步账号。";
+
   const defaultChoice = document.createElement("label");
   defaultChoice.className = "default-profile-choice";
   defaultChoice.innerHTML = '<input type="checkbox" checked /><span><i>✓</i></span><b>设为新 Task Space 的默认 Profile</b>';
@@ -664,7 +669,7 @@ function renderChromeProfiles(discovery: any) {
   submit.textContent = discovery.running ? "等待 Chrome 退出" : "导入登录状态";
   submit.disabled = Boolean(discovery.running);
   actions.append(back, submit);
-  form.append(choices, defaultChoice, actions);
+  form.append(choices, scopeNote, defaultChoice, actions);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const selected = form.querySelector<HTMLInputElement>(

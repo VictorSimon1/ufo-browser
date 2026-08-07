@@ -1923,6 +1923,7 @@ async function runChromeImportUiAudit(context: {
         detail: row.querySelector('small')?.textContent || '',
         selected: Boolean(row.querySelector('input')?.checked),
       })),
+      scope: document.querySelector('.import-scope-note')?.textContent || '',
       submitEnabled: !document.querySelector('.chrome-import-form button[type="submit"]')?.disabled,
     }))()`,
     true,
@@ -2011,6 +2012,8 @@ async function runChromeImportUiAudit(context: {
     discovery.profiles.length === 1 &&
     discovery.profiles[0].name === "Fixture Personal" &&
     discovery.profiles[0].selected === true &&
+    discovery.scope.includes("临时会话 Cookie 将保留 30 天") &&
+    discovery.scope.includes("不会导入密码、浏览记录或 Google 同步账号") &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
     phases.join(",") ===
