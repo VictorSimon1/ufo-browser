@@ -189,6 +189,39 @@ test("a published Profile remains committed when final job journaling fails", as
   }
 });
 
+test("a target partition conflict never deletes the pre-existing partition", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
+  const sourceRoot = join(root, "Chrome");
+  const profilePath = join(sourceRoot, "Default");
+  const jobsRoot = join(root, "UFO", "Chrome Import", "jobs");
+  const partitionsRoot = join(root, "UFO", "Partitions");
+  try {
+    await mkdir(profilePath, { recursive: true });
+    const transaction = await ChromeImportTransaction.create({
+      jobsRoot,
+      partitionsRoot,
+      source: sourceProfile(sourceRoot, profilePath),
+      targetChromiumVersion: "150.0.0.0",
+      id: "12121212-3434-5656-7878-909090909090",
+    });
+    await transaction.snapshot();
+    await mkdir(transaction.targetPartitionPath, { recursive: true });
+    const sentinelPath = join(transaction.targetPartitionPath, "existing-data");
+    await writeFile(sentinelPath, "must-survive");
+
+    await assert.rejects(
+      transaction.activateStorage(),
+      /target browser profile partition already exists/,
+    );
+    await transaction.fail("target-profile-conflict", false);
+
+    assert.equal(await readFile(sentinelPath, "utf8"), "must-survive");
+    await assert.rejects(access(transaction.jobRoot));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("newer Chrome Service Worker data is skipped instead of risking corruption", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-import-transaction-"));
   const sourceRoot = join(root, "Chrome");

@@ -89,6 +89,7 @@ Failure states are `failed`, `partial`, or `cleanup-pending`.
 
 - The old default Profile and all existing Spaces are never overwritten.
 - A Profile is added to `profiles.json` only after verification. A partial result is published only when the user explicitly allowed partial import on the confirmation screen.
+- If the generated target partition path already exists, the transaction aborts and removes only its own staging job; the pre-existing partition is never treated as rollback-owned data.
 - Registry mutations are serialized as next-state writes: the in-memory Profile list changes only after the atomic file replacement succeeds, and a failed write does not poison later retries.
 - The atomic Profile Registry write is the durable commit point. Failure to write the final job marker or remove its temporary directory after that point does not report a false import failure; cold-start recovery preserves the published partition and removes any leftover journal.
 - The job manifest records both source and target Chromium versions. An incompatible Service Worker dataset is skipped with the sanitized `service-worker-version-mismatch` warning and makes the result partial. A safe-copy failure isolated to the optional Service Worker dataset is cleaned up and reported as `service-worker-copy-failed`; required storage copy failures still abort and roll back the import.

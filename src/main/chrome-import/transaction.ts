@@ -303,7 +303,11 @@ export class ChromeImportTransaction {
     this.manifest.updatedAt = (this.options.now ?? Date.now)();
     await this.writeManifest().catch(() => undefined);
     if (!targetSessionCreated) {
-      await removeUnpublishedTransaction(this.jobRoot, this.targetPartitionPath);
+      await removeUnpublishedTransaction(
+        this.jobRoot,
+        this.targetPartitionPath,
+        this.manifest.target.activated,
+      );
     }
   }
 
@@ -458,8 +462,14 @@ async function readManifest(path: string): Promise<ChromeImportManifest | undefi
   }
 }
 
-async function removeUnpublishedTransaction(jobRoot: string, targetPath: string) {
-  await rm(targetPath, { recursive: true, force: true });
+async function removeUnpublishedTransaction(
+  jobRoot: string,
+  targetPath: string,
+  ownsTargetPartition: boolean,
+) {
+  if (ownsTargetPartition) {
+    await rm(targetPath, { recursive: true, force: true });
+  }
   await rm(jobRoot, { recursive: true, force: true });
 }
 
