@@ -8,6 +8,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -53,6 +54,12 @@ try {
   await rm(testRoot, { recursive: true, force: true });
   storageServer = await startStorageServer();
   await createChromeFixture(chromeRoot, safeStorageSecret);
+  if (mode !== "rollback") {
+    await symlink(
+      `ufo-fixture-${process.pid}`,
+      join(chromeRoot, "SingletonLock"),
+    );
+  }
 
   if (mode === "success") {
     const audit = await runPhase(
@@ -130,6 +137,7 @@ async function runPhase(auditFlag, auditName, secret) {
       X_BROWSER_TEST_CHROME_USER_DATA_PATH: chromeRoot,
       X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET: secret,
       X_BROWSER_TEST_CHROME_STORAGE_ORIGIN: storageServer.origin,
+      X_BROWSER_TEST_CHROME_QUIT_MODE: "remove-isolated-lock",
       [auditFlag]: "1",
     },
     stdio: ["ignore", "ignore", "pipe"],

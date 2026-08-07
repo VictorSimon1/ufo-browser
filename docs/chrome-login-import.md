@@ -73,6 +73,8 @@ The static origin-storage scanner has the same event-loop isolation guarantee. I
 
 Chrome must be normally closed before the snapshot. If `SingletonLock` points to a live process, the UI offers **退出 Chrome 并继续** or cancel. The quit action uses a normal macOS application quit request and waits for the lock to clear; it never uses `killall` or `SIGKILL`.
 
+The isolated success/restart E2E begins with a `SingletonLock` that points to the live fixture runner. It verifies that the UI reports Chrome as running, keeps the import submission disabled, and removes the fixture lock only after the explicit **退出 Chrome 并继续** click. A test-only source adapter is enabled only inside the isolated test App and removes only that fixture lock; automated verification never invokes AppleScript or requests a quit from the user's real Chrome.
+
 The source lock is checked before discovery, immediately before snapshotting, and again after the snapshot completes. If Chrome starts while LevelDB, IndexedDB, or Service Worker data is being copied, the snapshot is discarded before the target partition is activated.
 
 Import jobs are stored below the UFO-Browser user-data directory with directory mode `0700` and file mode `0600`. Source Profiles must be direct, non-symlink children of Chrome User Data. The copy skips symlinks, copies only an allowlist, and uses `COPYFILE_FICLONE` so APFS can clone-on-write with a normal-copy fallback.
@@ -134,6 +136,7 @@ The fixture creates encrypted v24 Cookies, one CHIPS Cookie, and real origin sto
 
 Current isolated evidence proves:
 
+- a running source disables import until the user explicitly chooses **退出 Chrome 并继续**, after which discovery is repeated and the same Profile becomes importable;
 - two Cookies are persisted, including one CHIPS Cookie;
 - a 10,000-Cookie batch keeps writes at the configured concurrency limit and verifies through indexed identity lookups instead of quadratic scans;
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;

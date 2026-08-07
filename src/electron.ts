@@ -1,5 +1,5 @@
-import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   app,
   BaseWindow,
@@ -21,6 +21,7 @@ import {
 } from "./main/profile-registry.js";
 import { recoverChromeImportJobs } from "./main/chrome-import/transaction.js";
 import { ChromeLoginImportService } from "./main/chrome-import/service.js";
+import { createChromeStableSourceAdapter } from "./main/chrome-import/discovery.js";
 import { createElectronCookieWriteTarget } from "./main/chrome-import/electron-target.js";
 import { createChromeStoragePreflightWorker } from "./main/chrome-import/storage-preflight-worker.js";
 import { readChromeCookies } from "./main/chrome-import/cookies.js";
@@ -194,6 +195,34 @@ async function start() {
       )
     : join(projectRoot, "dist", "bin", "ufo-keychain-helper");
   const testSafeStorageSecret = process.env.X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET;
+  const chromeUserDataPath =
+    isTestApp && process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
+      ? process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
+      : undefined;
+  const chromeFixtureRelativePath = chromeUserDataPath
+    ? relative(resolve(testRoot), resolve(chromeUserDataPath))
+    : "";
+  const chromeFixtureIsIsolated = Boolean(
+    chromeFixtureRelativePath &&
+      chromeFixtureRelativePath !== ".." &&
+      !chromeFixtureRelativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(chromeFixtureRelativePath),
+  );
+  const chromeSourceAdapter =
+    isTestApp &&
+    chromeUserDataPath &&
+    chromeFixtureIsIsolated &&
+    process.env.X_BROWSER_TEST_CHROME_QUIT_MODE === "remove-isolated-lock"
+      ? {
+          ...createChromeStableSourceAdapter(chromeUserDataPath),
+          quit: async () => {
+            await rm(join(chromeUserDataPath, "SingletonLock"), {
+              force: true,
+            });
+            return { done: true };
+          },
+        }
+      : undefined;
   const keychain =
     isTestApp && testSafeStorageSecret
       ? new MockKeychainProvider(testSafeStorageSecret)
@@ -208,10 +237,8 @@ async function start() {
       keychain,
     ),
     targetChromiumVersion: process.versions.chrome,
-    chromeUserDataPath:
-      isTestApp && process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
-        ? process.env.X_BROWSER_TEST_CHROME_USER_DATA_PATH
-        : undefined,
+    chromeUserDataPath,
+    sourceAdapter: chromeSourceAdapter,
     preflightStorage: createChromeStoragePreflightWorker(
       join(projectRoot, "dist", "main", "chrome-storage-preflight-worker.js"),
       partitionsRoot,
@@ -1936,6 +1963,35 @@ async function runChromeImportUiAudit(context: {
     overviewView,
     `Boolean(document.querySelector('.chrome-profile-row'))`,
   );
+  const runningSource = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      warning: document.querySelector('.source-status')?.classList.contains('warning') === true,
+      title: document.querySelector('.source-status strong')?.textContent || '',
+      action: document.querySelector('.source-status button')?.textContent || '',
+      submitDisabled: Boolean(document.querySelector('.chrome-import-form button[type="submit"]')?.disabled),
+    }))()`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "chrome-import-running-source.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.source-status.warning button')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `document.querySelector('.source-status')?.classList.contains('ready') === true && !document.querySelector('.chrome-import-form button[type="submit"]')?.disabled`,
+  );
+  const sourceReady = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      ready: document.querySelector('.source-status')?.classList.contains('ready') === true,
+      title: document.querySelector('.source-status strong')?.textContent || '',
+      submitDisabled: Boolean(document.querySelector('.chrome-import-form button[type="submit"]')?.disabled),
+    }))()`,
+    true,
+  );
   const discovery = await overviewView.webContents.executeJavaScript(
     `(() => ({
       title: document.querySelector('#profile-dialog-title')?.textContent || '',
@@ -2056,6 +2112,13 @@ async function runChromeImportUiAudit(context: {
     profileHome.profileRows === 1 &&
     profileHome.importLabel === "从 Chrome 导入登录状态" &&
     profileHome.syncDisabled === true &&
+    runningSource.warning === true &&
+    runningSource.title === "Google Chrome 正在运行" &&
+    runningSource.action === "退出 Chrome 并继续" &&
+    runningSource.submitDisabled === true &&
+    sourceReady.ready === true &&
+    sourceReady.title === "可以开始导入" &&
+    sourceReady.submitDisabled === false &&
     discovery.title === "从 Chrome 导入" &&
     discovery.profiles.length === 1 &&
     discovery.profiles[0].name === "Fixture Personal" &&
@@ -2093,6 +2156,8 @@ async function runChromeImportUiAudit(context: {
       {
         ok,
         profileHome,
+        runningSource,
+        sourceReady,
         discovery,
         result,
         importedProfile: {

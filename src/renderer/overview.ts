@@ -606,7 +606,7 @@ function renderChromeProfiles(discovery: any) {
   if (discovery.running) {
     const quit = document.createElement("button");
     quit.className = "secondary-button compact";
-    quit.textContent = "退出 Chrome";
+    quit.textContent = "退出 Chrome 并继续";
     quit.addEventListener("click", async () => {
       quit.disabled = true;
       quit.textContent = "正在退出";

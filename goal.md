@@ -707,6 +707,7 @@ npm run package:mac
 ## 13. 当前开发里程碑（2026-08-08）
 
 - 当前阶段保持纯浏览器 Presentation，左侧聊天 View 继续保留在运行时但不 attach。Chrome Stable 登录态一键导入的 Profile Registry、发现、快照、Keychain helper、Worker 解密、普通 Cookie/CHIPS 写入、站点存储复制、UI、回滚与冷启动恢复已经实现；真实 Chrome/Keychain 手工验收等待用户可输入密码或 Touch ID 时执行。
+- Chrome-running UI 现在有隔离硬门禁：success/restart fixture 启动时以指向测试 runner 的 `SingletonLock` 模拟活跃 Chrome，确认页必须显示“Google Chrome 正在运行”、禁用导入，并且只有用户点击“退出 Chrome 并继续”后才由测试专用 source adapter 删除该隔离锁、重新发现并允许提交。自动验证不会调用 AppleScript、不会请求退出或读取真实 Chrome。
 - Ego-compatible Skill/helper、Agent Space ownership、JanitorAI Turnstile 与 fingerprint/OOPIF 回归已经建立独立验证路径。
 - Overview 卡片使用真实页面缩略图与一个有界主 screencast；Space 打开后再返回 Overview 时复用同一 WebContents，动态页面继续更新，不以重载或替换 renderer 伪造连续性。
 - Space 卡片右上角使用 macOS 风格省略号菜单，支持鼠标、右键、Shift+F10、F2、Escape 与内联重命名；关闭动作收敛到同一菜单，避免悬浮关闭按钮误触。
