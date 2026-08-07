@@ -3,10 +3,9 @@ import type { KeychainProvider } from "./keychain.js";
 import { KeychainError } from "./keychain.js";
 import {
   defaultChromeUserDataPath,
-  detectChromeRunning,
-  discoverChromeProfiles,
-  requestChromeQuit,
+  createChromeStableSourceAdapter,
   type DiscoveredChromeProfile,
+  type BrowserLoginSourceAdapter,
 } from "./discovery.js";
 import {
   readChromeCookies,
@@ -53,17 +52,24 @@ export type ChromeLoginImportServiceOptions = {
   chromeUserDataPath?: string;
   createTarget: (profileId: string, partitionId: string) => Promise<CookieWriteTarget>;
   readCookies?: (databasePath: string) => Promise<ChromeCookieReadResult>;
+  sourceAdapter?: BrowserLoginSourceAdapter;
 };
 
 export class ChromeLoginImportService {
-  constructor(private readonly options: ChromeLoginImportServiceOptions) {}
+  private readonly source: BrowserLoginSourceAdapter;
+
+  constructor(private readonly options: ChromeLoginImportServiceOptions) {
+    this.source =
+      options.sourceAdapter ??
+      createChromeStableSourceAdapter(
+        options.chromeUserDataPath ?? defaultChromeUserDataPath(),
+      );
+  }
 
   async discover() {
-    const chromeUserDataPath =
-      this.options.chromeUserDataPath ?? defaultChromeUserDataPath();
     const [profiles, running] = await Promise.all([
-      discoverChromeProfiles(chromeUserDataPath),
-      detectChromeRunning(chromeUserDataPath),
+      this.source.discover(),
+      this.source.running(),
     ]);
     return {
       running: running.running,
@@ -72,9 +78,7 @@ export class ChromeLoginImportService {
   }
 
   async quitChrome() {
-    const chromeUserDataPath =
-      this.options.chromeUserDataPath ?? defaultChromeUserDataPath();
-    return requestChromeQuit(chromeUserDataPath);
+    return this.source.quit();
   }
 
   async importProfile(
@@ -82,12 +86,10 @@ export class ChromeLoginImportService {
     makeDefault: boolean,
     onProgress: (progress: ChromeImportProgress) => void = () => undefined,
   ): Promise<ChromeImportResult> {
-    const chromeUserDataPath =
-      this.options.chromeUserDataPath ?? defaultChromeUserDataPath();
-    if ((await detectChromeRunning(chromeUserDataPath)).running) {
+    if ((await this.source.running()).running) {
       throw new ChromeImportError("chrome-running");
     }
-    const source = (await discoverChromeProfiles(chromeUserDataPath)).find(
+    const source = (await this.source.discover()).find(
       (profile) => profile.profileDirName === profileDirName,
     );
     if (!source) throw new ChromeImportError("chrome-profile-not-found");

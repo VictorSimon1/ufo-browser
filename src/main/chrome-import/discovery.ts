@@ -43,6 +43,26 @@ export type DiscoveredChromeProfile = {
   approximateImportBytes: number;
 };
 
+export interface BrowserLoginSourceAdapter {
+  readonly browser: string;
+  readonly browserName: string;
+  discover(): Promise<DiscoveredChromeProfile[]>;
+  running(): Promise<ChromeRunningState>;
+  quit(): Promise<{ done: boolean }>;
+}
+
+export function createChromeStableSourceAdapter(
+  userDataPath = defaultChromeUserDataPath(),
+): BrowserLoginSourceAdapter {
+  return {
+    browser: "chrome",
+    browserName: "Google Chrome",
+    discover: () => discoverChromeProfiles(userDataPath),
+    running: () => detectChromeRunning(userDataPath),
+    quit: () => requestChromeQuit(userDataPath),
+  };
+}
+
 export function defaultChromeUserDataPath(home = homedir()) {
   return join(home, "Library", "Application Support", "Google", "Chrome");
 }

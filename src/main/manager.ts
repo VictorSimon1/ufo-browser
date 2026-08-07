@@ -467,11 +467,12 @@ export class TaskSpaceManager {
     if (!tab) throw new Error(`tab not found: ${targetId}`);
 
     await this.ensureProfileSessionSetup(space.profileId);
+    const profile = this.options.profiles.getOrThrow(space.profileId);
 
     const view = new ElectronWebContentsView({
       webPreferences: {
         preload: this.options.pagePreload,
-        partition: `persist:x-browser-profile-${space.profileId}`,
+        partition: `persist:${profile.partitionId}`,
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: true,
