@@ -103,6 +103,9 @@ try {
   );
   xBrowserTaskId = xBrowser.taskId;
 
+  validateRuntimeState(ego.runtimeState, "Ego");
+  validateRuntimeState(xBrowser.runtimeState, "UFO-Browser");
+
   assert.deepEqual(
     xBrowser.result,
     ego.result,
@@ -143,6 +146,10 @@ try {
     },
     performanceRatio,
     contract: xBrowser.contract,
+    runtimeState: {
+      ego: ego.runtimeState,
+      xBrowser: xBrowser.runtimeState,
+    },
     result: xBrowser.result,
   };
   await writeFile(
@@ -237,24 +244,37 @@ const descriptors = Object.fromEntries(contractNames.map(name => {
 const version = await measure('version', () => getBrowserVersion())
 const profiles = await measure('profiles', () => listProfiles())
 const noArgCreateTab = await resultOf(() => createTab())
+const profileEntries = Array.isArray(profiles?.profiles) ? profiles.profiles : []
+const profileShapes = [...new Set(profileEntries.map(profile => JSON.stringify({
+  keys: Object.keys(profile).sort(),
+  idType: typeof profile.id,
+  isDefaultType: typeof profile.isDefault,
+  nameType: typeof profile.name,
+})))].sort().map(shape => JSON.parse(shape))
 const contract = {
   descriptors,
   version: {
     keys: Object.keys(version).sort(),
     currentVersionType: typeof version.currentVersion,
-    updateAvailable: version.updateAvailable,
+    updateAvailableType: typeof version.updateAvailable,
   },
-  profiles: profiles.profiles.map(profile => ({
-    keys: Object.keys(profile).sort(),
-    id: profile.id,
-    isDefault: profile.isDefault,
-    nameType: typeof profile.name,
-  })),
+  profiles: {
+    keys: Object.keys(profiles).sort(),
+    profilesType: Array.isArray(profiles?.profiles) ? 'array' : typeof profiles?.profiles,
+    entryShapes: profileShapes,
+  },
   noArgCreateTab: {
     ok: noArgCreateTab.ok,
     name: noArgCreateTab.name,
     message: noArgCreateTab.message,
   },
+}
+const runtimeState = {
+  updateAvailable: version.updateAvailable,
+  profileCount: profileEntries.length,
+  defaultProfileCount: profileEntries.filter(profile => profile.isDefault === true).length,
+  uniqueProfileIds: new Set(profileEntries.map(profile => profile.id)).size === profileEntries.length,
+  validProfileIds: profileEntries.every(profile => typeof profile.id === 'string' && profile.id.length > 0),
 }
 const extensions = {
   waitForRequest: typeof waitForRequest,
@@ -297,8 +317,27 @@ const result = {
   serverResponse,
 }
 timings.totalMs = Math.round((performance.now() - auditStartedAt) * 10) / 10
-cliLog('__X_BROWSER_HELPER_PARITY__' + JSON.stringify({ taskId: task.id, contract, extensions, timings, result }))
+cliLog('__X_BROWSER_HELPER_PARITY__' + JSON.stringify({ taskId: task.id, contract, runtimeState, extensions, timings, result }))
 `;
+}
+
+function validateRuntimeState(state, label) {
+  assert.equal(
+    typeof state?.updateAvailable,
+    "boolean",
+    `${label} must expose a boolean updateAvailable state`,
+  );
+  assert.ok(
+    Number.isInteger(state?.profileCount) && state.profileCount >= 1,
+    `${label} must expose at least one browser profile`,
+  );
+  assert.equal(
+    state.defaultProfileCount,
+    1,
+    `${label} must expose exactly one default browser profile`,
+  );
+  assert.equal(state.uniqueProfileIds, true, `${label} profile ids must be unique`);
+  assert.equal(state.validProfileIds, true, `${label} profile ids must be non-empty strings`);
 }
 
 async function runHelperAudit(runner, taskName, fixtureUrl, screenshotPath, label) {
