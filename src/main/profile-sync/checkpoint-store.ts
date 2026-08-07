@@ -1,7 +1,10 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CHROME_STORAGE_PATHS } from "../chrome-import/storage-preflight.js";
 import { isValidProfileId } from "../profile-registry.js";
 import type { CookieSyncCheckpoint } from "./cookie-diff.js";
+
+const STORAGE_DATASETS = new Set<string>(CHROME_STORAGE_PATHS);
 
 export type ProfileSyncCheckpoint = {
   version: 1;
@@ -92,7 +95,7 @@ function validateCheckpoint(
   }
   for (const [dataset, entry] of Object.entries(checkpoint.storage)) {
     if (
-      !/^[A-Za-z][A-Za-z -]{0,63}$/.test(dataset) ||
+      !STORAGE_DATASETS.has(dataset) ||
       !entry ||
       (entry.sourceRevision !== null && !isSha256(entry.sourceRevision)) ||
       (entry.targetRevision !== null && !isSha256(entry.targetRevision)) ||

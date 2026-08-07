@@ -76,6 +76,33 @@ test("enabling sync is explicit and a first scan only establishes a baseline", a
   }
 });
 
+test("seeding Cookie checkpoints waits for storage preparation and preserves storage revisions", async () => {
+  const fixture = await createFixture();
+  try {
+    const storage = {
+      "Local Storage": {
+        sourceRevision: "d".repeat(64),
+        targetRevision: "e".repeat(64),
+        updatedAt: 100,
+      },
+    };
+    await fixture.checkpoints.save({
+      version: 1,
+      profileId: "chrome-clone",
+      cookies: {},
+      storage,
+      updatedAt: 100,
+    });
+
+    await fixture.service.seedProfile("chrome-clone", [cookie("seed")]);
+    const checkpoint = await fixture.checkpoints.load("chrome-clone");
+    assert.deepEqual(checkpoint?.storage, storage);
+    assert.equal(fixture.prepareCalls(), 1);
+  } finally {
+    await fixture.close();
+  }
+});
+
 async function createFixture(enabled = true, targetValue = "before") {
   const root = await mkdtemp(join(tmpdir(), "ufo-profile-sync-service-"));
   const registry = new BrowserProfileRegistry(join(root, "profiles.json"));
@@ -100,11 +127,16 @@ async function createFixture(enabled = true, targetValue = "before") {
   });
   const provider = new MockSourceProvider([cookie("before")]);
   const target = new MemoryCookieTarget([cookie(targetValue)]);
+  const checkpoints = new ProfileSyncCheckpointStore(join(root, "checkpoints"));
+  let prepareCalls = 0;
   const service = new ProfileSyncService({
     profiles: registry,
-    checkpoints: new ProfileSyncCheckpointStore(join(root, "checkpoints")),
+    checkpoints,
     sourceProviders: [provider],
     createTarget: async () => target,
+    prepareTarget: async () => {
+      prepareCalls++;
+    },
     diffCookies: async (source, current, checkpoint, at) =>
       diffProfileCookies(source, current, checkpoint, at),
     startupDelayMs: 60_000,
@@ -115,6 +147,8 @@ async function createFixture(enabled = true, targetValue = "before") {
     registry,
     provider,
     target,
+    checkpoints,
+    prepareCalls: () => prepareCalls,
     service,
     async close() {
       await service.close();

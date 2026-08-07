@@ -1019,6 +1019,7 @@ function profileDetail(profile: any) {
     baselined: "同步基线已建立",
     updated: "刚刚更新",
     conflict: "已保留 UFO 当前登录",
+    skipped: "网站存储将在来源空闲后的下次启动同步",
     error: "稍后自动重试",
   };
   const phaseLabels: Record<string, string> = {
@@ -1032,6 +1033,12 @@ function profileDetail(profile: any) {
 }
 
 function updateProfileSyncProgress(progress: any) {
+  document.body.dataset.profileSyncPhase = String(progress?.phase || "");
+  document.body.dataset.profileSyncResult = String(progress?.result || "");
+  document.body.dataset.profileSyncDetail = String(progress?.detailCode || "");
+  if (progress?.detailCode === "storage") {
+    document.body.dataset.profileSyncStorageSeen = "1";
+  }
   const profileId = String(progress?.profileId || "");
   const profile = browserProfiles.find((candidate) => candidate.id === profileId);
   if (profile) {
@@ -1062,13 +1069,20 @@ function renderProfileSyncStrip() {
   const phase = String(progress.phase || "");
   const active = ["scanning", "comparing", "applying"].includes(phase);
   const labels: Record<string, string> = {
-    scanning: "正在无感检查登录状态",
+    scanning:
+      progress.detailCode === "storage"
+        ? "正在无感检查网站存储"
+        : "正在无感检查登录状态",
     comparing: "正在比较登录状态差异",
-    applying: "正在更新变化的登录状态",
+    applying:
+      progress.detailCode === "storage"
+        ? "正在更新变化的网站存储"
+        : "正在更新变化的登录状态",
     unchanged: "登录状态已是最新",
     baselined: "自动同步已开启",
     updated: "登录状态已更新",
     conflict: "已保留 UFO-Browser 当前登录",
+    skipped: "网站存储将在来源空闲后的下次启动同步",
     error: "登录状态同步稍后自动重试",
     disabled: "自动同步已关闭",
   };

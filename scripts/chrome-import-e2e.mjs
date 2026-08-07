@@ -18,7 +18,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
 const mode = process.argv[2] || "success";
-if (!new Set(["success", "restart", "rollback"]).has(mode)) {
+if (!new Set(["success", "restart", "rollback", "sync"]).has(mode)) {
   throw new Error(`unsupported Chrome import verification mode: ${mode}`);
 }
 const testNamespace = `chrome-import-${mode}`;
@@ -33,6 +33,8 @@ const forbiddenAuditValues = [
   "fixture-opfs",
   "fixture-web-storage-copy",
   "fixture-file-system-copy",
+  "fixture-cookie-sync",
+  "fixture-web-storage-sync",
   "fixture.example",
 ];
 const configuredExecutable = process.env.X_BROWSER_TEST_EXECUTABLE;
@@ -94,6 +96,23 @@ try {
     );
     assert.equal(restarted.ok, true, JSON.stringify(restarted));
     process.stdout.write(`${JSON.stringify(restarted, null, 2)}\n`);
+  } else if (mode === "sync") {
+    const imported = await runPhase(
+      "X_BROWSER_TEST_CHROME_IMPORT_UI_AUDIT",
+      "chrome-import-ui-audit.json",
+      safeStorageSecret,
+    );
+    assert.equal(imported.ok, true, JSON.stringify(imported));
+    assert.equal(imported.importedProfile.syncEnabled, true);
+    await terminatePhase();
+    await updateChromeFixtureForSync(chromeRoot, safeStorageSecret);
+    const synced = await runPhase(
+      "X_BROWSER_TEST_PROFILE_SYNC_AUDIT",
+      "profile-sync-audit.json",
+      safeStorageSecret,
+    );
+    assert.equal(synced.ok, true, JSON.stringify(synced));
+    process.stdout.write(`${JSON.stringify(synced, null, 2)}\n`);
   } else {
     const failed = await runPhase(
       "X_BROWSER_TEST_CHROME_IMPORT_ROLLBACK_AUDIT",
@@ -138,6 +157,11 @@ async function runPhase(auditFlag, auditName, secret) {
       X_BROWSER_TEST_CHROME_SAFE_STORAGE_SECRET: secret,
       X_BROWSER_TEST_CHROME_STORAGE_ORIGIN: storageServer.origin,
       X_BROWSER_TEST_CHROME_QUIT_MODE: "remove-isolated-lock",
+      X_BROWSER_TEST_CHROME_IMPORT_ENABLE_SYNC:
+        mode === "sync" &&
+        auditFlag === "X_BROWSER_TEST_CHROME_IMPORT_UI_AUDIT"
+          ? "1"
+          : undefined,
       [auditFlag]: "1",
     },
     stdio: ["ignore", "ignore", "pipe"],
@@ -270,6 +294,41 @@ async function createChromeFixture(chromeRoot, secretText) {
   secret.fill(0);
   key.fill(0);
   database.close();
+}
+
+async function updateChromeFixtureForSync(chromeRoot, secretText) {
+  const profilePath = join(chromeRoot, "Default");
+  await writeFile(
+    join(profilePath, "WebStorage", "ufo-fixture-marker"),
+    "fixture-web-storage-sync",
+  );
+  const database = new DatabaseSync(join(profilePath, "Cookies"));
+  const secret = Buffer.from(secretText);
+  const key = pbkdf2Sync(secret, "saltysalt", 1003, 16, "sha1");
+  const host = "fixture.example";
+  const plaintext = Buffer.concat([
+    createHash("sha256").update(host).digest(),
+    Buffer.from("fixture-cookie-sync"),
+  ]);
+  const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
+  const encrypted = Buffer.concat([
+    Buffer.from("v10"),
+    cipher.update(plaintext),
+    cipher.final(),
+  ]);
+  try {
+    database
+      .prepare(
+        "UPDATE cookies SET encrypted_value = ?, last_update_utc = ? WHERE name = ?",
+      )
+      .run(encrypted, "13420000000000001", "regular");
+  } finally {
+    database.close();
+    secret.fill(0);
+    key.fill(0);
+    plaintext.fill(0);
+    encrypted.fill(0);
+  }
 }
 
 async function startStorageServer() {

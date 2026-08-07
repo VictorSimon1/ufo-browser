@@ -22,12 +22,18 @@ export type ProfileCookieSourceSnapshot =
       cookies: ImportedChromeCookie[];
     };
 
+export type ProfileStorageSource = {
+  root: string;
+  quiescent: boolean;
+};
+
 export interface ProfileCookieSourceProvider {
   supports(source: BrowserProfileSource): boolean;
   snapshot(
     profile: BrowserProfileRecord,
     previousRevision?: string,
   ): Promise<ProfileCookieSourceSnapshot>;
+  storageSource?(profile: BrowserProfileRecord): Promise<ProfileStorageSource>;
 }
 
 export class ChromeProfileCookieSourceProvider
@@ -60,18 +66,32 @@ export class ChromeProfileCookieSourceProvider
     );
     if (!discovered) throw new Error("profile-sync-source-missing");
     const databasePath = await chromeCookieDatabase(discovered.profilePath);
-    const revision = await fileSetRevision([
-      databasePath,
-      `${databasePath}-wal`,
-      `${databasePath}-shm`,
-    ]);
+    const revision = await cookieStoreRevision(databasePath);
     if (previousRevision && revision === previousRevision) {
       return { unchanged: true, revision };
     }
     return {
       unchanged: false,
       revision,
-      cookies: (await this.readCookies(databasePath)).cookies,
+      cookies: databasePath ? (await this.readCookies(databasePath)).cookies : [],
+    };
+  }
+
+  async storageSource(
+    profile: BrowserProfileRecord,
+  ): Promise<ProfileStorageSource> {
+    const source = profile.source;
+    if (source?.type !== "chrome") {
+      throw new Error("unsupported profile sync source");
+    }
+    const discovered = (await this.discover()).find(
+      (candidate) => candidate.profileDirName === source.profileDirName,
+    );
+    if (!discovered) throw new Error("profile-sync-source-missing");
+    const running = await this.source.running();
+    return {
+      root: discovered.profilePath,
+      quiescent: !running.running,
     };
   }
 
@@ -94,23 +114,61 @@ export class UfoProfileCookieSourceProvider
     private readonly createTarget: (
       profile: BrowserProfileRecord,
     ) => Promise<CookieWriteTarget>,
+    private readonly partitionsRoot: string,
+    private readonly prepareProfile?: (profileId: string) => Promise<unknown>,
   ) {}
 
   supports(source: BrowserProfileSource) {
     return source.type === "ufo";
   }
 
-  async snapshot(profile: BrowserProfileRecord): Promise<ProfileCookieSourceSnapshot> {
+  async snapshot(
+    profile: BrowserProfileRecord,
+    previousRevision?: string,
+  ): Promise<ProfileCookieSourceSnapshot> {
     if (profile.source?.type !== "ufo") {
       throw new Error("unsupported profile sync source");
     }
     const sourceProfile = this.getProfile(profile.source.profileId);
+    await this.prepareProfile?.(sourceProfile.id);
     const target = await this.createTarget(sourceProfile);
     try {
-      return { unchanged: false, cookies: await readProfileCookies(target) };
+      await target.flush();
+      const databasePath = await chromeCookieDatabase(
+        join(this.partitionsRoot, sourceProfile.partitionId),
+      );
+      const revision = await cookieStoreRevision(databasePath);
+      if (previousRevision && revision === previousRevision) {
+        return { unchanged: true, revision };
+      }
+      return {
+        unchanged: false,
+        revision,
+        cookies: await readProfileCookies(target),
+      };
     } finally {
       await target.dispose();
     }
+  }
+
+  async storageSource(
+    profile: BrowserProfileRecord,
+  ): Promise<ProfileStorageSource> {
+    if (profile.source?.type !== "ufo") {
+      throw new Error("unsupported profile sync source");
+    }
+    const sourceProfile = this.getProfile(profile.source.profileId);
+    await this.prepareProfile?.(sourceProfile.id);
+    const target = await this.createTarget(sourceProfile);
+    try {
+      await target.flush();
+    } finally {
+      await target.dispose();
+    }
+    return {
+      root: join(this.partitionsRoot, sourceProfile.partitionId),
+      quiescent: true,
+    };
   }
 }
 
@@ -126,7 +184,15 @@ async function chromeCookieDatabase(profilePath: string) {
       if (error?.code !== "ENOENT") throw error;
     }
   }
-  throw new Error("profile-sync-cookie-database-missing");
+  return undefined;
+}
+
+async function cookieStoreRevision(databasePath: string | undefined) {
+  return fileSetRevision(
+    databasePath
+      ? [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
+      : [],
+  );
 }
 
 async function fileSetRevision(paths: readonly string[]) {

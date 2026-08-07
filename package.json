@@ -32,6 +32,7 @@
     "verify:janitor": "npm run build && node scripts/janitor-turnstile-e2e.mjs",
     "verify:chrome-import": "npm run build && node scripts/chrome-import-e2e.mjs success",
     "verify:chrome-import-restart": "npm run build && node scripts/chrome-import-e2e.mjs restart",
+    "verify:profile-sync": "npm run build && node scripts/chrome-import-e2e.mjs sync",
     "verify:chrome-import-rollback": "npm run build && node scripts/chrome-import-e2e.mjs rollback",
     "cli:install:local": "npm run build && node scripts/install-local-cli.mjs",
     "skills:sync": "node scripts/sync-agent-skills.mjs",

@@ -29,6 +29,8 @@ import { createChromeCookieWorkerReader } from "./main/chrome-import/worker-read
 import { ProfileSyncCheckpointStore } from "./main/profile-sync/checkpoint-store.js";
 import { createProfileCookieDiffWorker } from "./main/profile-sync/cookie-diff-worker-reader.js";
 import { ProfileSyncService } from "./main/profile-sync/service.js";
+import { ProfileStorageSyncService } from "./main/profile-sync/storage-sync.js";
+import { createStorageRevisionWorker } from "./main/profile-sync/storage-revision-worker-reader.js";
 import {
   ChromeProfileCookieSourceProvider,
   UfoProfileCookieSourceProvider,
@@ -268,22 +270,63 @@ async function start() {
       partitionId: profile.partitionId,
       copiedStorage: [],
     });
+  const profileSyncCheckpoints = new ProfileSyncCheckpointStore(
+    join(userDataPath, "Profile Sync", "checkpoints"),
+  );
+  let prepareProfileStorage = (_profileId: string): Promise<unknown> =>
+    Promise.resolve();
+  const sourceProviders = [
+    new ChromeProfileCookieSourceProvider(
+      resolvedChromeSourceAdapter,
+      readChromeCookiesWorker,
+    ),
+    new UfoProfileCookieSourceProvider(
+      (profileId) => profiles.getOrThrow(profileId),
+      createProfileTarget,
+      partitionsRoot,
+      (profileId) => prepareProfileStorage(profileId),
+    ),
+  ];
+  const publishProfileSyncProgress = (status: unknown) => {
+    if (!overviewView.webContents.isDestroyed()) {
+      overviewView.webContents.send("x-browser:profile-sync-progress", status);
+    }
+  };
+  const profileStorageSync = new ProfileStorageSyncService({
+    profiles,
+    checkpoints: profileSyncCheckpoints,
+    sourceProviders,
+    partitionsRoot,
+    workRoot: join(userDataPath, "Profile Sync", "storage-work"),
+    scanRevisions: createStorageRevisionWorker(
+      join(
+        projectRoot,
+        "dist",
+        "main",
+        "profile-sync-storage-revision-worker.js",
+      ),
+    ),
+    flushTarget: async (profileId) => {
+      const target = await createProfileTarget(profiles.getOrThrow(profileId));
+      try {
+        await target.flush();
+      } finally {
+        await target.dispose();
+      }
+    },
+    onProgress: publishProfileSyncProgress,
+  });
+  prepareProfileStorage = (profileId) =>
+    profileStorageSync.prepareProfile(profileId);
   const profileSync = new ProfileSyncService({
     profiles,
-    checkpoints: new ProfileSyncCheckpointStore(
-      join(userDataPath, "Profile Sync", "checkpoints"),
-    ),
-    sourceProviders: [
-      new ChromeProfileCookieSourceProvider(
-        resolvedChromeSourceAdapter,
-        readChromeCookiesWorker,
-      ),
-      new UfoProfileCookieSourceProvider(
-        (profileId) => profiles.getOrThrow(profileId),
-        createProfileTarget,
-      ),
-    ],
+    checkpoints: profileSyncCheckpoints,
+    sourceProviders,
     createTarget: createProfileTarget,
+    prepareTarget: (profileId) => profileStorageSync.prepareProfile(profileId),
+    seedTarget: (profileId) => profileStorageSync.seedProfile(profileId),
+    enableTarget: (profileId) =>
+      profileStorageSync.rebaselineProfile(profileId),
     diffCookies: createProfileCookieDiffWorker(
       join(
         projectRoot,
@@ -292,11 +335,7 @@ async function start() {
         "profile-sync-cookie-diff-worker.js",
       ),
     ),
-    onProgress: (status) => {
-      if (!overviewView.webContents.isDestroyed()) {
-        overviewView.webContents.send("x-browser:profile-sync-progress", status);
-      }
-    },
+    onProgress: publishProfileSyncProgress,
   });
   const profileClone = new ProfileCloneService({
     profiles,
@@ -339,6 +378,8 @@ async function start() {
     partitionsRoot,
     pagePreload,
     captureWindow,
+    beforeProfileSessionSetup: (profileId) =>
+      profileStorageSync.prepareProfile(profileId),
     forcedPreviewSpaceId:
       isTestApp && Number.isSafeInteger(requestedOverviewSpaceId)
         ? requestedOverviewSpaceId
@@ -435,6 +476,7 @@ async function start() {
     profiles,
     chromeImport,
     profileSync,
+    profileStorageSync,
     profileClone,
     profileAvatars,
   });
@@ -684,6 +726,24 @@ async function start() {
       }).catch(async (error) => {
         await writeFile(
           join(testRoot, "chrome-import-restart-audit.json"),
+          `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+        ).catch(() => undefined);
+      });
+    }, 650);
+  }
+
+  if (isTestApp && process.env.X_BROWSER_TEST_PROFILE_SYNC_AUDIT === "1") {
+    setTimeout(() => {
+      void runProfileSyncAudit({
+        testRoot,
+        userDataPath,
+        profiles,
+        profileSync,
+        profileStorageSync,
+        overviewView,
+      }).catch(async (error) => {
+        await writeFile(
+          join(testRoot, "profile-sync-audit.json"),
           `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
         ).catch(() => undefined);
       });
@@ -966,6 +1026,7 @@ type IpcContext = {
   profiles: BrowserProfileRegistry;
   chromeImport: ChromeLoginImportService;
   profileSync: ProfileSyncService;
+  profileStorageSync: ProfileStorageSyncService;
   profileClone: ProfileCloneService;
   profileAvatars: ProfileAvatarStore;
 };
@@ -980,6 +1041,7 @@ function registerIpc(context: IpcContext) {
     profiles,
     chromeImport,
     profileSync,
+    profileStorageSync,
     profileClone,
     profileAvatars,
   } = context;
@@ -1019,6 +1081,7 @@ function registerIpc(context: IpcContext) {
     }
     const removed = await profiles.remove(id);
     await profileSync.removeProfile(id);
+    profileStorageSync.forgetProfile(id);
     await profileAvatars.remove(id);
     return removed;
   });
@@ -2319,6 +2382,21 @@ async function runChromeImportUiAudit(context: {
     `window.xBrowser.profiles.remove(${JSON.stringify(imported.id)}).then(() => 'removed').catch((error) => String(error))`,
     true,
   );
+  const syncRequested =
+    process.env.X_BROWSER_TEST_CHROME_IMPORT_ENABLE_SYNC === "1";
+  if (syncRequested) {
+    await overviewView.webContents.executeJavaScript(
+      `window.xBrowser.profiles.setSync(${JSON.stringify(imported.id)}, true)`,
+      true,
+    );
+    await waitUntil(
+      () =>
+        profiles.getOrThrow(imported.id).source?.loginSyncEnabled === true,
+      3_000,
+    );
+  }
+  const syncEnabled =
+    profiles.getOrThrow(imported.id).source?.loginSyncEnabled === true;
   await writeFile(
     join(testRoot, "chrome-import-ui.png"),
     await captureWebContentsPng(overviewView),
@@ -2380,6 +2458,7 @@ async function runChromeImportUiAudit(context: {
     Object.values(copiedStorageVerified).every(Boolean) &&
     profiles.getDefault().id === imported.id &&
     created.profileId === imported.id &&
+    (!syncRequested || syncEnabled) &&
     String(removeWhileUsed).includes("profile-in-use");
   await writeFile(
     join(testRoot, "chrome-import-ui-audit.json"),
@@ -2401,9 +2480,139 @@ async function runChromeImportUiAudit(context: {
           cookieCount: importedCookies.length,
           originStorageVerified,
           copiedStorageVerified,
+          syncEnabled,
         },
         createdSpace: { id: created.id, profileId: created.profileId },
         removeWhileUsed: String(removeWhileUsed).includes("profile-in-use"),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function runProfileSyncAudit(context: {
+  testRoot: string;
+  userDataPath: string;
+  profiles: BrowserProfileRegistry;
+  profileSync: ProfileSyncService;
+  profileStorageSync: ProfileStorageSyncService;
+  overviewView: WebContentsView;
+}) {
+  const {
+    testRoot,
+    userDataPath,
+    profiles,
+    profileSync,
+    profileStorageSync,
+    overviewView,
+  } = context;
+  const imported = profiles.list().find((profile) => profile.kind === "imported");
+  if (!imported) throw new Error("Profile sync audit requires an imported Profile");
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('#profile-button')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `document.querySelectorAll('.profile-row').length === 2`,
+  );
+
+  const intervalMs = 5;
+  let ticks = 0;
+  let maxGapMs = 0;
+  let previousAt = performance.now();
+  const heartbeat = setInterval(() => {
+    const now = performance.now();
+    maxGapMs = Math.max(maxGapMs, now - previousAt);
+    previousAt = now;
+    ticks++;
+  }, intervalMs);
+  let storageStatus;
+  let cookieStatus;
+  try {
+    storageStatus = await profileStorageSync.prepareProfile(imported.id);
+    cookieStatus = await profileSync.syncProfile(imported.id, "e2e");
+    // Startup may have already completed the real sync before this audit
+    // attaches. Keep the heartbeat alive for a few event-loop turns so the
+    // audit still detects a blocked main thread instead of reporting zero
+    // samples for a correctly deduplicated no-op scan.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  } finally {
+    clearInterval(heartbeat);
+  }
+
+  const targetCookies = await session
+    .fromPartition(`persist:${imported.partitionId}`)
+    .cookies.get({});
+  const cookieSynced = targetCookies.some(
+    (cookie) => cookie.name === "regular" && cookie.value === "fixture-cookie-sync",
+  );
+  const storageMarkerSynced =
+    (await readFile(
+      join(
+        userDataPath,
+        "Partitions",
+        imported.partitionId,
+        "WebStorage",
+        "ufo-fixture-marker",
+      ),
+      "utf8",
+    )) === "fixture-web-storage-sync";
+  const dom = await overviewView.webContents.executeJavaScript(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(
+        `.profile-row[data-profile-id="${imported.id}"]`,
+      )});
+      return {
+        toggleChecked: row?.querySelector('.profile-sync-toggle')?.getAttribute('aria-checked') || '',
+        storageProgressSeen: document.body.dataset.profileSyncStorageSeen === '1',
+        phase: document.body.dataset.profileSyncPhase || '',
+        result: document.body.dataset.profileSyncResult || '',
+        stripHidden: Boolean(document.querySelector('#profile-sync-strip')?.hidden),
+        stripLabel: document.querySelector('#profile-sync-label')?.textContent || '',
+        fillTransform: document.querySelector('#profile-sync-fill')?.style.transform || '',
+      };
+    })()`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "profile-sync-ui.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  const performanceAudit = {
+    heartbeatTicks: ticks,
+    maxGapMs: Number(maxGapMs.toFixed(1)),
+    maxStallMs: Number(Math.max(0, maxGapMs - intervalMs).toFixed(1)),
+  };
+  const syncEnabled =
+    profiles.getOrThrow(imported.id).source?.loginSyncEnabled === true;
+  const ok =
+    syncEnabled &&
+    cookieSynced &&
+    storageMarkerSynced &&
+    dom.toggleChecked === "true" &&
+    dom.storageProgressSeen === true &&
+    dom.fillTransform === "scaleX(1)" &&
+    performanceAudit.heartbeatTicks >= 2 &&
+    performanceAudit.maxStallMs < 50 &&
+    ["updated", "unchanged", "baselined"].includes(
+      String(storageStatus?.result),
+    ) &&
+    ["updated", "unchanged"].includes(String(cookieStatus?.result));
+  await writeFile(
+    join(testRoot, "profile-sync-audit.json"),
+    `${JSON.stringify(
+      {
+        ok,
+        profileId: imported.id,
+        syncEnabled,
+        cookieSynced,
+        storageMarkerSynced,
+        storageResult: storageStatus?.result,
+        cookieResult: cookieStatus?.result,
+        performance: performanceAudit,
+        dom,
       },
       null,
       2,

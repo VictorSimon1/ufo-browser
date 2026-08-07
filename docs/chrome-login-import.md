@@ -22,7 +22,7 @@ Not imported:
 - history, downloads, bookmarks, Favicons, extensions, tabs, windows, or tab groups;
 - Session Storage, push tokens, policies, Secure Preferences, or browser caches.
 
-Session Cookies receive an expiry 30 days from import so they can survive a UFO-Browser restart. This is shown in the product copy. The import is a one-time snapshot; `loginSyncEnabled` remains `false`, and there is no timer that can restore a Cookie after the user signs out in UFO-Browser.
+Session Cookies receive an expiry 30 days from import so they can survive a UFO-Browser restart. This is shown in the product copy. The initial import is always a self-contained transaction. Automatic synchronization is a separate per-Profile opt-in and never converts an import failure into a partially published Profile.
 
 ## Runtime flow
 
@@ -50,6 +50,24 @@ The implementation lives under `src/main/chrome-import/`:
 - `cookies.ts` reads Chrome SQLite through `node:sqlite`, supports `v10`/`v11`, PBKDF2-HMAC-SHA1, AES-128-CBC, Cookie DB v24 host digests, timestamp conversion, and sanitized warning counts.
 - `cookie-writer.ts` and `electron-target.ts` write and verify regular and partitioned Cookies in the same target partition.
 - `service.ts` coordinates progress, failure mapping, transaction commit, and sanitized results.
+
+## Optional ongoing Profile synchronization
+
+Imported Chrome Profiles and UFO-to-UFO clones share the same source binding in the Profile Registry. When the user enables automatic synchronization, UFO-Browser first records a fresh, non-destructive checkpoint for Cookies and allowlisted site-storage datasets. Enabling or re-enabling never overwrites either side.
+
+On later App launches, the target Profile Session is created lazily. Before the first `session.fromPartition()` for that Profile, `ProfileStorageSyncService` scans Local Storage, IndexedDB, WebStorage, File System/OPFS, Storage, quota metadata, and compatible Service Worker data in `profile-sync-storage-revision-worker.js`. The Worker hashes file contents off the Electron main event loop. QuotaManager revisions use a logical SQLite view: runtime access counters, timestamps, default zero-value bucket creation, and rollback/WAL sidecars do not create false conflicts, while persistent settings, non-zero quota metadata, custom buckets, and real dataset changes remain detectable. A hot rollback journal is recovered only in a private temporary copy, so scanning never mutates the user's Profile.
+
+Cookie synchronization runs after the storage gate, approximately 900 ms after startup, every five minutes, and when an enabled Profile becomes active after the debounce window. Source revisions avoid Cookie parsing when the database is unchanged. A Chrome source may be read for Cookie changes while Chrome is running, but file-based site storage is copied only from a quiescent source and otherwise waits for a later cold preparation. UFO clone sources are prepared recursively, flushed, and read from their direct source Profile; the clone keeps that direct binding instead of silently following an unrelated root Profile.
+
+Every dataset uses a three-way checkpoint containing only SHA-256 revisions:
+
+- source unchanged: do nothing, including when the user signed out inside UFO-Browser;
+- source changed and UFO still matches the checkpoint: atomically apply only that dataset or Cookie delta;
+- source and UFO both changed: keep UFO and advance the conflict checkpoint;
+- source deletion with no UFO divergence: propagate the deletion;
+- no changes: perform zero writes.
+
+Storage replacement uses per-Profile staging and backup directories with recovery before publication. A failed replacement restores the previous target. The Overview shows a three-pixel progress strip with sanitized scanning/applying/completion text; progress never contains paths, origins, Cookie identities, or values. Checkpoint files likewise contain hashes and timestamps only.
 
 The Profile Registry is `profiles.json`. Each imported Profile owns a generated partition such as `x-browser-profile-chrome-<id>`. New Spaces use the current default Profile unless the user explicitly selects another one; existing Spaces retain their original `profileId`.
 
@@ -129,6 +147,7 @@ npm run typecheck
 npm test
 npm run verify:chrome-import
 npm run verify:chrome-import-restart
+npm run verify:profile-sync
 npm run verify:chrome-import-rollback
 ```
 
@@ -145,13 +164,17 @@ Current isolated evidence proves:
 - Local Storage, IndexedDB, and OPFS are readable from the imported partition;
 - the no-network Chromium compatibility preflight completes before Cookie writes, while the same origin storage remains readable after import and restart;
 - WebStorage and File System markers survive restart;
+- an enabled imported Profile automatically receives changed Cookie and WebStorage fixture state after restart, without rewriting unchanged data;
+- QuotaManager runtime counters, timestamps, default bucket creation, and journal recovery do not create false UFO conflicts;
+- a 10,000-file storage revision scan stays off the main event loop with less than 50 ms measured stall;
+- UFO-to-UFO storage providers follow and flush the direct clone source;
 - the imported Profile can become default and be selected by a new Space;
 - the success result visibly reports `默认 Profile：是/否`;
 - the UI displays last-used metadata and records explicit partial-import consent;
 - an unapproved partial result publishes no Profile;
 - an incorrect key publishes nothing and is cleaned on restart.
 
-`npm run package:mac:test` additionally starts the packaged `UFO-Browser.app` with the same isolated fixture and completes the success audit. This verifies that `chrome-cookie-worker.js` and `chrome-storage-preflight-worker.js` can run from `app.asar`, the unpacked Keychain helper path resolves, and the packaged Bundle can persist Cookie/CHIPS and origin storage without using the real Keychain.
+`npm run package:mac:test` additionally starts the packaged `UFO-Browser.app` with the same isolated fixture and completes the success audit. This verifies that `chrome-cookie-worker.js`, `chrome-storage-preflight-worker.js`, `profile-sync-cookie-diff-worker.js`, and `profile-sync-storage-revision-worker.js` can run from `app.asar`, the unpacked Keychain helper path resolves, and the packaged Bundle can persist Cookie/CHIPS and origin storage without using the real Keychain.
 
 ## Remaining real-machine acceptance
 
@@ -165,7 +188,8 @@ When the user is available, perform this checklist:
 4. Approve the native macOS `Chrome Safe Storage` authorization with password or Touch ID. UFO-Browser must not display its own password field.
 5. Confirm a success result with sanitized Cookie/CHIPS counts and storage-type labels; no Cookie value, domain, origin, filesystem path, or Keychain text may appear.
 6. Open a new Task Space with the imported Profile and sample sites that cover a normal Cookie login, an HttpOnly login, and origin storage. Device-bound or Passkey-backed sites are allowed to request login again.
-7. Restart UFO-Browser and verify that the sampled login state and the default-Profile choice persist while existing Spaces still use their original Profile.
-8. Confirm Chrome still opens normally with its original Profile unchanged. Optionally remove the imported UFO Profile after closing Spaces that reference it, then restart UFO-Browser and verify its isolated partition is cleaned.
+7. Enable automatic synchronization for the imported Profile. The first scan must establish a baseline without replacing a UFO-side login or logout.
+8. Restart UFO-Browser and verify that the sampled login state and the default-Profile choice persist while existing Spaces still use their original Profile. Then make one harmless login-state change in the source Profile, close Chrome normally, restart UFO-Browser, and confirm only that change is reflected while the thin Overview progress strip remains responsive.
+9. Confirm Chrome still opens normally with its original Profile unchanged. Optionally remove the imported UFO Profile after closing Spaces that reference it, then restart UFO-Browser and verify its isolated partition is cleaned.
 
 If the native authorization is canceled, denied, or the real Cookie database cannot be decrypted, capture only the stable UI error code and phase. Do not collect the Cookie database, Keychain secret, raw helper output, source paths, or site identifiers.

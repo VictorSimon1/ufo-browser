@@ -56,6 +56,9 @@ export type ProfileSyncServiceOptions = {
     checkpoint?: CookieSyncCheckpoint,
     now?: number,
   ) => Promise<CookieSyncDiff>;
+  prepareTarget?: (profileId: string) => Promise<unknown>;
+  seedTarget?: (profileId: string) => Promise<unknown>;
+  enableTarget?: (profileId: string) => Promise<unknown>;
   onProgress?: (status: ProfileSyncStatus) => void;
   now?: () => number;
   startupDelayMs?: number;
@@ -112,6 +115,7 @@ export class ProfileSyncService {
         lastAttemptAt: this.now(),
       });
     }
+    await this.options.enableTarget?.(profileId);
     return this.syncProfile(profileId, "enabled");
   }
 
@@ -163,6 +167,12 @@ export class ProfileSyncService {
     sourceRevision?: string,
   ) {
     const profile = this.options.profiles.getOrThrow(profileId);
+    if (this.options.seedTarget) {
+      await this.options.seedTarget(profileId);
+    } else {
+      await this.options.prepareTarget?.(profileId);
+    }
+    const checkpoint = await this.options.checkpoints.load(profileId);
     const target = await this.options.createTarget(profile);
     try {
       const targetCookies = await readProfileCookies(target);
@@ -177,7 +187,7 @@ export class ProfileSyncService {
         profileId,
         sourceRevision,
         cookies: diff.checkpoint,
-        storage: {},
+        storage: checkpoint?.storage ?? {},
         updatedAt: this.now(),
       });
     } finally {
@@ -223,6 +233,7 @@ export class ProfileSyncService {
         reason,
         lastAttemptAt: attemptAt,
       });
+      await this.options.prepareTarget?.(profileId);
       const checkpoint = await this.options.checkpoints.load(profileId);
       const provider = this.options.sourceProviders.find((candidate) =>
         candidate.supports(profile.source!),
@@ -284,7 +295,8 @@ export class ProfileSyncService {
           storage: checkpoint?.storage ?? {},
           updatedAt: this.now(),
         });
-        const result: ProfileSyncResult = !checkpoint
+        const result: ProfileSyncResult =
+          !checkpoint || diff.stats.baselined > 0
           ? "baselined"
           : diff.stats.conflicts > 0
             ? "conflict"

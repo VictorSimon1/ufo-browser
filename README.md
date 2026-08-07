@@ -16,7 +16,7 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **Real Chromium input** — clicks, typing, wheel events, drag operations, screenshots, and OOPIF interaction flow through Chromium's DevTools Protocol.
 - **Human/Agent control isolation** — an App-level control layer blocks human input while an Agent is active without being injected into the website DOM or appearing in page screenshots.
 - **Reusable login state** — Agents can work with the browser's existing authenticated session while remaining separated from the user's current page flow.
-- **One-click Chrome login import** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile without modifying Chrome.
+- **One-click Chrome login import and opt-in sync** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile, then incrementally follow that Profile without modifying Chrome or reviving a UFO logout.
 - **No visible automation cursor** — Agent input never moves the macOS pointer and does not rely on OS-level keyboard or mouse automation.
 - **Bounded background rendering** — hidden Agent pages use a shared compositor surface only when required, then park again to reduce GPU usage.
 - **Live Overview** — persistent 3:2 Space previews update with page activity while using adaptive capture cadence and caching.
@@ -135,6 +135,7 @@ npm run verify:fingerprint
 npm run verify:janitor
 npm run verify:chrome-import
 npm run verify:chrome-import-restart
+npm run verify:profile-sync
 npm run verify:chrome-import-rollback
 ```
 
@@ -172,7 +173,7 @@ See [docs/macos-build.md](docs/macos-build.md) for target directories, ownership
 
 Open Profile management in Overview and choose **从 Chrome 导入登录状态**. UFO-Browser discovers Chrome Stable `Default` and `Profile N` entries, asks before requesting a normal Chrome quit, then publishes the result as a separate UFO Profile only after Cookie verification succeeds. Publishing a partial Profile requires an explicit opt-in that is disabled by default.
 
-Chrome session Cookies are converted to a 30-day expiry so they survive UFO-Browser restarts. The import is a one-time snapshot: automatic periodic synchronization is disabled, and signing out inside UFO-Browser does not resurrect an older Chrome Cookie. Some Passkey, device-bound, client-certificate, or risk-controlled sites may still require a new login.
+Chrome session Cookies are converted to a 30-day expiry so they survive UFO-Browser restarts. The initial import is a transactional snapshot. Each imported or cloned UFO Profile can then enable automatic login-state synchronization explicitly. Enabling it first records a non-destructive baseline; later App starts scan allowlisted site storage in a Worker before that Profile's Chromium Session is created, while Cookie revisions are checked at startup, on a bounded schedule, and when the Profile becomes active. Only source changes are applied, unchanged data is not rewritten, and any UFO-side logout or divergence wins instead of being resurrected from the source. Chrome site-storage copying waits for Chrome to be idle and may defer until the next cold start. Some Passkey, device-bound, client-certificate, or risk-controlled sites may still require a new login.
 
 The automated suite uses an isolated Chrome fixture and Mock Keychain only. A final manual acceptance against the real macOS `Chrome Safe Storage` item is intentionally deferred until the user can approve the native password or Touch ID prompt. See [docs/chrome-login-import.md](docs/chrome-login-import.md) for the implementation and security contract.
 
@@ -187,7 +188,7 @@ The current milestone focuses on the pure browser experience and Agent runtime:
 - OOPIF and Turnstile behavior
 - Fingerprint and helper parity regression gates
 - Bounded GPU and background compositor usage
-- Transactional Chrome login-state import with isolated Profiles, CHIPS support, Worker-based Cookie parsing, rollback, and restart persistence
+- Transactional Chrome login-state import with isolated Profiles, CHIPS support, Worker-based Cookie parsing, rollback, restart persistence, opt-in incremental Cookie/site-storage sync, and UFO-to-UFO Profile cloning with avatars
 
 ## Ego compatibility
 

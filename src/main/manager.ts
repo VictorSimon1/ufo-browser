@@ -94,6 +94,7 @@ type ManagerOptions = {
   captureWindow: BaseWindow;
   publishPreviewFrame: (frame: PreviewFrame) => void;
   forcedPreviewSpaceId?: number;
+  beforeProfileSessionSetup?: (profileId: string) => Promise<unknown>;
 };
 
 export class TaskSpaceManager {
@@ -144,13 +145,9 @@ export class TaskSpaceManager {
 
   async initialize() {
     this.state = await this.options.store.load();
-    const profileIds = new Set([
-      "default",
-      ...this.state.spaces.map((space) => space.profileId),
-    ]);
-    for (const profileId of profileIds) {
-      await this.ensureProfileSessionSetup(profileId);
-    }
+    // Profile Sessions are created lazily by createSpace/ensureTabRuntime.
+    // This keeps startup light and lets the storage-sync gate run while the
+    // already-loaded Overview can show its real progress strip.
   }
 
   onChanged(listener: () => void) {
@@ -2323,6 +2320,7 @@ export class TaskSpaceManager {
     if (!setup) {
       setup = (async () => {
         const profile = this.options.profiles.getOrThrow(profileId);
+        await this.options.beforeProfileSessionSetup?.(profileId);
         await ensureChromiumProfilePreferences(
           this.options.partitionsRoot,
           profileId,
