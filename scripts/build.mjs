@@ -1,4 +1,5 @@
 import { chmod, cp, mkdir, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { build } from "esbuild";
 
@@ -77,8 +78,31 @@ await cp("src/renderer/agent-overlay.css", "dist/renderer/agent-overlay.css");
 await cp("src/renderer/styles.css", "dist/renderer/styles.css");
 
 await mkdir(join(dist, "bin"), { recursive: true });
+if (process.platform === "darwin") {
+  await run("/usr/bin/xcrun", [
+    "swiftc",
+    "native/macos/ufo-keychain-helper.swift",
+    "-framework",
+    "Security",
+    "-O",
+    "-o",
+    join(dist, "bin", "ufo-keychain-helper"),
+  ]);
+  await chmod(join(dist, "bin", "ufo-keychain-helper"), 0o755);
+}
 for (const name of ["ufo-browser", "x-browser"]) {
   await cp("scripts/ufo-browser-launcher.sh", join(dist, "bin", name));
   await chmod(join(dist, "bin", name), 0o755);
 }
 console.log("UFO-Browser build complete");
+
+function run(command, args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { cwd: root, stdio: "inherit" });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolvePromise();
+      else reject(new Error(`${command} failed (${signal || code})`));
+    });
+  });
+}

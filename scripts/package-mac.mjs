@@ -124,6 +124,7 @@ async function verifyArtifacts(appRoot, expectArchives) {
     "Contents/Resources/icon.png",
     "Contents/Resources/skills/ufo-browser/SKILL.md",
     "Contents/Resources/skills/ufo-browser/agents/openai.yaml",
+    "Contents/Resources/app.asar.unpacked/dist/bin/ufo-keychain-helper",
   ];
   for (const relative of required) await access(join(appRoot, relative));
 
