@@ -128,7 +128,11 @@ async function launchAndObserve(expectedRevision) {
   stderr = "";
   child = spawn(electron, ["."], {
     cwd: root,
-    env: { ...process.env, X_BROWSER_TEST_APP: "1" },
+    env: {
+      ...process.env,
+      X_BROWSER_TEST_APP: "1",
+      X_BROWSER_TEST_FAIL_COLD_PREVIEW: "1",
+    },
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr.on("data", (chunk) => {

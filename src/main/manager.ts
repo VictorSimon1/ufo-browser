@@ -65,6 +65,7 @@ type PreviewFrame = {
 
 const MAX_PREVIEW_CACHE_ENTRIES = 24;
 const MAX_PREVIEW_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_PREVIEW_RECOVERY_ATTEMPTS = 4;
 // A detached WebContents has no live AppKit/Viz surface, so keeping one recent
 // real page warm makes the first post-restart Space open instantaneously
 // without turning Overview into a collection of active browser windows.
@@ -98,6 +99,7 @@ type ManagerOptions = {
   captureWindow: BaseWindow;
   publishPreviewFrame: (frame: PreviewFrame) => void;
   forcedPreviewSpaceId?: number;
+  forceColdPreviewCaptureFailure?: boolean;
   beforeProfileSessionSetup?: (profileId: string) => Promise<unknown>;
 };
 
@@ -1178,10 +1180,12 @@ export class TaskSpaceManager {
             ]);
           } else {
             await Promise.all([
-              Promise.race([runtime.loading, delay(720)]),
-              delay(650),
+              Promise.race([runtime.loading, delay(1100)]),
+              delay(520),
             ]);
           }
+        } else if (!runtime.loaded) {
+          await Promise.race([runtime.loading, delay(600)]);
         } else {
           await Promise.race([runtime.loading, delay(180)]);
         }
@@ -1189,12 +1193,15 @@ export class TaskSpaceManager {
       if (!this.previewActive) {
         throw new Error("overview preview is no longer active");
       }
+      if (coldStart && this.options.forceColdPreviewCaptureFailure) {
+        throw new Error("forced cold preview capture failure");
+      }
       const capture = async () => {
         if (coldStart) {
           try {
-            return await this.captureCdpPreview(spaceId, view, bounds, 320);
+            return await this.captureCdpPreview(spaceId, view, bounds, 700);
           } catch {
-            return this.captureNativePreview(spaceId, view, bounds, 260);
+            return this.captureNativePreview(spaceId, view, bounds, 700);
           }
         }
         try {
@@ -1460,7 +1467,7 @@ export class TaskSpaceManager {
     const qualityAttempt = this.previewQualityAttempts.get(spaceId) ?? 0;
     const coldSequence = cold || qualityAttempt > 0;
     const runtimesBeforeCapture = new Set(this.runtimes.keys());
-    let keepRuntimeForQualityRetry = false;
+    let keepRuntimeForRetry = false;
     let captureSucceeded = false;
     this.previewCaptures.add(spaceId);
     if (cold) this.coldPreviewCaptures.add(spaceId);
@@ -1482,7 +1489,7 @@ export class TaskSpaceManager {
           await this.pageHasVisualContent(retryView),
       );
       if (needsQualityRetry && initialTargetId) {
-        keepRuntimeForQualityRetry = true;
+        keepRuntimeForRetry = true;
         this.previewQualityAttempts.set(spaceId, qualityAttempt + 1);
         this.previewQualityRetryTargets.set(spaceId, initialTargetId);
         // Do not let capturePreview's short freshness cache return the same
@@ -1523,13 +1530,46 @@ export class TaskSpaceManager {
             : Number.POSITIVE_INFINITY,
       );
     } catch (error) {
-      this.previewQualityAttempts.delete(spaceId);
-      this.previewQualityRetryTargets.delete(spaceId);
       this.previewErrors.set(spaceId, String(error));
-      this.previewDueAt.set(
-        spaceId,
-        Date.now() + (coldSequence ? 1600 : 3000),
+      const retryRuntime = initialTargetId
+        ? this.runtimes.get(initialTargetId)
+        : undefined;
+      const retrySpace = this.getSpace(spaceId);
+      const retryTab = retrySpace?.tabs.find(
+        (tab) => tab.targetId === initialTargetId,
       );
+      const shouldKeepLoadingRuntime = Boolean(
+        coldSequence &&
+          initialTargetId &&
+          retryRuntime &&
+          !retryRuntime.view.webContents.isDestroyed() &&
+          retryTab &&
+          isRemoteWebUrl(retryTab.url) &&
+          qualityAttempt < MAX_PREVIEW_RECOVERY_ATTEMPTS &&
+          this.previewActive &&
+          this.visiblePreviewSpaceIds.has(spaceId),
+      );
+      if (shouldKeepLoadingRuntime && initialTargetId) {
+        // Imported Profiles can need more than the first bounded capture
+        // window to restore Chromium storage and commit a Viz frame. Keep the
+        // same renderer loading for a warm retry; destroying it here restarts
+        // profile/page initialization forever and leaves only placeholders.
+        keepRuntimeForRetry = true;
+        this.previewQualityAttempts.set(spaceId, qualityAttempt + 1);
+        this.previewQualityRetryTargets.set(spaceId, initialTargetId);
+        this.previewCache.delete(initialTargetId);
+        this.previewDueAt.set(
+          spaceId,
+          Date.now() + (retryRuntime?.loaded ? 180 : 420),
+        );
+      } else {
+        this.previewQualityAttempts.delete(spaceId);
+        this.previewQualityRetryTargets.delete(spaceId);
+        this.previewDueAt.set(
+          spaceId,
+          Date.now() + (coldSequence ? 1600 : 3000),
+        );
+      }
     } finally {
       const liveCandidateTarget = (() => {
         const space = this.getSpace(spaceId);
@@ -1556,7 +1596,7 @@ export class TaskSpaceManager {
           initialTargetId &&
           this.parkRestoredPreviewRuntime(spaceId, initialTargetId),
       );
-      if (!keepRuntimeForQualityRetry) {
+      if (!keepRuntimeForRetry) {
         const cleanupTargets = new Set(previewOnlyTargets);
         if (coldSequence && initialTargetId) cleanupTargets.add(initialTargetId);
         if (liveCandidateTarget) cleanupTargets.delete(liveCandidateTarget);
@@ -1573,7 +1613,7 @@ export class TaskSpaceManager {
       await this.requestOverviewScreencastReconcile();
       if (
         liveCandidateTarget &&
-        !keepRuntimeForQualityRetry &&
+        !keepRuntimeForRetry &&
         this.overviewScreencast?.targetId !== liveCandidateTarget
       ) {
         await this.releasePreviewOnlyRuntime(liveCandidateTarget);

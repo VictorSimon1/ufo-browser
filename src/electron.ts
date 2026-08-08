@@ -382,6 +382,8 @@ async function start() {
       isTestApp && Number.isSafeInteger(requestedOverviewSpaceId)
         ? requestedOverviewSpaceId
         : undefined,
+    forceColdPreviewCaptureFailure:
+      isTestApp && process.env.X_BROWSER_TEST_FAIL_COLD_PREVIEW === "1",
     publishPreviewFrame: ({ spaceId, revision, data }) => {
       if (overviewView.webContents.isDestroyed()) return;
       overviewView.webContents.send("x-browser:overview-preview-frame", {
