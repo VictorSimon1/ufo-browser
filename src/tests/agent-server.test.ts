@@ -113,7 +113,7 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
 
     const version = await rpc(socket, 9, "getBrowserVersion", []);
     assert.deepEqual(version.result, {
-      currentVersion: "0.1.1",
+      currentVersion: "0.1.2",
       updateAvailable: false,
     });
 

@@ -27,7 +27,7 @@ export class AgentServer {
     private readonly leases: SpaceLeaseRegistry,
     private readonly snapshotService: SnapshotService,
     private readonly broker: CdpBroker,
-    private readonly browserVersion = "0.1.1",
+    private readonly browserVersion = "0.1.2",
   ) {}
 
   async listen() {
