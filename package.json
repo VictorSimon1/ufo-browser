@@ -84,6 +84,25 @@
         "dir"
       ],
       "identity": null
+    },
+    "dmg": {
+      "title": "UFO-Browser ${version}",
+      "iconSize": 128,
+      "iconTextSize": 14,
+      "contents": [
+        {
+          "x": 140,
+          "y": 190,
+          "type": "file",
+          "name": "UFO-Browser.app"
+        },
+        {
+          "x": 400,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   }
 }

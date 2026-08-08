@@ -8,7 +8,6 @@ import {
   readdir,
   rm,
   stat,
-  symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -115,25 +114,8 @@ async function createArchives(appRoot) {
     appRoot,
     zipPath,
   ]);
-  const appDirectory = dirname(appRoot);
-  const applicationsLink = join(appDirectory, "Applications");
-  await rm(applicationsLink, { force: true });
-  await symlink("/Applications", applicationsLink);
-  try {
-    await run("/usr/bin/hdiutil", [
-      "create",
-      "-volname",
-      `UFO-Browser ${packageInfo.version}`,
-      "-srcfolder",
-      appDirectory,
-      "-ov",
-      "-format",
-      "UDZO",
-      dmgPath,
-    ]);
-  } finally {
-    await rm(applicationsLink, { force: true });
-  }
+  const builder = join(root, "node_modules/.bin/electron-builder");
+  await run(builder, ["--mac", "dmg", `--prepackaged=${appRoot}`]);
 }
 
 async function verifyDmgLayout(dmgPath) {
@@ -150,6 +132,7 @@ async function verifyDmgLayout(dmgPath) {
     ]);
     mounted = true;
     await access(join(mountRoot, "UFO-Browser.app"));
+    await access(join(mountRoot, ".DS_Store"));
     const applicationsLink = await lstat(join(mountRoot, "Applications"));
     if (!applicationsLink.isSymbolicLink()) {
       throw new Error("DMG Applications target is not a symbolic link");
