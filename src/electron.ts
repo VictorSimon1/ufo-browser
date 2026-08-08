@@ -706,6 +706,7 @@ async function start() {
         profiles,
         presentation,
         overviewView,
+        overlayView,
       }).catch(
         async (error) => {
           await writeFile(
@@ -1240,25 +1241,25 @@ function registerIpc(context: IpcContext) {
     browserView.webContents.send("x-browser:browser-state", manager.navigationState(space.id));
     return space;
   });
-  shell("x-browser:overview:prepare", async (_event, spaceId: number) => {
+  shell("x-browser:overview:open", async (_event, spaceId: number, value?: unknown) => {
     const id = assertSpaceId(spaceId);
-    await manager.activeViewForPresentation(id);
-  });
-  shell("x-browser:overview:transition-snapshot", async (_event, value: unknown) => {
-    const rect = clippedCaptureRect(value, overviewView.getBounds());
-    const snapshot = await overviewView.webContents.capturePage(rect);
-    return snapshot.toDataURL();
-  });
-  shell("x-browser:overview:open", async (_event, spaceId: number) => {
-    const id = assertSpaceId(spaceId);
-    await presentation.showSpace(id);
+    const source = value
+      ? clippedCaptureRect(value, overviewView.getBounds())
+      : undefined;
     const space = manager.getSpace(id);
     if (space) profileSync.notifyProfileActive(space.profileId);
     browserView.webContents.send(
       "x-browser:browser-state",
       manager.navigationState(id),
     );
+    await presentation.showSpace(id, source ? { source } : undefined);
   });
+  shell("x-browser:space-transition:ready", (_event, token: string) =>
+    presentation.notifyTransitionReady(String(token)),
+  );
+  shell("x-browser:space-transition:finished", (_event, token: string) =>
+    presentation.notifyTransitionFinished(String(token)),
+  );
   shell("x-browser:overview:rename", (_event, spaceId: number, name: string) =>
     manager.renameSpace(assertSpaceId(spaceId), String(name)),
   );
@@ -2122,8 +2123,16 @@ async function runSpaceUiAudit(context: {
   profiles: BrowserProfileRegistry;
   presentation: PresentationCoordinator;
   overviewView: WebContentsView;
+  overlayView: WebContentsView;
 }) {
-  const { testRoot, manager, profiles, presentation, overviewView } = context;
+  const {
+    testRoot,
+    manager,
+    profiles,
+    presentation,
+    overviewView,
+    overlayView,
+  } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const initial = manager.listSpaces()[0];
   if (!initial) throw new Error("space UI audit requires one Space");
@@ -2279,15 +2288,18 @@ async function runSpaceUiAudit(context: {
     true,
   );
   await waitForRenderer(
-    overviewView,
-    `Boolean(document.querySelector('.space-open-transition-surface'))`,
+    overlayView,
+    `Boolean(document.querySelector('.space-transition.ready'))`,
   );
-  await wait(80);
-  const openingTransition = await overviewView.webContents.executeJavaScript(
+  await wait(56);
+  const openingTransition = await overlayView.webContents.executeJavaScript(
     `(() => {
-      const stage = document.querySelector('.space-open-transition');
-      const surface = stage?.querySelector('.space-open-transition-surface');
-      const shade = stage?.querySelector('.space-open-transition-shade');
+      const stage = document.querySelector('.space-transition');
+      const surface = stage?.querySelector('.transition-surface');
+      const shade = stage?.querySelector('.transition-shade');
+      const overview = stage?.querySelector('.transition-overview');
+      const chrome = stage?.querySelector('.transition-chrome');
+      const page = stage?.querySelector('.transition-page');
       const surfaceStyle = surface ? getComputedStyle(surface) : null;
       const surfaceRect = surface?.getBoundingClientRect();
       return {
@@ -2296,8 +2308,12 @@ async function runSpaceUiAudit(context: {
         sourceWidth: Number(stage?.getAttribute('data-source-width') || 0),
         sourceHeight: Number(stage?.getAttribute('data-source-height') || 0),
         bodyLocked: document.body.classList.contains('space-transitioning'),
-        naturalWidth: surface?.naturalWidth || 0,
-        naturalHeight: surface?.naturalHeight || 0,
+        overviewNaturalWidth: overview?.naturalWidth || 0,
+        overviewNaturalHeight: overview?.naturalHeight || 0,
+        chromeNaturalWidth: chrome?.naturalWidth || 0,
+        chromeNaturalHeight: chrome?.naturalHeight || 0,
+        pageNaturalWidth: page?.naturalWidth || 0,
+        pageNaturalHeight: page?.naturalHeight || 0,
         renderedWidth: surfaceRect?.width || 0,
         renderedHeight: surfaceRect?.height || 0,
         viewportWidth: innerWidth,
@@ -2306,13 +2322,15 @@ async function runSpaceUiAudit(context: {
         borderRadius: surfaceStyle?.borderRadius || '',
         shadeOpacity: shade ? Number(getComputedStyle(shade).opacity) : 0,
         activeAnimations: stage?.getAnimations({ subtree: true }).filter((animation) => animation.playState === 'running').length || 0,
+        cardMenuPresent: Boolean(stage?.querySelector('.card-menu')),
+        fakeChromePresent: Boolean(stage?.querySelector('.preview-browser-chrome')),
       };
     })()`,
     true,
   );
   await writeFile(
     join(testRoot, "space-open-transition.png"),
-    await captureWebContentsPng(overviewView),
+    await captureWebContentsPng(overlayView),
   );
   await waitUntil(
     () => {
@@ -2321,14 +2339,15 @@ async function runSpaceUiAudit(context: {
     },
     3_000,
   );
+  await waitForRenderer(overlayView, `document.querySelector('.space-transition')?.hidden === true`);
   const transitionElapsedMs = Number(
     (performance.now() - transitionStartedAt).toFixed(1),
   );
   await presentation.showOverview();
   await wait(140);
-  const transitionCleanup = await overviewView.webContents.executeJavaScript(
+  const transitionCleanup = await overlayView.webContents.executeJavaScript(
     `(() => ({
-      stagePresent: Boolean(document.querySelector('.space-open-transition')),
+      stageHidden: document.querySelector('.space-transition')?.hidden === true,
       bodyLocked: document.body.classList.contains('space-transitioning'),
     }))()`,
     true,
@@ -2427,13 +2446,17 @@ async function runSpaceUiAudit(context: {
     controlledVisual.frameAnimation === "agent-card-frame-breathe" &&
     Math.abs(controlledVisual.titleX - visualBefore.titleX) < 0.5 &&
     controlledVisual.previewShadow !== visualBefore.previewShadow &&
-    openingTransition.motion === "space-card-expand-v1" &&
-    openingTransition.durationMs === 300 &&
+    openingTransition.motion === "space-live-handoff-v2" &&
+    openingTransition.durationMs === 180 &&
     openingTransition.sourceWidth > 200 &&
     openingTransition.sourceHeight > 120 &&
     openingTransition.bodyLocked === true &&
-    openingTransition.naturalWidth > 0 &&
-    openingTransition.naturalHeight > 0 &&
+    openingTransition.overviewNaturalWidth >= openingTransition.viewportWidth &&
+    openingTransition.overviewNaturalHeight >= openingTransition.viewportHeight &&
+    openingTransition.chromeNaturalWidth >= openingTransition.viewportWidth &&
+    openingTransition.chromeNaturalHeight > 0 &&
+    openingTransition.pageNaturalWidth >= openingTransition.viewportWidth &&
+    openingTransition.pageNaturalHeight >= openingTransition.viewportHeight &&
     openingTransition.renderedWidth > openingTransition.sourceWidth &&
     openingTransition.renderedWidth < openingTransition.viewportWidth &&
     openingTransition.renderedHeight > openingTransition.sourceHeight &&
@@ -2441,9 +2464,11 @@ async function runSpaceUiAudit(context: {
     openingTransition.transform !== "none" &&
     openingTransition.activeAnimations >= 2 &&
     openingTransition.shadeOpacity > 0 &&
-    transitionElapsedMs >= 240 &&
-    transitionElapsedMs < 1_200 &&
-    transitionCleanup.stagePresent === false &&
+    openingTransition.cardMenuPresent === false &&
+    openingTransition.fakeChromePresent === false &&
+    transitionElapsedMs >= 150 &&
+    transitionElapsedMs < 900 &&
+    transitionCleanup.stageHidden === true &&
     transitionCleanup.bodyLocked === false &&
     createMenu.expanded === "true" &&
     createMenu.heading === "使用其他个人资料创建 Space" &&

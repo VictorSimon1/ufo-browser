@@ -1,6 +1,6 @@
-import type { BaseWindow, WebContentsView } from "electron";
+import type { BaseWindow, NativeImage, WebContentsView } from "electron";
 import { calculateShellLayout } from "./shell-page-bounds.js";
-import type { Presentation } from "./types.js";
+import type { Presentation, Rect } from "./types.js";
 import { TaskSpaceManager } from "./manager.js";
 
 type ShellViews = {
@@ -10,12 +10,24 @@ type ShellViews = {
   overlay: WebContentsView;
 };
 
+type SpaceTransitionRequest = {
+  source: Rect;
+};
+
+const SPACE_TRANSITION_DURATION_MS = 180;
+const SPACE_TRANSITION_CAPTURE_TIMEOUT_MS = 260;
+const SPACE_TRANSITION_READY_TIMEOUT_MS = 320;
+
 export class PresentationCoordinator {
   private presentation: Presentation = { kind: "overview" };
   private generation = 0;
   private commitQueue = Promise.resolve();
   private attachedPage: WebContentsView | null = null;
   private overlaySpaceId: number | null = null;
+  private activeTransitionToken = "";
+  private transitionSequence = 0;
+  private readonly transitionReadyWaiters = new Map<string, () => void>();
+  private readonly transitionFinishedWaiters = new Map<string, () => void>();
 
   constructor(
     private readonly window: BaseWindow,
@@ -56,8 +68,8 @@ export class PresentationCoordinator {
     return this.request({ kind: "overview" });
   }
 
-  showSpace(spaceId: number) {
-    return this.request({ kind: "space", spaceId });
+  showSpace(spaceId: number, transition?: SpaceTransitionRequest) {
+    return this.request({ kind: "space", spaceId }, transition);
   }
 
   refreshSpace(spaceId: number) {
@@ -71,6 +83,14 @@ export class PresentationCoordinator {
     this.syncControlOverlay();
   }
 
+  notifyTransitionReady(token: string) {
+    return this.resolveTransitionWaiter(this.transitionReadyWaiters, token);
+  }
+
+  notifyTransitionFinished(token: string) {
+    return this.resolveTransitionWaiter(this.transitionFinishedWaiters, token);
+  }
+
   showAgentPointer(
     spaceId: number,
     pointer: { x: number; y: number; label: string },
@@ -82,16 +102,20 @@ export class PresentationCoordinator {
     );
   }
 
-  private request(next: Presentation) {
+  private request(next: Presentation, transition?: SpaceTransitionRequest) {
     const generation = ++this.generation;
     this.commitQueue = this.commitQueue.then(async () => {
       if (generation !== this.generation) return;
-      await this.commit(next, generation);
+      await this.commit(next, generation, transition);
     });
     return this.commitQueue;
   }
 
-  private async commit(next: Presentation, generation: number) {
+  private async commit(
+    next: Presentation,
+    generation: number,
+    transition?: SpaceTransitionRequest,
+  ) {
     let nextPage: WebContentsView | null = null;
     let nextTargetId: string | null = null;
     if (next.kind === "space") {
@@ -116,6 +140,34 @@ export class PresentationCoordinator {
     const root = this.window.contentView;
     const previousPage = this.attachedPage;
     const previousTarget = previousPage ? this.findTargetId(previousPage) : undefined;
+
+    if (
+      next.kind === "space" &&
+      this.presentation.kind === "overview" &&
+      transition &&
+      root.children.includes(this.views.overview) &&
+      nextPage
+    ) {
+      const transitioned = await this.commitOverviewToSpaceTransition({
+        next,
+        generation,
+        nextPage,
+        nextTargetId,
+        transition,
+      }).catch(() => false);
+      if (transitioned) return;
+      if (generation !== this.generation) {
+        this.manager.cancelPresentationPreparation(nextTargetId!);
+        this.removeIfAttached(nextPage);
+        this.removeIfAttached(this.views.browser);
+        nextPage.setVisible(false);
+        this.views.browser.setVisible(false);
+        void this.manager.parkAfterPresentation(nextTargetId!).catch(
+          () => undefined,
+        );
+        return;
+      }
+    }
 
     // Re-publishing the current Overview is a state refresh, not a native
     // view transition. Detaching and re-attaching the same shell creates a
@@ -261,6 +313,7 @@ export class PresentationCoordinator {
   }
 
   private syncControlOverlay() {
+    if (this.activeTransitionToken) return;
     const current = this.presentation;
     const space =
       current.kind === "space" ? this.manager.getSpace(current.spaceId) : undefined;
@@ -332,5 +385,221 @@ export class PresentationCoordinator {
       if (target) return target.targetId;
     }
     return undefined;
+  }
+
+  private async commitOverviewToSpaceTransition(input: {
+    next: Extract<Presentation, { kind: "space" }>;
+    generation: number;
+    nextPage: WebContentsView;
+    nextTargetId: string | null;
+    transition: SpaceTransitionRequest;
+  }) {
+    const { next, generation, nextPage, nextTargetId, transition } = input;
+    const [width, height] = this.window.getContentSize();
+    const layout = calculateShellLayout(width, height);
+    const source = this.clampTransitionSource(transition.source, layout.content);
+    if (!source) return false;
+
+    const root = this.window.contentView;
+    const overviewIndex = root.children.indexOf(this.views.overview);
+    if (overviewIndex < 0) return false;
+
+    this.views.browser.setBounds(layout.chrome);
+    nextPage.setBounds(layout.page);
+    this.attachAt(this.views.browser, overviewIndex);
+    this.attachAt(nextPage, overviewIndex + 1);
+    this.views.browser.setVisible(true);
+    nextPage.setVisible(true);
+
+    // Browser state is sent before showSpace() enters this coordinator. Give
+    // its renderer one compositor turn so the captured native Chrome matches
+    // the destination underneath the transition exactly.
+    await this.waitForRendererPaint(this.views.browser, 48);
+    if (generation !== this.generation) return false;
+
+    const [overviewFrame, chromeFrame, pageFrame] = await this.withTimeout(
+      Promise.all([
+        this.views.overview.webContents.capturePage(),
+        this.views.browser.webContents.capturePage(),
+        nextPage.webContents.capturePage(),
+      ]),
+      SPACE_TRANSITION_CAPTURE_TIMEOUT_MS,
+    );
+    if (overviewFrame.isEmpty() || chromeFrame.isEmpty() || pageFrame.isEmpty()) {
+      return false;
+    }
+    if (generation !== this.generation) return false;
+
+    const token = `${generation}-${++this.transitionSequence}`;
+    this.activeTransitionToken = token;
+    this.views.overlay.setBounds(layout.content);
+    this.ensureAttached(this.views.overlay);
+    this.views.overlay.setVisible(true);
+    const ready = this.waitForTransitionSignal(
+      this.transitionReadyWaiters,
+      token,
+      SPACE_TRANSITION_READY_TIMEOUT_MS,
+    );
+    this.views.overlay.webContents.send("x-browser:space-transition", {
+      phase: "prepare",
+      token,
+      durationMs: SPACE_TRANSITION_DURATION_MS,
+      source,
+      viewport: { width: layout.content.width, height: layout.content.height },
+      chromeHeight: layout.chrome.height,
+      pageHeight: layout.page.height,
+      overview: this.transitionImageDataUrl(
+        overviewFrame,
+        layout.content.width,
+        88,
+      ),
+      chrome: this.transitionImageDataUrl(
+        chromeFrame,
+        layout.chrome.width,
+        92,
+      ),
+      page: this.transitionImageDataUrl(pageFrame, layout.page.width, 88),
+    });
+    if (!(await ready) || generation !== this.generation) {
+      this.cancelSpaceTransition(token);
+      return false;
+    }
+
+    this.attachedPage = nextPage;
+    this.manager.setPresentedTarget(nextTargetId);
+    this.presentation = next;
+    this.removeIfAttached(this.views.overview);
+    this.removeIfAttached(this.views.chat);
+    this.views.overview.setVisible(false);
+    this.views.chat.setVisible(false);
+
+    const finished = this.waitForTransitionSignal(
+      this.transitionFinishedWaiters,
+      token,
+      SPACE_TRANSITION_DURATION_MS + 260,
+    );
+    this.views.overlay.webContents.send("x-browser:space-transition", {
+      phase: "go",
+      token,
+    });
+    const didFinish = await finished;
+    this.transitionReadyWaiters.delete(token);
+    this.transitionFinishedWaiters.delete(token);
+    if (!didFinish) this.cancelSpaceTransition(token);
+    if (this.activeTransitionToken === token) this.activeTransitionToken = "";
+
+    this.layout();
+    this.syncControlOverlay();
+    this.syncPreviewActivity();
+    this.publishState();
+    return true;
+  }
+
+  private clampTransitionSource(source: Rect, content: Rect): Rect | null {
+    const x = Math.max(0, Math.min(source.x - content.x, content.width - 1));
+    const y = Math.max(0, Math.min(source.y - content.y, content.height - 1));
+    const width = Math.min(
+      Math.max(1, source.width),
+      Math.max(1, content.width - x),
+    );
+    const height = Math.min(
+      Math.max(1, source.height),
+      Math.max(1, content.height - y),
+    );
+    if (width < 32 || height < 32) return null;
+    return { x, y, width, height };
+  }
+
+  private attachAt(view: WebContentsView, index: number) {
+    const root = this.window.contentView;
+    if (root.children.includes(view)) root.removeChildView(view);
+    root.addChildView(view, Math.max(0, Math.min(index, root.children.length)));
+  }
+
+  private waitForRendererPaint(view: WebContentsView, timeoutMs: number) {
+    if (view.webContents.isDestroyed()) return Promise.resolve();
+    return this.withTimeout(
+      view.webContents.executeJavaScript(
+        `new Promise((resolve) => requestAnimationFrame(() => resolve(true)))`,
+        true,
+      ),
+      timeoutMs,
+    ).then(() => undefined, () => undefined);
+  }
+
+  private waitForTransitionSignal(
+    waiters: Map<string, () => void>,
+    token: string,
+    timeoutMs: number,
+  ) {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        if (!waiters.delete(token)) return;
+        resolve(false);
+      }, timeoutMs);
+      waiters.set(token, () => {
+        clearTimeout(timer);
+        waiters.delete(token);
+        resolve(true);
+      });
+    });
+  }
+
+  private resolveTransitionWaiter(
+    waiters: Map<string, () => void>,
+    token: string,
+  ) {
+    const resolve = waiters.get(token);
+    if (!resolve) return false;
+    resolve();
+    return true;
+  }
+
+  private cancelSpaceTransition(token: string) {
+    this.transitionReadyWaiters.delete(token);
+    this.transitionFinishedWaiters.delete(token);
+    if (!this.views.overlay.webContents.isDestroyed()) {
+      this.views.overlay.webContents.send("x-browser:space-transition", {
+        phase: "cancel",
+        token,
+      });
+    }
+    if (this.activeTransitionToken === token) this.activeTransitionToken = "";
+    if (this.overlaySpaceId === null) {
+      this.removeIfAttached(this.views.overlay);
+      this.views.overlay.setVisible(false);
+    }
+  }
+
+  private withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("Space transition timed out")),
+        timeoutMs,
+      );
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  private transitionImageDataUrl(
+    image: NativeImage,
+    targetWidth: number,
+    quality: number,
+  ) {
+    const size = image.getSize();
+    const frame =
+      size.width > targetWidth
+        ? image.resize({ width: targetWidth, quality: "good" })
+        : image;
+    return `data:image/jpeg;base64,${frame.toJPEG(quality).toString("base64")}`;
   }
 }

@@ -435,39 +435,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .space-card:hover .space-preview { transform: translateY(-2px) scale(1.002); border-color: rgba(53, 99, 83, 0.22); box-shadow: 0 20px 42px rgba(27, 55, 45, 0.115); }
 .space-card:active .space-preview { transform: translateY(-1px) scale(0.988); }
 .space-card.opening .space-preview {
-  transform: translateY(0) scale(1);
+  transform: translateY(-2px) scale(1.008);
   border-color: rgba(43, 127, 104, 0.34);
   box-shadow: 0 17px 38px rgba(27, 55, 45, 0.12);
-}
-.overview-page.space-transitioning { overflow: hidden; }
-.overview-page.space-transitioning .overview-shell { pointer-events: none; }
-.space-open-transition {
-  position: fixed;
-  z-index: 100;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  contain: strict;
-}
-.space-open-transition-shade {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  background: #eef3f1;
-  will-change: opacity;
-}
-.space-open-transition-surface {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: fill;
-  transform-origin: top left;
-  backface-visibility: hidden;
-  will-change: transform, border-radius, box-shadow;
-  user-select: none;
 }
 .space-card.closing {
   pointer-events: none;

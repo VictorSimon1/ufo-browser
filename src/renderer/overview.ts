@@ -39,8 +39,6 @@ let createSpacePending = false;
 let createProfileMenuGeneration = 0;
 let openingSpaceId: number | undefined;
 
-const SPACE_OPEN_TRANSITION_MS = 300;
-
 void api.app.info().then((info: any) => {
   const version = String(info?.version || "").trim();
   if (version) document.querySelector("#app-version")!.textContent = `v${version}`;
@@ -301,33 +299,21 @@ function spaceCard(spaceId: number) {
     card.classList.add("opening");
     closeCardMenu();
     closeCreateProfileMenu();
-    const prepare = api.overview.prepare(spaceId).catch(() => undefined);
-    let transition: SpaceOpenTransition | undefined;
     try {
-      let snapshot = "";
-      try {
-        snapshot = await api.overview.transitionSnapshot({
-          x: previewRect.x,
-          y: previewRect.y,
-          width: previewRect.width,
-          height: previewRect.height,
-        });
-      } catch {
-        // The real Space must still open if a one-frame transition capture is
-        // unavailable during a window restore or compositor handoff.
-      }
-      if (snapshot) {
-        transition = await startSpaceOpenTransition(snapshot, previewRect).catch(
-          () => undefined,
-        );
-      }
-      await Promise.all([transition?.finished ?? Promise.resolve(), prepare]);
-      await api.overview.open(spaceId);
+      // Native code prepares the warm renderer underneath Overview, captures
+      // the real Browser Chrome/page at full resolution, and performs the
+      // final handoff in the transparent shell overlay. Do not enlarge the
+      // low-resolution card canvas here: it exposes fake chrome and menu
+      // controls as a blurry full-window frame.
+      await api.overview.open(spaceId, {
+        x: previewRect.x,
+        y: previewRect.y,
+        width: previewRect.width,
+        height: previewRect.height,
+      });
     } catch {
-      await dismissSpaceOpenTransition(transition);
+      // The card returns to its normal state when native presentation fails.
     } finally {
-      transition?.remove();
-      document.body.classList.remove("space-transitioning");
       openingSpaceId = undefined;
       card.dataset.opening = "0";
       card.classList.remove("opening");
@@ -355,91 +341,6 @@ function spaceCard(spaceId: number) {
     openCardMenu(card);
   });
   return card;
-}
-
-type SpaceOpenTransition = {
-  element: HTMLElement;
-  finished: Promise<void>;
-  remove: () => void;
-};
-
-async function startSpaceOpenTransition(
-  snapshot: string,
-  source: DOMRect,
-): Promise<SpaceOpenTransition> {
-  const element = document.createElement("div");
-  element.className = "space-open-transition";
-  element.setAttribute("aria-hidden", "true");
-  const shade = document.createElement("div");
-  shade.className = "space-open-transition-shade";
-  const surface = document.createElement("img");
-  surface.className = "space-open-transition-surface";
-  surface.alt = "";
-  surface.src = snapshot;
-  element.append(shade, surface);
-  document.body.append(element);
-  document.body.classList.add("space-transitioning");
-  try {
-    await surface.decode();
-  } catch {
-    // A data URL is already locally available; decoding can be interrupted by
-    // the native view swap without making the transition unusable.
-  }
-
-  const viewportWidth = Math.max(1, document.documentElement.clientWidth);
-  const viewportHeight = Math.max(1, document.documentElement.clientHeight);
-  const from = `translate3d(${source.x}px, ${source.y}px, 0) scale(${source.width / viewportWidth}, ${source.height / viewportHeight})`;
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const duration = reducedMotion ? 1 : SPACE_OPEN_TRANSITION_MS;
-  element.dataset.motion = "space-card-expand-v1";
-  element.dataset.durationMs = String(duration);
-  element.dataset.sourceWidth = String(source.width);
-  element.dataset.sourceHeight = String(source.height);
-  const surfaceAnimation = surface.animate(
-    [
-      {
-        transform: from,
-        borderRadius: "18px",
-        boxShadow: "0 18px 44px rgba(25, 46, 39, .14)",
-      },
-      {
-        transform: "translate3d(0, 0, 0) scale(1, 1)",
-        borderRadius: "0px",
-        boxShadow: "0 0 0 rgba(25, 46, 39, 0)",
-      },
-    ],
-    {
-      duration,
-      easing: "cubic-bezier(.24, .68, .24, 1)",
-      fill: "forwards",
-    },
-  );
-  const shadeAnimation = shade.animate(
-    [{ opacity: 0 }, { opacity: 1 }],
-    {
-      duration,
-      easing: "cubic-bezier(.26, .62, .24, 1)",
-      fill: "forwards",
-    },
-  );
-  const finished = Promise.all([
-    surfaceAnimation.finished,
-    shadeAnimation.finished,
-  ]).then(() => undefined);
-  return {
-    element,
-    finished,
-    remove: () => element.remove(),
-  };
-}
-
-async function dismissSpaceOpenTransition(transition?: SpaceOpenTransition) {
-  if (!transition?.element.isConnected) return;
-  const animation = transition.element.animate(
-    [{ opacity: 1 }, { opacity: 0 }],
-    { duration: 120, easing: "ease-out", fill: "forwards" },
-  );
-  await animation.finished.catch(() => undefined);
 }
 
 function toggleCardMenu(card: HTMLElement) {
