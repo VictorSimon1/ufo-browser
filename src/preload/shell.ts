@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld("xBrowser", {
     list: () => ipcRenderer.invoke("x-browser:overview:list"),
     create: (name?: string, profileId?: string) =>
       ipcRenderer.invoke("x-browser:overview:create", name, profileId),
+    prepare: (spaceId: number) =>
+      ipcRenderer.invoke("x-browser:overview:prepare", spaceId),
+    transitionSnapshot: (
+      rect: { x: number; y: number; width: number; height: number },
+    ) => ipcRenderer.invoke("x-browser:overview:transition-snapshot", rect),
     open: (spaceId: number) =>
       ipcRenderer.invoke("x-browser:overview:open", spaceId),
     rename: (spaceId: number, name: string) =>

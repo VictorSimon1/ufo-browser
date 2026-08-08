@@ -1041,6 +1041,7 @@ function registerIpc(context: IpcContext) {
     presentation,
     leases,
     shellIds,
+    overviewView,
     browserView,
     profiles,
     chromeImport,
@@ -1150,6 +1151,15 @@ function registerIpc(context: IpcContext) {
     profileSync.notifyProfileActive(space.profileId);
     browserView.webContents.send("x-browser:browser-state", manager.navigationState(space.id));
     return space;
+  });
+  shell("x-browser:overview:prepare", async (_event, spaceId: number) => {
+    const id = assertSpaceId(spaceId);
+    await manager.activeViewForPresentation(id);
+  });
+  shell("x-browser:overview:transition-snapshot", async (_event, value: unknown) => {
+    const rect = clippedCaptureRect(value, overviewView.getBounds());
+    const snapshot = await overviewView.webContents.capturePage(rect);
+    return snapshot.toDataURL();
   });
   shell("x-browser:overview:open", async (_event, spaceId: number) => {
     const id = assertSpaceId(spaceId);
@@ -1317,6 +1327,24 @@ function previewRect(value: unknown): Rect {
     width: Math.max(0, finiteNumber(rect.width)),
     height: Math.max(0, finiteNumber(rect.height)),
   };
+}
+
+function clippedCaptureRect(value: unknown, bounds: Rect): Rect {
+  const requested = previewRect(value);
+  const x = Math.max(0, Math.min(Math.floor(requested.x), bounds.width - 1));
+  const y = Math.max(0, Math.min(Math.floor(requested.y), bounds.height - 1));
+  const width = Math.min(
+    Math.max(1, Math.ceil(requested.width)),
+    Math.max(1, bounds.width - x),
+  );
+  const height = Math.min(
+    Math.max(1, Math.ceil(requested.height)),
+    Math.max(1, bounds.height - y),
+  );
+  if (width < 32 || height < 32) {
+    throw new Error("transition snapshot is too small");
+  }
+  return { x, y, width, height };
 }
 
 function finiteNumber(value: unknown) {
@@ -2157,6 +2185,66 @@ async function runSpaceUiAudit(context: {
     originalOwnership,
     originalLifecycle,
   );
+  const transitionStartedAt = performance.now();
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('[data-space-id="${initial.id}"]')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.space-open-transition-surface'))`,
+  );
+  await wait(80);
+  const openingTransition = await overviewView.webContents.executeJavaScript(
+    `(() => {
+      const stage = document.querySelector('.space-open-transition');
+      const surface = stage?.querySelector('.space-open-transition-surface');
+      const shade = stage?.querySelector('.space-open-transition-shade');
+      const surfaceStyle = surface ? getComputedStyle(surface) : null;
+      const surfaceRect = surface?.getBoundingClientRect();
+      return {
+        motion: stage?.getAttribute('data-motion') || '',
+        durationMs: Number(stage?.getAttribute('data-duration-ms') || 0),
+        sourceWidth: Number(stage?.getAttribute('data-source-width') || 0),
+        sourceHeight: Number(stage?.getAttribute('data-source-height') || 0),
+        bodyLocked: document.body.classList.contains('space-transitioning'),
+        naturalWidth: surface?.naturalWidth || 0,
+        naturalHeight: surface?.naturalHeight || 0,
+        renderedWidth: surfaceRect?.width || 0,
+        renderedHeight: surfaceRect?.height || 0,
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        transform: surfaceStyle?.transform || '',
+        borderRadius: surfaceStyle?.borderRadius || '',
+        shadeOpacity: shade ? Number(getComputedStyle(shade).opacity) : 0,
+        activeAnimations: stage?.getAnimations({ subtree: true }).filter((animation) => animation.playState === 'running').length || 0,
+      };
+    })()`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "space-open-transition.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  await waitUntil(
+    () => {
+      const current = presentation.current();
+      return current.kind === "space" && current.spaceId === initial.id;
+    },
+    3_000,
+  );
+  const transitionElapsedMs = Number(
+    (performance.now() - transitionStartedAt).toFixed(1),
+  );
+  await presentation.showOverview();
+  await wait(140);
+  const transitionCleanup = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      stagePresent: Boolean(document.querySelector('.space-open-transition')),
+      bodyLocked: document.body.classList.contains('space-transitioning'),
+    }))()`,
+    true,
+  );
   const initialSpaceCount = manager.listSpaces().length;
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('.create-space-profile-trigger')?.click()`,
@@ -2251,6 +2339,24 @@ async function runSpaceUiAudit(context: {
     controlledVisual.frameAnimation === "agent-card-frame-breathe" &&
     Math.abs(controlledVisual.titleX - visualBefore.titleX) < 0.5 &&
     controlledVisual.previewShadow !== visualBefore.previewShadow &&
+    openingTransition.motion === "space-card-expand-v1" &&
+    openingTransition.durationMs === 300 &&
+    openingTransition.sourceWidth > 200 &&
+    openingTransition.sourceHeight > 120 &&
+    openingTransition.bodyLocked === true &&
+    openingTransition.naturalWidth > 0 &&
+    openingTransition.naturalHeight > 0 &&
+    openingTransition.renderedWidth > openingTransition.sourceWidth &&
+    openingTransition.renderedWidth < openingTransition.viewportWidth &&
+    openingTransition.renderedHeight > openingTransition.sourceHeight &&
+    openingTransition.renderedHeight < openingTransition.viewportHeight &&
+    openingTransition.transform !== "none" &&
+    openingTransition.activeAnimations >= 2 &&
+    openingTransition.shadeOpacity > 0 &&
+    transitionElapsedMs >= 240 &&
+    transitionElapsedMs < 1_200 &&
+    transitionCleanup.stagePresent === false &&
+    transitionCleanup.bodyLocked === false &&
     createMenu.expanded === "true" &&
     createMenu.heading === "使用其他个人资料创建 Space" &&
     createMenu.profileIds.includes(defaultProfileId) &&
@@ -2278,6 +2384,11 @@ async function runSpaceUiAudit(context: {
         finalDom,
         visualBefore,
         controlledVisual,
+        openingTransition: {
+          ...openingTransition,
+          elapsedMs: transitionElapsedMs,
+          cleanup: transitionCleanup,
+        },
         createMenu,
         defaultCreation: {
           profileId: defaultCreated.profileId,
