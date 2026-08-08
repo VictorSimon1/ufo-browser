@@ -65,6 +65,10 @@ type PreviewFrame = {
 
 const MAX_PREVIEW_CACHE_ENTRIES = 24;
 const MAX_PREVIEW_CACHE_BYTES = 8 * 1024 * 1024;
+// A detached WebContents has no live AppKit/Viz surface, so keeping one recent
+// real page warm makes the first post-restart Space open instantaneously
+// without turning Overview into a collection of active browser windows.
+const MAX_PARKED_RESTORE_RUNTIMES = 1;
 
 type OverviewScreencastState = {
   spaceId: number;
@@ -122,6 +126,7 @@ export class TaskSpaceManager {
   private readonly previewDueAt = new Map<number, number>();
   private readonly previewCaptures = new Set<number>();
   private readonly coldPreviewCaptures = new Set<number>();
+  private readonly parkedRestoreTargets = new Set<string>();
   private readonly previewQualityAttempts = new Map<number, number>();
   private readonly previewQualityRetryTargets = new Map<number, string>();
   private readonly previewPhases = new Map<number, string>();
@@ -299,7 +304,7 @@ export class TaskSpaceManager {
     // navigation. Waiting for loadURL here leaves the previous tab on screen
     // and makes the eventual swap look like a frozen final-frame transition.
     const runtime = await this.ensureTabRuntimeStarted(spaceId, created.targetId);
-    runtime.retained = true;
+    this.retainRuntime(created.targetId, runtime);
     await this.emitActiveTabChanged(spaceId, created.targetId);
     return structuredClone(created);
   }
@@ -343,11 +348,11 @@ export class TaskSpaceManager {
       // navigation safely interrupts that request; do not wait on the network
       // before allowing an Agent to reuse the pristine initial tab.
       existing.loaded = false;
-      existing.retained = true;
+      this.retainRuntime(reused.targetId, existing);
       existing.loading = this.loadTab(existing, url);
     } else {
       const runtime = await this.ensureTabRuntimeStarted(spaceId, reused.targetId);
-      runtime.retained = true;
+      this.retainRuntime(reused.targetId, runtime);
     }
     this.previewCache.delete(reused.targetId);
     if (this.visiblePreviewSpaceIds.has(spaceId)) {
@@ -370,7 +375,7 @@ export class TaskSpaceManager {
     // Cold tabs follow the same lifecycle as an ordinary browser: switch to
     // the real WebContents immediately and let it paint its loading state.
     const runtime = await this.ensureTabRuntimeStarted(spaceId, targetId);
-    runtime.retained = true;
+    this.retainRuntime(targetId, runtime);
     this.requestOverviewScreencastReconcile();
     if (!alreadyActive) await this.emitActiveTabChanged(spaceId, targetId);
     return runtime.view;
@@ -444,15 +449,20 @@ export class TaskSpaceManager {
       spaceId,
       space.activeTabId,
     );
-    runtime.retained = true;
+    this.retainRuntime(space.activeTabId, runtime);
     return runtime.view;
   }
 
   async ensureTabRuntime(spaceId: number, targetId: string) {
     const runtime = await this.ensureTabRuntimeStarted(spaceId, targetId);
-    runtime.retained = true;
+    this.retainRuntime(targetId, runtime);
     await runtime.loading;
     return runtime.view;
+  }
+
+  private retainRuntime(targetId: string, runtime: TabRuntime) {
+    runtime.retained = true;
+    this.parkedRestoreTargets.delete(targetId);
   }
 
   private async ensureTabRuntimeStarted(spaceId: number, targetId: string) {
@@ -586,6 +596,7 @@ export class TaskSpaceManager {
       }
       const offscreenTarget = this.getSpace(id)?.activeTabId;
       if (offscreenTarget && offscreenTarget !== retryTarget) {
+        this.parkedRestoreTargets.delete(offscreenTarget);
         // A restored Agent-owned Space can briefly become the primary preview
         // before the renderer publishes its real visible cards. Once it is
         // offscreen, release that preview-only runtime just like a user Space.
@@ -712,6 +723,7 @@ export class TaskSpaceManager {
       visibleSpaceIds: [...this.visiblePreviewSpaceIds],
       captures: [...this.previewCaptures],
       coldCaptures: [...this.coldPreviewCaptures],
+      parkedRestoreTargets: [...this.parkedRestoreTargets],
       qualityRetries: Object.fromEntries(this.previewQualityAttempts),
       frameSubscriptionCaptures: [...this.frameSubscriptionCaptures],
       phases: Object.fromEntries(this.previewPhases),
@@ -1449,6 +1461,7 @@ export class TaskSpaceManager {
     const coldSequence = cold || qualityAttempt > 0;
     const runtimesBeforeCapture = new Set(this.runtimes.keys());
     let keepRuntimeForQualityRetry = false;
+    let captureSucceeded = false;
     this.previewCaptures.add(spaceId);
     if (cold) this.coldPreviewCaptures.add(spaceId);
     this.previewErrors.delete(spaceId);
@@ -1483,6 +1496,7 @@ export class TaskSpaceManager {
       }
       this.previewQualityAttempts.delete(spaceId);
       this.previewQualityRetryTargets.delete(spaceId);
+      captureSucceeded = true;
       const cached = this.cachedPreviewForSpace(spaceId);
       if (
         cached?.data &&
@@ -1537,10 +1551,18 @@ export class TaskSpaceManager {
         (targetId) =>
           spaceTargetIds.has(targetId) && !runtimesBeforeCapture.has(targetId),
       );
+      const parkRestoredTarget = Boolean(
+        captureSucceeded &&
+          initialTargetId &&
+          this.parkRestoredPreviewRuntime(spaceId, initialTargetId),
+      );
       if (!keepRuntimeForQualityRetry) {
         const cleanupTargets = new Set(previewOnlyTargets);
         if (coldSequence && initialTargetId) cleanupTargets.add(initialTargetId);
         if (liveCandidateTarget) cleanupTargets.delete(liveCandidateTarget);
+        if (parkRestoredTarget && initialTargetId) {
+          cleanupTargets.delete(initialTargetId);
+        }
         for (const targetId of cleanupTargets) {
           await this.releasePreviewOnlyRuntime(targetId);
         }
@@ -1557,6 +1579,57 @@ export class TaskSpaceManager {
         await this.releasePreviewOnlyRuntime(liveCandidateTarget);
       }
     }
+  }
+
+  private parkRestoredPreviewRuntime(spaceId: number, targetId: string) {
+    const runtime = this.runtimes.get(targetId);
+    const space = this.getSpace(spaceId);
+    const tab = space?.tabs.find((candidate) => candidate.targetId === targetId);
+    const preferredSpaceId = [...this.visiblePreviewSpaceIds]
+      .map((id) => this.getSpace(id))
+      .filter((candidate): candidate is SpaceRecord => {
+        if (
+          !candidate ||
+          candidate.ownership === "agent" ||
+          candidate.lifecycle !== "active"
+        ) {
+          return false;
+        }
+        const activeTab = candidate.tabs.find(
+          (candidateTab) => candidateTab.targetId === candidate.activeTabId,
+        );
+        return Boolean(activeTab && isRemoteWebUrl(activeTab.url));
+      })
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0]?.id;
+    if (
+      !runtime ||
+      runtime.retained ||
+      !space ||
+      space.ownership === "agent" ||
+      space.lifecycle !== "active" ||
+      space.activeTabId !== targetId ||
+      preferredSpaceId !== spaceId ||
+      !this.previewActive ||
+      !this.visiblePreviewSpaceIds.has(spaceId) ||
+      !tab ||
+      !isRemoteWebUrl(tab.url)
+    ) {
+      return false;
+    }
+    for (const parkedTarget of this.parkedRestoreTargets) {
+      const parkedRuntime = this.runtimes.get(parkedTarget);
+      if (!parkedRuntime || parkedRuntime.retained) {
+        this.parkedRestoreTargets.delete(parkedTarget);
+      }
+    }
+    if (
+      !this.parkedRestoreTargets.has(targetId) &&
+      this.parkedRestoreTargets.size >= MAX_PARKED_RESTORE_RUNTIMES
+    ) {
+      return false;
+    }
+    this.parkedRestoreTargets.add(targetId);
+    return true;
   }
 
   private newTabRecord(url: string): TabRecord {
@@ -1773,6 +1846,7 @@ export class TaskSpaceManager {
       this.hideCaptureWindowIfIdle();
     }
     this.runtimes.delete(targetId);
+    this.parkedRestoreTargets.delete(targetId);
     this.foregroundCadenceReasons.delete(targetId);
     this.backgroundVisibilityPrimedTargets.delete(targetId);
     this.surfaceGenerations.delete(targetId);
@@ -1824,6 +1898,9 @@ export class TaskSpaceManager {
       this.frameSubscriptionCaptures.has(targetId) ||
       this.overviewScreencast?.targetId === targetId
     ) {
+      if (!runtime || runtime.retained) {
+        this.parkedRestoreTargets.delete(targetId);
+      }
       return;
     }
     await this.releaseBackgroundSurface(targetId);
@@ -1854,6 +1931,7 @@ export class TaskSpaceManager {
       return;
     }
     this.runtimes.delete(targetId);
+    this.parkedRestoreTargets.delete(targetId);
     this.foregroundCadenceReasons.delete(targetId);
     this.surfaceGenerations.delete(targetId);
     if (!runtime.view.webContents.isDestroyed()) {
@@ -2363,6 +2441,15 @@ export class TaskSpaceManager {
       this.profileSessionSetup.set(profileId, setup);
     }
     return setup;
+  }
+}
+
+function isRemoteWebUrl(value: string) {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
   }
 }
 
