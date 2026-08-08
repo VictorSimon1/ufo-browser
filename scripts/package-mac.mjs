@@ -1,6 +1,16 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, readFile, readdir, rm, stat } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { listPackage } from "@electron/asar";
 
@@ -105,17 +115,51 @@ async function createArchives(appRoot) {
     appRoot,
     zipPath,
   ]);
-  await run("/usr/bin/hdiutil", [
-    "create",
-    "-volname",
-    `UFO-Browser ${packageInfo.version}`,
-    "-srcfolder",
-    dirname(appRoot),
-    "-ov",
-    "-format",
-    "UDZO",
-    dmgPath,
-  ]);
+  const appDirectory = dirname(appRoot);
+  const applicationsLink = join(appDirectory, "Applications");
+  await rm(applicationsLink, { force: true });
+  await symlink("/Applications", applicationsLink);
+  try {
+    await run("/usr/bin/hdiutil", [
+      "create",
+      "-volname",
+      `UFO-Browser ${packageInfo.version}`,
+      "-srcfolder",
+      appDirectory,
+      "-ov",
+      "-format",
+      "UDZO",
+      dmgPath,
+    ]);
+  } finally {
+    await rm(applicationsLink, { force: true });
+  }
+}
+
+async function verifyDmgLayout(dmgPath) {
+  const mountRoot = await mkdtemp(join(tmpdir(), "ufo-browser-dmg-"));
+  let mounted = false;
+  try {
+    await run("/usr/bin/hdiutil", [
+      "attach",
+      dmgPath,
+      "-nobrowse",
+      "-readonly",
+      "-mountpoint",
+      mountRoot,
+    ]);
+    mounted = true;
+    await access(join(mountRoot, "UFO-Browser.app"));
+    const applicationsLink = await lstat(join(mountRoot, "Applications"));
+    if (!applicationsLink.isSymbolicLink()) {
+      throw new Error("DMG Applications target is not a symbolic link");
+    }
+  } finally {
+    if (mounted) {
+      await run("/usr/bin/hdiutil", ["detach", mountRoot]);
+    }
+    await rm(mountRoot, { recursive: true, force: true });
+  }
 }
 
 async function verifyArtifacts(appRoot, expectArchives) {
@@ -158,12 +202,14 @@ async function verifyArtifacts(appRoot, expectArchives) {
   const packageInfo = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const archives = files.filter((path) => /\.(dmg|zip)$/.test(path));
   if (expectArchives) {
-    if (!archives.some((path) => path.endsWith(".dmg"))) {
+    const dmgPath = archives.find((path) => path.endsWith(".dmg"));
+    if (!dmgPath) {
       throw new Error("DMG artifact was not created");
     }
     if (!archives.some((path) => path.endsWith(".zip"))) {
       throw new Error("ZIP artifact was not created");
     }
+    await verifyDmgLayout(dmgPath);
   }
 
   console.log(`Verified ${packageInfo.productName || packageInfo.build.productName} ${packageInfo.version}`);
