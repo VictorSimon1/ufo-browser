@@ -43,15 +43,15 @@ body {
 .veil::before {
   content: "";
   position: absolute;
-  left: -46vw;
-  top: -15%;
-  width: 42vw;
-  height: 130%;
-  background: linear-gradient(102deg, transparent 12%, rgba(214, 225, 255, 0.04) 28%, rgba(230, 237, 255, 0.24) 50%, rgba(196, 215, 255, 0.06) 72%, transparent 88%);
-  opacity: 0.66;
-  transform: translate3d(0, 0, 0) skewX(-8deg);
-  will-change: transform, opacity;
-  animation: ambient-sweep 6.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+  left: -180px;
+  top: -5%;
+  width: clamp(96px, 10vw, 156px);
+  height: 110%;
+  background: linear-gradient(102deg, transparent 8%, rgba(214, 225, 255, 0.025) 28%, rgba(230, 237, 255, 0.18) 50%, rgba(196, 215, 255, 0.035) 72%, transparent 92%);
+  opacity: 0.52;
+  transform: translate3d(0, 0, 0) skewX(-7deg);
+  will-change: transform;
+  animation: ambient-sweep 12s linear infinite;
 }
 
 .veil::after {
@@ -62,9 +62,7 @@ body {
     radial-gradient(ellipse at 50% 105%, rgba(156, 178, 255, 0.22), transparent 48%),
     radial-gradient(ellipse at 0% 55%, rgba(105, 143, 255, 0.18), transparent 31%),
     radial-gradient(ellipse at 100% 55%, rgba(105, 143, 255, 0.16), transparent 31%);
-  opacity: 0.38;
-  will-change: opacity;
-  animation: ambient-breathe 4.8s ease-in-out infinite;
+  opacity: 0.4;
 }
 
 .control-bar {
@@ -247,14 +245,8 @@ button:active {
 }
 
 @keyframes ambient-sweep {
-  0% { transform: translate3d(0, 0, 0) skewX(-8deg); opacity: 0.22; }
-  42%, 58% { opacity: 0.78; }
-  100% { transform: translate3d(192vw, 0, 0) skewX(-8deg); opacity: 0.22; }
-}
-
-@keyframes ambient-breathe {
-  0%, 100% { opacity: 0.28; }
-  50% { opacity: 0.58; }
+  from { transform: translate3d(0, 0, 0) skewX(-7deg); }
+  to { transform: translate3d(calc(100vw + 360px), 0, 0) skewX(-7deg); }
 }
 
 @keyframes agent-orbit {

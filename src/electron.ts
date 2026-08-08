@@ -170,12 +170,10 @@ async function start() {
     preload: shellPreload,
     contextIsolation: true,
     nodeIntegration: false,
-    // Overview visibility publication and Browser chrome state must keep
-    // advancing when another Electron instance temporarily owns focus. This
-    // is especially important for isolated E2E runs next to the user's
-    // persistent preview App; Chromium otherwise occludes the shell renderer
-    // and can defer its first visibility timer indefinitely.
-    backgroundThrottling: false,
+    // Hidden shell views have no useful animation or polling work. Let
+    // Chromium throttle them just like normal background browser UI; visible
+    // views are automatically restored to foreground cadence.
+    backgroundThrottling: true,
     sandbox: true,
   };
   const chatView = new WebContentsView({ webPreferences: shellPreferences });

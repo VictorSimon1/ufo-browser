@@ -760,10 +760,7 @@ export class TaskSpaceManager {
       if (!this.isSurfaceGenerationCurrent(targetId, generation)) return;
       const view = this.getView(targetId);
       if (!view || !this.hiddenSurfaceTargets.has(targetId)) return;
-      this.options.captureWindow.contentView.removeChildView(view);
-      this.hiddenSurfaceTargets.delete(targetId);
-      this.backgroundVisibilityPrimedTargets.delete(targetId);
-      if (this.hiddenSurfaceTargets.size === 0) this.options.captureWindow.hide();
+      this.detachBackgroundSurfaceNow(targetId, view);
     });
   }
 
@@ -789,10 +786,7 @@ export class TaskSpaceManager {
       }
       const view = this.getView(targetId);
       if (!view || !this.hiddenSurfaceTargets.has(targetId)) return;
-      this.options.captureWindow.contentView.removeChildView(view);
-      this.hiddenSurfaceTargets.delete(targetId);
-      this.backgroundVisibilityPrimedTargets.delete(targetId);
-      if (this.hiddenSurfaceTargets.size === 0) this.options.captureWindow.hide();
+      this.detachBackgroundSurfaceNow(targetId, view);
     });
   }
 
@@ -870,12 +864,7 @@ export class TaskSpaceManager {
         this.isPresentationSurface(targetId)
       ) {
         if (this.hiddenSurfaceTargets.has(targetId)) {
-          this.options.captureWindow.contentView.removeChildView(view);
-          this.hiddenSurfaceTargets.delete(targetId);
-          this.backgroundVisibilityPrimedTargets.delete(targetId);
-          if (this.hiddenSurfaceTargets.size === 0) {
-            this.options.captureWindow.hide();
-          }
+          this.detachBackgroundSurfaceNow(targetId, view);
         }
       }
     });
@@ -1515,7 +1504,9 @@ export class TaskSpaceManager {
         spaceId,
         coldSequence
           ? Number.POSITIVE_INFINITY
-          : Date.now() + (controlled ? 850 : 1800),
+          : controlled
+            ? Date.now() + 850
+            : Number.POSITIVE_INFINITY,
       );
     } catch (error) {
       this.previewQualityAttempts.delete(spaceId);
@@ -1728,9 +1719,10 @@ export class TaskSpaceManager {
     if (index < 0) return;
     const wasActive = space.activeTabId === targetId;
     space.tabs.splice(index, 1);
+    const runtime = this.runtimes.get(targetId);
+    if (runtime) this.detachBackgroundSurfaceNow(targetId, runtime.view);
     this.runtimes.delete(targetId);
     this.foregroundCadenceReasons.delete(targetId);
-    this.hiddenSurfaceTargets.delete(targetId);
     this.backgroundVisibilityPrimedTargets.delete(targetId);
     this.surfaceGenerations.delete(targetId);
     this.previewCache.delete(targetId);
@@ -1774,9 +1766,14 @@ export class TaskSpaceManager {
 
   private destroyRuntime(targetId: string) {
     const runtime = this.runtimes.get(targetId);
+    if (runtime) this.detachBackgroundSurfaceNow(targetId, runtime.view);
+    else {
+      this.hiddenSurfaceTargets.delete(targetId);
+      this.backgroundVisibilityPrimedTargets.delete(targetId);
+      this.hideCaptureWindowIfIdle();
+    }
     this.runtimes.delete(targetId);
     this.foregroundCadenceReasons.delete(targetId);
-    this.hiddenSurfaceTargets.delete(targetId);
     this.backgroundVisibilityPrimedTargets.delete(targetId);
     this.surfaceGenerations.delete(targetId);
     if (this.presentationReservedTargetId === targetId) {
@@ -1789,6 +1786,33 @@ export class TaskSpaceManager {
       runtime.view.webContents.close();
     }
     this.requestOverviewScreencastReconcile();
+  }
+
+  private detachBackgroundSurfaceNow(
+    targetId: string,
+    view: WebContentsView,
+  ) {
+    const root = this.options.captureWindow.contentView;
+    if (root.children.includes(view)) {
+      try {
+        root.removeChildView(view);
+      } catch {
+        // A concurrent renderer teardown may already have detached the view.
+      }
+    }
+    this.hiddenSurfaceTargets.delete(targetId);
+    this.backgroundVisibilityPrimedTargets.delete(targetId);
+    this.hideCaptureWindowIfIdle();
+  }
+
+  private hideCaptureWindowIfIdle() {
+    if (
+      this.hiddenSurfaceTargets.size > 0 &&
+      this.options.captureWindow.contentView.children.length > 0
+    ) {
+      return;
+    }
+    this.options.captureWindow.hide();
   }
 
   private async releasePreviewOnlyRuntime(targetId: string) {
@@ -1869,6 +1893,14 @@ export class TaskSpaceManager {
     for (const spaceId of this.visiblePreviewSpaceIds) {
       const space = this.getSpace(spaceId);
       if (!space) continue;
+      const controlled =
+        space.ownership === "agent" && space.lifecycle === "active";
+      // User-owned Spaces use cached, event-driven thumbnails. Keeping a
+      // hidden real page foregrounded for a decorative live card makes CSS
+      // animations and WebGL consume the same GPU budget as another visible
+      // browser window. Agent-controlled Spaces remain live so active
+      // automation is still observable from Overview.
+      if (!controlled) continue;
       const targetId = space.activeTabId;
       if (!this.runtimes.has(targetId)) continue;
       if (this.coldPreviewCaptures.has(spaceId)) continue;
@@ -1877,8 +1909,7 @@ export class TaskSpaceManager {
       candidates.push({
         spaceId,
         targetId,
-        controlled:
-          space.ownership === "agent" && space.lifecycle === "active",
+        controlled,
         activityAt: space.agentTask?.updatedAt ?? space.updatedAt,
       });
     }
@@ -2239,11 +2270,9 @@ export class TaskSpaceManager {
         }
         const view = this.getView(targetId);
         if (!view || !this.hiddenSurfaceTargets.has(targetId)) continue;
-        this.options.captureWindow.contentView.removeChildView(view);
-        this.hiddenSurfaceTargets.delete(targetId);
-        this.backgroundVisibilityPrimedTargets.delete(targetId);
+        this.detachBackgroundSurfaceNow(targetId, view);
       }
-      if (this.hiddenSurfaceTargets.size === 0) this.options.captureWindow.hide();
+      this.hideCaptureWindowIfIdle();
     });
   }
 
