@@ -64,10 +64,10 @@ try {
         Math.max(...(state.visibleSpaceIds || [0])) >= 64 &&
         (state.captures?.length ?? 0) === 0 &&
         (state.coldCaptures?.length ?? 0) === 0 &&
-        activeRuntimes.length <= 1
+        activeRuntimes.length <= 8
       );
     },
-    32_000,
+    45_000,
   );
   const runtimes = diagnostics.runtimes?.filter((runtime) => runtime.runtime) ?? [];
   const hiddenSurfaces = runtimes.filter((runtime) => runtime.backgroundSurface);
@@ -92,7 +92,7 @@ try {
     result.visible < 1 ||
     result.visible > 8 ||
     result.highestVisibleSpaceId !== 64 ||
-    result.runtimes > 1 ||
+    result.runtimes > 8 ||
     result.hiddenSurfaces > 1 ||
     result.captures > 2 ||
     result.coldCaptures > 1 ||

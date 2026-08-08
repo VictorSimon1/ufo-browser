@@ -66,10 +66,11 @@ type PreviewFrame = {
 const MAX_PREVIEW_CACHE_ENTRIES = 24;
 const MAX_PREVIEW_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_PREVIEW_RECOVERY_ATTEMPTS = 4;
-// A detached WebContents has no live AppKit/Viz surface, so keeping one recent
-// real page warm makes the first post-restart Space open instantaneously
-// without turning Overview into a collection of active browser windows.
-const MAX_PARKED_RESTORE_RUNTIMES = 1;
+// Ego restores real Space tabs on launch and keeps their renderer state alive
+// while Overview shows thumbnails. Match that lifecycle for the bounded set of
+// visible cards: detached WebContents keep DOM/navigation state but own no live
+// AppKit/Viz surface, so entry is instant without multiplying GPU surfaces.
+const MAX_PARKED_RESTORE_RUNTIMES = 8;
 
 type OverviewScreencastState = {
   spaceId: number;
@@ -106,6 +107,7 @@ type ManagerOptions = {
 export class TaskSpaceManager {
   private state: BrowserState = { version: 1, nextSpaceId: 1, spaces: [] };
   private readonly runtimes = new Map<string, TabRuntime>();
+  private readonly runtimeStarts = new Map<string, Promise<TabRuntime>>();
   private readonly mutationQueues = new Map<number, Promise<unknown>>();
   private readonly activeAgentConnections = new Set<number>();
   private readonly listeners = new Set<() => void>();
@@ -128,6 +130,7 @@ export class TaskSpaceManager {
   private readonly previewDueAt = new Map<number, number>();
   private readonly previewCaptures = new Set<number>();
   private readonly coldPreviewCaptures = new Set<number>();
+  private readonly previewWarmupTargets = new Set<string>();
   private readonly parkedRestoreTargets = new Set<string>();
   private readonly previewQualityAttempts = new Map<number, number>();
   private readonly previewQualityRetryTargets = new Map<number, string>();
@@ -470,12 +473,34 @@ export class TaskSpaceManager {
   private async ensureTabRuntimeStarted(spaceId: number, targetId: string) {
     const existing = this.runtimes.get(targetId);
     if (existing) return existing;
+    const starting = this.runtimeStarts.get(targetId);
+    if (starting) return starting;
+
+    const pending = this.createTabRuntime(spaceId, targetId);
+    this.runtimeStarts.set(targetId, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.runtimeStarts.get(targetId) === pending) {
+        this.runtimeStarts.delete(targetId);
+      }
+    }
+  }
+
+  private async createTabRuntime(spaceId: number, targetId: string) {
+    const initialSpace = this.getSpaceOrThrow(spaceId);
+    const profileId = initialSpace.profileId;
+    if (!initialSpace.tabs.some((candidate) => candidate.targetId === targetId)) {
+      throw new Error(`tab not found: ${targetId}`);
+    }
+
+    await this.ensureProfileSessionSetup(profileId);
     const space = this.getSpaceOrThrow(spaceId);
     const tab = space.tabs.find((candidate) => candidate.targetId === targetId);
     if (!tab) throw new Error(`tab not found: ${targetId}`);
-
-    await this.ensureProfileSessionSetup(space.profileId);
-    const profile = this.options.profiles.getOrThrow(space.profileId);
+    const existing = this.runtimes.get(targetId);
+    if (existing) return existing;
+    const profile = this.options.profiles.getOrThrow(profileId);
 
     const view = new ElectronWebContentsView({
       webPreferences: {
@@ -572,6 +597,7 @@ export class TaskSpaceManager {
       this.requestOverviewScreencastReconcile();
       return;
     }
+    this.prewarmVisiblePreviewRuntimes();
     this.requestOverviewScreencastReconcile();
     this.schedulePreviewPump(0);
   }
@@ -594,6 +620,7 @@ export class TaskSpaceManager {
       const retryTarget = this.previewQualityRetryTargets.get(id);
       this.previewQualityRetryTargets.delete(id);
       if (retryTarget) {
+        this.parkedRestoreTargets.delete(retryTarget);
         void this.releasePreviewOnlyRuntime(retryTarget).catch(() => undefined);
       }
       const offscreenTarget = this.getSpace(id)?.activeTabId;
@@ -640,8 +667,57 @@ export class TaskSpaceManager {
     }
     this.visiblePreviewSpaceIds.clear();
     for (const id of next) this.visiblePreviewSpaceIds.add(id);
+    this.prewarmVisiblePreviewRuntimes();
     this.requestOverviewScreencastReconcile();
     this.schedulePreviewPump(0);
+  }
+
+  private prewarmVisiblePreviewRuntimes() {
+    if (!this.previewActive) return;
+    for (const spaceId of this.visiblePreviewSpaceIds) {
+      const space = this.getSpace(spaceId);
+      if (!space) continue;
+      const targetId = space.activeTabId;
+      const existing = this.runtimes.get(targetId);
+      if (existing) this.parkRestoredPreviewRuntime(spaceId, targetId);
+      if (existing?.loaded || this.previewWarmupTargets.has(targetId)) continue;
+      this.previewWarmupTargets.add(targetId);
+      void (async () => {
+        const runtime = existing ?? await this.ensureTabRuntimeStarted(spaceId, targetId);
+        const current = this.getSpace(spaceId);
+        if (
+          !this.previewActive ||
+          !this.visiblePreviewSpaceIds.has(spaceId) ||
+          current?.activeTabId !== targetId
+        ) {
+          await this.releasePreviewOnlyRuntime(targetId);
+          return;
+        }
+        this.parkRestoredPreviewRuntime(spaceId, targetId);
+        await runtime.loading;
+        if (
+          this.previewActive &&
+          this.visiblePreviewSpaceIds.has(spaceId) &&
+          this.getSpace(spaceId)?.activeTabId === targetId
+        ) {
+          this.previewDueAt.set(spaceId, 0);
+          this.schedulePreviewPump(0);
+        }
+      })()
+        .catch((error) => {
+          const current = this.getSpace(spaceId);
+          if (
+            this.previewActive &&
+            this.visiblePreviewSpaceIds.has(spaceId) &&
+            current?.activeTabId === targetId
+          ) {
+            this.previewErrors.set(spaceId, String(error));
+            this.previewDueAt.set(spaceId, Date.now() + 800);
+            this.schedulePreviewPump(800);
+          }
+        })
+        .finally(() => this.previewWarmupTargets.delete(targetId));
+    }
   }
 
   async suspendOverviewScreencast(targetId: string) {
@@ -1219,12 +1295,16 @@ export class TaskSpaceManager {
           }
         }
       };
-      return capture();
+      return await capture();
     } finally {
+      const space = this.getSpace(spaceId);
+      const liveAgentSurface =
+        space?.ownership === "agent" &&
+        this.activeAgentConnections.has(spaceId);
       if (
         this.presentedTargetId !== tab.targetId &&
         !alreadyBackground &&
-        this.getSpaceOrThrow(spaceId).ownership !== "agent"
+        !liveAgentSurface
       ) {
         await this.releaseBackgroundSurface(tab.targetId);
       }
@@ -1431,7 +1511,7 @@ export class TaskSpaceManager {
       .filter((id) => (this.previewDueAt.get(id) ?? 0) <= now)
       .map((id) => {
         const targetId = this.getSpace(id)!.activeTabId;
-        const warm = this.runtimes.has(targetId);
+        const warm = this.runtimes.get(targetId)?.loaded === true;
         return {
           id,
           warm,
@@ -1463,7 +1543,10 @@ export class TaskSpaceManager {
 
   private async captureAndPublishPreview(spaceId: number) {
     const initialTargetId = this.getSpace(spaceId)?.activeTabId;
-    const cold = !initialTargetId || !this.runtimes.has(initialTargetId);
+    const initialRuntime = initialTargetId
+      ? this.runtimes.get(initialTargetId)
+      : undefined;
+    const cold = !initialRuntime?.loaded;
     const qualityAttempt = this.previewQualityAttempts.get(spaceId) ?? 0;
     const coldSequence = cold || qualityAttempt > 0;
     const runtimesBeforeCapture = new Set(this.runtimes.keys());
@@ -1625,34 +1708,15 @@ export class TaskSpaceManager {
     const runtime = this.runtimes.get(targetId);
     const space = this.getSpace(spaceId);
     const tab = space?.tabs.find((candidate) => candidate.targetId === targetId);
-    const preferredSpaceId = [...this.visiblePreviewSpaceIds]
-      .map((id) => this.getSpace(id))
-      .filter((candidate): candidate is SpaceRecord => {
-        if (
-          !candidate ||
-          candidate.ownership === "agent" ||
-          candidate.lifecycle !== "active"
-        ) {
-          return false;
-        }
-        const activeTab = candidate.tabs.find(
-          (candidateTab) => candidateTab.targetId === candidate.activeTabId,
-        );
-        return Boolean(activeTab && isRemoteWebUrl(activeTab.url));
-      })
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0]?.id;
     if (
       !runtime ||
       runtime.retained ||
       !space ||
-      space.ownership === "agent" ||
-      space.lifecycle !== "active" ||
       space.activeTabId !== targetId ||
-      preferredSpaceId !== spaceId ||
       !this.previewActive ||
       !this.visiblePreviewSpaceIds.has(spaceId) ||
       !tab ||
-      !isRemoteWebUrl(tab.url)
+      (!isRemoteWebUrl(tab.url) && !isInternalNewTabUrl(tab.url))
     ) {
       return false;
     }
@@ -1934,6 +1998,7 @@ export class TaskSpaceManager {
     if (
       !runtime ||
       runtime.retained ||
+      this.parkedRestoreTargets.has(targetId) ||
       this.isPresentationSurface(targetId) ||
       this.frameSubscriptionCaptures.has(targetId) ||
       this.overviewScreencast?.targetId === targetId
@@ -1948,6 +2013,7 @@ export class TaskSpaceManager {
     if (
       !runtime ||
       runtime.retained ||
+      this.parkedRestoreTargets.has(targetId) ||
       this.isPresentationSurface(targetId) ||
       this.hiddenSurfaceTargets.has(targetId) ||
       this.frameSubscriptionCaptures.has(targetId) ||
@@ -1963,6 +2029,7 @@ export class TaskSpaceManager {
     if (
       !runtime ||
       runtime.retained ||
+      this.parkedRestoreTargets.has(targetId) ||
       this.isPresentationSurface(targetId) ||
       this.hiddenSurfaceTargets.has(targetId) ||
       this.frameSubscriptionCaptures.has(targetId) ||

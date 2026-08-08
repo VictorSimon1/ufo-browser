@@ -597,7 +597,7 @@ async function start() {
         })()`,
         true,
       );
-    }, 1500);
+    }, 4500);
   }
 
   if (isTestApp) {
@@ -663,6 +663,19 @@ async function start() {
             `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
           ).catch(() => undefined);
           app.quit();
+        },
+      );
+    }, 350);
+  }
+
+  if (isTestApp && process.env.X_BROWSER_TEST_WARM_ENTRY_AUDIT === "1") {
+    setTimeout(() => {
+      void runWarmEntryAudit({ testRoot, manager, presentation }).catch(
+        async (error) => {
+          await writeFile(
+            join(testRoot, "warm-entry-audit.json"),
+            `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+          ).catch(() => undefined);
         },
       );
     }, 350);
@@ -904,6 +917,79 @@ async function start() {
   window.on("closed", () => {
     if (testDiagnosticsTimer) clearInterval(testDiagnosticsTimer);
   });
+}
+
+async function runWarmEntryAudit(context: {
+  testRoot: string;
+  manager: TaskSpaceManager;
+  presentation: PresentationCoordinator;
+}) {
+  const { testRoot, manager, presentation } = context;
+  const spaces = manager
+    .listSpaces()
+    .filter(
+      (space) =>
+        space.ownership === "user" && space.lifecycle === "active",
+    )
+    .slice(0, 8);
+  if (spaces.length < 2) {
+    throw new Error("warm entry audit requires at least two user Spaces");
+  }
+  await waitUntil(() => {
+    const state = manager.previewDiagnostics();
+    return spaces.every((space) => {
+      const targetId = space.activeTabId;
+      const runtime = state.runtimes.find(
+        (candidate) => candidate.targetId === targetId,
+      );
+      return (
+        runtime?.runtime === true &&
+        runtime.loaded === true &&
+        state.parkedRestoreTargets.includes(targetId)
+      );
+    });
+  }, 9_000);
+
+  const targetSpace = spaces[Math.min(1, spaces.length - 1)];
+  const targetId = targetSpace.activeTabId;
+  const targetView = manager.getView(targetId);
+  if (!targetView) throw new Error("warm entry target renderer is missing");
+  const before = manager.previewDiagnostics();
+  const webContentsId = targetView.webContents.id;
+  const enteredAt = Date.now();
+  await presentation.showSpace(targetSpace.id);
+  const entryElapsedMs = Date.now() - enteredAt;
+  const afterView = manager.getView(targetId);
+  const after = manager.previewDiagnostics();
+  const otherTargets = spaces
+    .map((space) => space.activeTabId)
+    .filter((candidate) => candidate !== targetId);
+  const result = {
+    ok:
+      afterView?.webContents.id === webContentsId &&
+      afterView.webContents.isLoading() === false &&
+      entryElapsedMs < 400 &&
+      after.presentedTargetId === targetId &&
+      after.runtimes.find((runtime) => runtime.targetId === targetId)
+        ?.backgroundSurface === false &&
+      otherTargets.every((candidate) =>
+        after.parkedRestoreTargets.includes(candidate),
+      ),
+    entryElapsedMs,
+    targetSpaceId: targetSpace.id,
+    targetId,
+    sameWebContents: afterView?.webContents.id === webContentsId,
+    loadingAfterEntry: afterView?.webContents.isLoading() ?? true,
+    beforeRuntimeCount: before.runtimes.filter((runtime) => runtime.runtime)
+      .length,
+    beforeParkedTargets: before.parkedRestoreTargets,
+    afterParkedTargets: after.parkedRestoreTargets,
+    presentedTargetId: after.presentedTargetId,
+  };
+  await writeFile(
+    join(testRoot, "warm-entry-audit.json"),
+    `${JSON.stringify(result, null, 2)}\n`,
+  );
 }
 
 async function runAppQuitAudit(context: {

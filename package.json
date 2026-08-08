@@ -18,6 +18,7 @@
     "verify:preview": "npm run build && node --test dist/tests/preview-visibility.test.js",
     "verify:preview-startup": "npm run build && node scripts/preview-startup-e2e.mjs",
     "verify:restart-restore": "npm run build && node scripts/restart-restore-e2e.mjs",
+    "verify:warm-entry": "npm run build && node scripts/warm-space-entry-e2e.mjs",
     "verify:restart-scale": "npm run build && node scripts/restart-scale-e2e.mjs",
     "verify:live-preview": "npm run build && node scripts/live-preview-e2e.mjs",
     "verify:space-ui": "npm run build && node scripts/space-ui-e2e.mjs",
