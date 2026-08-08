@@ -35,6 +35,8 @@ let openMenuCard: HTMLElement | undefined;
 let profileDialogLocked = false;
 let latestSyncProgress: any;
 let profileSyncHideTimer = 0;
+let createSpacePending = false;
+let createProfileMenuGeneration = 0;
 
 void api.app.info().then((info: any) => {
   const version = String(info?.version || "").trim();
@@ -52,7 +54,9 @@ const observer = new IntersectionObserver(
   { rootMargin: "120px 0px", threshold: [0, 0.01, 0.5, 1] },
 );
 
-document.querySelector("#quick-create")!.addEventListener("click", openCreateSpace);
+document.querySelector("#quick-create")!.addEventListener("click", () => {
+  void createSpaceWithProfile(defaultProfile()?.id);
+});
 document.querySelector("#profile-button")!.addEventListener("click", () => {
   void openProfileDialog();
 });
@@ -66,13 +70,28 @@ api.profiles.onImportProgress((progress: any) => updateImportProgress(progress))
 api.profiles.onSyncProgress((progress: any) => updateProfileSyncProgress(progress));
 document.addEventListener("pointerdown", (event) => {
   const target = event.target as Element | null;
-  if (target?.closest(".card-menu")) return;
-  closeCardMenu();
+  if (!target?.closest(".card-menu")) closeCardMenu();
+  if (!target?.closest(".create-space-profile-control")) {
+    closeCreateProfileMenu();
+  }
+});
+document.addEventListener("focusin", (event) => {
+  const target = event.target as Element | null;
+  if (
+    isCreateProfileMenuOpen() &&
+    !target?.closest(".create-space-profile-control")
+  ) {
+    closeCreateProfileMenu();
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!profileDialogBackdrop.hidden) {
     closeProfileDialog();
+    return;
+  }
+  if (isCreateProfileMenuOpen()) {
+    closeCreateProfileMenu(true);
     return;
   }
   if (!openMenuCard) return;
@@ -475,11 +494,185 @@ function previewHost(value?: string) {
 }
 
 function createCard() {
-  const card = document.createElement("button");
+  const card = document.createElement("article");
   card.className = "create-space-card";
-  card.innerHTML = '<span><i></i><b></b></span><small>新建 Space</small>';
-  card.addEventListener("click", openCreateSpace);
+  card.innerHTML = `
+    <button class="create-space-main" aria-label="使用默认 Profile 新建 Space">
+      <span class="create-space-plus" aria-hidden="true"><i></i><b></b></span>
+    </button>
+    <div class="create-space-profile-control">
+      <button class="create-space-profile-trigger" aria-label="选择用于新 Space 的 Profile" aria-haspopup="menu" aria-controls="create-profile-popover" aria-expanded="false">
+        <span class="profile-avatar create-space-profile-avatar">U</span>
+        <span class="create-space-profile-label">UFO-Browser</span>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6.5 8 3.5 3.5L13.5 8"></path></svg>
+      </button>
+      <div id="create-profile-popover" class="create-profile-popover" role="menu" hidden></div>
+    </div>
+  `;
+  card
+    .querySelector<HTMLButtonElement>(".create-space-main")!
+    .addEventListener("click", () => {
+      void createSpaceWithProfile(defaultProfile()?.id);
+    });
+  const profileTrigger = card.querySelector<HTMLButtonElement>(
+    ".create-space-profile-trigger",
+  )!;
+  profileTrigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void toggleCreateProfileMenu();
+    });
+  profileTrigger.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown") return;
+    event.preventDefault();
+    if (isCreateProfileMenuOpen()) {
+      focusCreateProfileOption(0);
+      return;
+    }
+    void toggleCreateProfileMenu(true);
+  });
+  card
+    .querySelector<HTMLElement>(".create-profile-popover")!
+    .addEventListener("keydown", navigateCreateProfileMenu);
   return card;
+}
+
+function defaultProfile() {
+  return browserProfiles.find((profile) => profile.isDefault) ?? browserProfiles[0];
+}
+
+async function createSpaceWithProfile(profileId?: string) {
+  if (createSpacePending) return;
+  createSpacePending = true;
+  closeCreateProfileMenu();
+  closeCardMenu();
+  updateCreateCard();
+  try {
+    await api.overview.create(undefined, profileId);
+  } catch {
+    create.classList.add("create-failed");
+    window.setTimeout(() => create.classList.remove("create-failed"), 320);
+  } finally {
+    createSpacePending = false;
+    updateCreateCard();
+  }
+}
+
+async function toggleCreateProfileMenu(focusFirst = false) {
+  if (createSpacePending) return;
+  const trigger = create.querySelector<HTMLButtonElement>(
+    ".create-space-profile-trigger",
+  )!;
+  if (trigger.classList.contains("loading")) {
+    closeCreateProfileMenu(true);
+    return;
+  }
+  if (isCreateProfileMenuOpen()) {
+    closeCreateProfileMenu(true);
+    return;
+  }
+  closeCardMenu();
+  const generation = ++createProfileMenuGeneration;
+  trigger.classList.add("loading");
+  try {
+    await refreshProfiles();
+  } catch {
+    // Keep the last known local Profile list if the refresh is interrupted.
+  } finally {
+    if (generation === createProfileMenuGeneration) {
+      trigger.classList.remove("loading");
+    }
+  }
+  if (generation !== createProfileMenuGeneration || createSpacePending) return;
+  renderCreateProfileMenu();
+  const popover = create.querySelector<HTMLElement>(".create-profile-popover")!;
+  popover.hidden = false;
+  create.classList.add("profile-menu-open");
+  trigger.setAttribute("aria-expanded", "true");
+  if (focusFirst) focusCreateProfileOption(0);
+}
+
+function renderCreateProfileMenu() {
+  const popover = create.querySelector<HTMLElement>(".create-profile-popover")!;
+  popover.replaceChildren();
+
+  const heading = document.createElement("div");
+  heading.className = "create-profile-heading";
+  heading.textContent = "使用其他个人资料创建 Space";
+  popover.append(heading);
+
+  for (const profile of browserProfiles) {
+    const option = document.createElement("button");
+    option.className = "create-profile-option";
+    option.type = "button";
+    option.setAttribute("role", "menuitem");
+    option.dataset.profileId = String(profile.id);
+    option.innerHTML = `
+      <span class="profile-avatar create-profile-option-avatar"></span>
+      <span class="create-profile-option-name"></span>
+      <small></small>
+    `;
+    renderProfileAvatar(
+      option.querySelector<HTMLElement>(".create-profile-option-avatar")!,
+      profile,
+    );
+    option.querySelector<HTMLElement>(".create-profile-option-name")!.textContent =
+      profile.name;
+    option.querySelector("small")!.textContent = profile.isDefault ? "默认" : "";
+    option.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void createSpaceWithProfile(profile.id);
+    });
+    popover.append(option);
+  }
+}
+
+function navigateCreateProfileMenu(event: KeyboardEvent) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const options = [
+    ...create.querySelectorAll<HTMLButtonElement>(".create-profile-option"),
+  ];
+  if (!options.length) return;
+  event.preventDefault();
+  const current = options.indexOf(document.activeElement as HTMLButtonElement);
+  if (event.key === "Home") {
+    options[0].focus();
+    return;
+  }
+  if (event.key === "End") {
+    options.at(-1)!.focus();
+    return;
+  }
+  const direction = event.key === "ArrowDown" ? 1 : -1;
+  const next = current < 0
+    ? direction > 0 ? 0 : options.length - 1
+    : (current + direction + options.length) % options.length;
+  options[next].focus();
+}
+
+function focusCreateProfileOption(index: number) {
+  create
+    .querySelectorAll<HTMLButtonElement>(".create-profile-option")
+    .item(index)
+    ?.focus();
+}
+
+function isCreateProfileMenuOpen() {
+  return !create.querySelector<HTMLElement>(".create-profile-popover")!.hidden;
+}
+
+function closeCreateProfileMenu(restoreFocus = false) {
+  const popover = create.querySelector<HTMLElement>(".create-profile-popover")!;
+  const trigger = create.querySelector<HTMLButtonElement>(
+    ".create-space-profile-trigger",
+  )!;
+  const opening = trigger.classList.contains("loading");
+  if (popover.hidden && !opening) return;
+  createProfileMenuGeneration += 1;
+  popover.hidden = true;
+  create.classList.remove("profile-menu-open");
+  trigger.classList.remove("loading");
+  trigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) trigger.focus();
 }
 
 async function openProfileDialog() {
@@ -890,56 +1083,37 @@ function renderDialogError(
   button.addEventListener("click", action);
 }
 
-function openCreateSpace() {
-  if (browserProfiles.length <= 1) {
-    void api.overview.create();
-    return;
-  }
-  profileDialogLocked = false;
-  profileDialogBackdrop.hidden = false;
-  document.body.classList.add("dialog-open");
-  profileDialogTitle.textContent = "新建 Space";
-  profileDialogSubtitle.textContent = "选择这个 Space 使用的浏览器 Profile";
-  profileDialogContent.innerHTML = `
-    <form class="create-space-form">
-      <label><span>名称</span><input name="name" maxlength="80" placeholder="新 Space" /></label>
-      <label><span>Profile</span><select name="profile"></select></label>
-      <div class="dialog-actions"><button type="button" class="secondary-button">取消</button><button type="submit" class="primary-button">创建</button></div>
-    </form>
-  `;
-  const form = profileDialogContent.querySelector<HTMLFormElement>("form")!;
-  const select = form.querySelector<HTMLSelectElement>("select")!;
-  for (const profile of browserProfiles) {
-    const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = profile.name;
-    option.selected = profile.isDefault;
-    select.append(option);
-  }
-  form.querySelector<HTMLButtonElement>('button[type="button"]')!.addEventListener("click", closeProfileDialog);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const name = form.querySelector<HTMLInputElement>('input[name="name"]')!.value.trim();
-    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    submit.disabled = true;
-    try {
-      await api.overview.create(name || undefined, select.value);
-      closeProfileDialog();
-    } catch {
-      submit.disabled = false;
-    }
-  });
-  form.querySelector<HTMLInputElement>("input")!.focus();
-}
-
 function updateProfileButton() {
-  const selected = browserProfiles.find((profile) => profile.isDefault) ?? browserProfiles[0];
+  const selected = defaultProfile();
   if (!selected) return;
   renderProfileAvatar(
     document.querySelector<HTMLElement>("#profile-avatar")!,
     selected,
   );
   document.querySelector("#profile-button-label")!.textContent = selected.name;
+  updateCreateCard();
+}
+
+function updateCreateCard() {
+  const selected = defaultProfile();
+  const main = create.querySelector<HTMLButtonElement>(".create-space-main")!;
+  const trigger = create.querySelector<HTMLButtonElement>(
+    ".create-space-profile-trigger",
+  )!;
+  const quickCreate = document.querySelector<HTMLButtonElement>("#quick-create")!;
+  main.disabled = createSpacePending;
+  trigger.disabled = createSpacePending || !selected;
+  quickCreate.disabled = createSpacePending;
+  create.dataset.busy = createSpacePending ? "1" : "0";
+  if (!selected) return;
+  renderProfileAvatar(
+    create.querySelector<HTMLElement>(".create-space-profile-avatar")!,
+    selected,
+  );
+  create.querySelector<HTMLElement>(".create-space-profile-label")!.textContent =
+    selected.name;
+  main.setAttribute("aria-label", `使用 ${selected.name} 新建 Space`);
+  trigger.setAttribute("aria-label", `当前 Profile：${selected.name}；选择其他 Profile`);
 }
 
 function renderProfileAvatar(element: HTMLElement, profile: any) {

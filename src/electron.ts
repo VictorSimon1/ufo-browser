@@ -685,7 +685,13 @@ async function start() {
 
   if (isTestApp && process.env.X_BROWSER_TEST_SPACE_UI_AUDIT === "1") {
     setTimeout(() => {
-      void runSpaceUiAudit({ testRoot, manager, overviewView }).catch(
+      void runSpaceUiAudit({
+        testRoot,
+        manager,
+        profiles,
+        presentation,
+        overviewView,
+      }).catch(
         async (error) => {
           await writeFile(
             join(testRoot, "space-ui-audit.json"),
@@ -1997,12 +2003,27 @@ async function runControlUiAudit(context: {
 async function runSpaceUiAudit(context: {
   testRoot: string;
   manager: TaskSpaceManager;
+  profiles: BrowserProfileRegistry;
+  presentation: PresentationCoordinator;
   overviewView: WebContentsView;
 }) {
-  const { testRoot, manager, overviewView } = context;
+  const { testRoot, manager, profiles, presentation, overviewView } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const initial = manager.listSpaces()[0];
   if (!initial) throw new Error("space UI audit requires one Space");
+  const alternateProfileId = "space-ui-alternate";
+  if (!profiles.list().some((profile) => profile.id === alternateProfileId)) {
+    const now = Date.now();
+    await profiles.add({
+      id: alternateProfileId,
+      partitionId: "x-browser-profile-space-ui-alternate",
+      name: "工作 Profile",
+      kind: "local",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const defaultProfileId = profiles.getDefault().id;
   await wait(220);
 
   const menu = await overviewView.webContents.executeJavaScript(
@@ -2082,7 +2103,8 @@ async function runSpaceUiAudit(context: {
       const preview = card?.querySelector('.space-preview');
       const title = card?.querySelector('.space-title-line strong');
       const create = document.querySelector('.create-space-card');
-      const plus = create?.querySelector(':scope > span');
+      const plus = create?.querySelector('.create-space-plus');
+      const profileTrigger = create?.querySelector('.create-space-profile-trigger');
       const brandIcon = document.querySelector('.overview-brand > img');
       return {
         brandName: document.querySelector('.overview-brand strong')?.textContent || '',
@@ -2095,6 +2117,8 @@ async function runSpaceUiAudit(context: {
         previewShadow: preview ? getComputedStyle(preview).boxShadow : '',
         createRadius: create ? getComputedStyle(create).borderRadius : '',
         plusBorder: plus ? getComputedStyle(plus).borderStyle : '',
+        profileTriggerRadius: profileTrigger ? getComputedStyle(profileTrigger).borderRadius : '',
+        profileTriggerHeight: profileTrigger ? getComputedStyle(profileTrigger).height : '',
       };
     })()`,
     true,
@@ -2133,6 +2157,69 @@ async function runSpaceUiAudit(context: {
     originalOwnership,
     originalLifecycle,
   );
+  const initialSpaceCount = manager.listSpaces().length;
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.create-space-profile-trigger')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `!document.querySelector('.create-profile-popover')?.hidden && document.querySelectorAll('.create-profile-option').length >= 2`,
+  );
+  const createMenu = await overviewView.webContents.executeJavaScript(
+    `(() => {
+      const trigger = document.querySelector('.create-space-profile-trigger');
+      const popover = document.querySelector('.create-profile-popover');
+      return {
+        expanded: trigger?.getAttribute('aria-expanded') || '',
+        label: document.querySelector('.create-space-profile-label')?.textContent || '',
+        heading: popover?.querySelector('.create-profile-heading')?.textContent || '',
+        profileIds: [...document.querySelectorAll('.create-profile-option')].map((option) => option.getAttribute('data-profile-id')),
+        names: [...document.querySelectorAll('.create-profile-option-name')].map((name) => name.textContent || ''),
+        modalPresent: Boolean(document.querySelector('.create-space-form:not(.profile-clone-form)')),
+      };
+    })()`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "space-create-profile-menu.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.create-space-main')?.click()`,
+    true,
+  );
+  await waitUntil(
+    () => manager.listSpaces().length === initialSpaceCount + 1,
+    3_000,
+  );
+  const defaultCreated = manager.listSpaces().at(-1)!;
+  const defaultCreationDom = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      menuHidden: document.querySelector('.create-profile-popover')?.hidden,
+      modalPresent: Boolean(document.querySelector('.create-space-form:not(.profile-clone-form)')),
+    }))()`,
+    true,
+  );
+  await presentation.showOverview();
+  await wait(140);
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.create-space-profile-trigger')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `!document.querySelector('.create-profile-popover')?.hidden`,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.create-profile-option[data-profile-id="${alternateProfileId}"]')?.click()`,
+    true,
+  );
+  await waitUntil(
+    () => manager.listSpaces().length === initialSpaceCount + 2,
+    3_000,
+  );
+  const alternateCreated = manager.listSpaces().at(-1)!;
   const ok =
     menu.card === true &&
     menu.expanded === "true" &&
@@ -2153,6 +2240,8 @@ async function runSpaceUiAudit(context: {
     visualBefore.previewRadius === "18px" &&
     visualBefore.createRadius === "18px" &&
     visualBefore.plusBorder === "none" &&
+    visualBefore.profileTriggerRadius === "999px" &&
+    visualBefore.profileTriggerHeight === "40px" &&
     controlledVisual.controlled === "1" &&
     controlledVisual.runningChipPresent === false &&
     controlledVisual.dotWidth === "5px" &&
@@ -2161,8 +2250,23 @@ async function runSpaceUiAudit(context: {
     controlledVisual.frameBorderWidth === "2px" &&
     controlledVisual.frameAnimation === "agent-card-frame-breathe" &&
     Math.abs(controlledVisual.titleX - visualBefore.titleX) < 0.5 &&
-    controlledVisual.previewShadow !== visualBefore.previewShadow;
+    controlledVisual.previewShadow !== visualBefore.previewShadow &&
+    createMenu.expanded === "true" &&
+    createMenu.heading === "使用其他个人资料创建 Space" &&
+    createMenu.profileIds.includes(defaultProfileId) &&
+    createMenu.profileIds.includes(alternateProfileId) &&
+    createMenu.names.includes("工作 Profile") &&
+    createMenu.modalPresent === false &&
+    defaultCreated.profileId === defaultProfileId &&
+    defaultCreated.tabs[0]?.url === "https://www.google.com/" &&
+    defaultCreationDom.menuHidden === true &&
+    defaultCreationDom.modalPresent === false &&
+    alternateCreated.profileId === alternateProfileId &&
+    alternateCreated.tabs[0]?.url === "https://www.google.com/";
   await manager.renameSpace(initial.id, initial.name);
+  await presentation.showOverview();
+  await manager.closeSpace(defaultCreated.id);
+  await manager.closeSpace(alternateCreated.id);
   await writeFile(
     join(testRoot, "space-ui-audit.json"),
     `${JSON.stringify(
@@ -2174,6 +2278,16 @@ async function runSpaceUiAudit(context: {
         finalDom,
         visualBefore,
         controlledVisual,
+        createMenu,
+        defaultCreation: {
+          profileId: defaultCreated.profileId,
+          url: defaultCreated.tabs[0]?.url,
+          dom: defaultCreationDom,
+        },
+        alternateCreation: {
+          profileId: alternateCreated.profileId,
+          url: alternateCreated.tabs[0]?.url,
+        },
       },
       null,
       2,
@@ -2353,22 +2467,15 @@ async function runChromeImportUiAudit(context: {
   };
 
   await overviewView.webContents.executeJavaScript(
-    `document.querySelector('.import-result-view button')?.click(); document.querySelector('#quick-create')?.click()`,
+    `document.querySelector('#profile-dialog-close')?.click(); document.querySelector('.create-space-profile-trigger')?.click()`,
     true,
   );
   await waitForRenderer(
     overviewView,
-    `Boolean(document.querySelector('.create-space-form'))`,
+    `!document.querySelector('.create-profile-popover')?.hidden && Boolean(document.querySelector('.create-profile-option[data-profile-id=${JSON.stringify(imported.id)}]'))`,
   );
   await overviewView.webContents.executeJavaScript(
-    `(() => {
-      const form = document.querySelector('.create-space-form');
-      const name = form?.querySelector('input[name="name"]');
-      const profile = form?.querySelector('select[name="profile"]');
-      if (name) name.value = 'Imported Profile Space';
-      if (profile) profile.value = ${JSON.stringify(imported.id)};
-      form?.requestSubmit();
-    })()`,
+    `document.querySelector('.create-profile-option[data-profile-id=${JSON.stringify(imported.id)}]')?.click()`,
     true,
   );
   await waitUntil(
