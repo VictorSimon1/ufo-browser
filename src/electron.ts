@@ -457,6 +457,12 @@ async function start() {
   manager.onAgentPointer((spaceId, pointer) =>
     presentation.showAgentPointer(spaceId, pointer),
   );
+  manager.onBeforeSpaceClose(async (spaceId) => {
+    const current = presentation.current();
+    if (current.kind === "space" && current.spaceId === spaceId) {
+      await presentation.showOverview({ parkPrevious: false });
+    }
+  });
 
   const shellIds = new Set([
     chatView.webContents.id,
@@ -490,6 +496,12 @@ async function start() {
     overviewView.webContents.send("x-browser:spaces-changed", spaces);
     const current = presentation.current();
     if (current.kind === "space") {
+      if (!manager.getSpace(current.spaceId)) {
+        void presentation.showOverview({ parkPrevious: false }).catch(
+          () => undefined,
+        );
+        return;
+      }
       browserView.webContents.send(
         "x-browser:browser-state",
         manager.navigationState(current.spaceId),
@@ -2079,6 +2091,22 @@ async function runControlUiAudit(context: {
       await captureWebContentsPng(overviewView),
     );
 
+    const closingPageContents = view.webContents;
+    await presentation.showSpace(space.id);
+    await wait(120);
+    await manager.closeSpace(space.id);
+    await wait(120);
+    const closeWhilePresented = {
+      overview: presentation.current().kind === "overview",
+      rootChildCount: window.contentView.children.length,
+      overviewAttached: window.contentView.children.includes(overviewView),
+      browserAttached: window.contentView.children.includes(browserView),
+      pageAttached: window.contentView.children.includes(view),
+      overlayAttached: window.contentView.children.includes(overlayView),
+      spacePresent: Boolean(manager.getSpace(space.id)),
+      pageDestroyed: closingPageContents.isDestroyed(),
+    };
+
     const ok =
       chrome.controlled === true &&
       chrome.lockVisible === true &&
@@ -2106,10 +2134,18 @@ async function runControlUiAudit(context: {
       backgroundAfterReturn.overlayAttached === false &&
       backgroundAfterReturn.pageOverlayPresent === false &&
       returned.rootChildCount === 1 &&
-      returned.runtimePreserved === true;
+      returned.runtimePreserved === true &&
+      closeWhilePresented.overview === true &&
+      closeWhilePresented.rootChildCount === 1 &&
+      closeWhilePresented.overviewAttached === true &&
+      closeWhilePresented.browserAttached === false &&
+      closeWhilePresented.pageAttached === false &&
+      closeWhilePresented.overlayAttached === false &&
+      closeWhilePresented.spacePresent === false &&
+      closeWhilePresented.pageDestroyed === true;
     await writeFile(
       join(testRoot, "control-ui-audit.json"),
-      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, nativeOverlay, overlay, pageIsolation, pageButton, pageInputBefore, pageInputAfter, agentClickCount, humanAttemptClickCount, motionPreference, animationAdvanced, backgroundAfterReturn, returned }, null, 2)}\n`,
+      `${JSON.stringify({ ok, chrome, backgroundBeforePresentation, nativeOverlay, overlay, pageIsolation, pageButton, pageInputBefore, pageInputAfter, agentClickCount, humanAttemptClickCount, motionPreference, animationAdvanced, backgroundAfterReturn, returned, closeWhilePresented }, null, 2)}\n`,
     );
   } finally {
     await presentation.showOverview().catch(() => undefined);

@@ -10,10 +10,14 @@ function fakeView(name: string) {
     visible: false,
     bounds: { x: 0, y: 0, width: 0, height: 0 },
     webContents: {
+      destroyed: false,
       focused: false,
       send() {},
       focus() {
         this.focused = true;
+      },
+      isDestroyed() {
+        return this.destroyed;
       },
       isFocused() {
         return this.focused;
@@ -201,5 +205,17 @@ test("removing the overlay restores page focus only in the foreground", async ()
   state.setWindowFocused(false);
   state.setAgentControlled(false);
   state.coordinator.refreshControlOverlay();
+  assert.equal(state.views.page.webContents.focused, false);
+});
+
+test("overlay removal skips focus after the presented page is destroyed", async () => {
+  const state = harness({ agentControlled: true });
+  await state.coordinator.showSpace(1);
+
+  state.views.page.webContents.destroyed = true;
+  state.views.page.webContents.focused = false;
+  state.setAgentControlled(false);
+
+  assert.doesNotThrow(() => state.coordinator.refreshControlOverlay());
   assert.equal(state.views.page.webContents.focused, false);
 });

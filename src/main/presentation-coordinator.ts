@@ -14,6 +14,10 @@ type SpaceTransitionRequest = {
   source: Rect;
 };
 
+type PresentationRequestOptions = {
+  parkPrevious?: boolean;
+};
+
 const SPACE_TRANSITION_DURATION_MS = 180;
 const SPACE_TRANSITION_CAPTURE_TIMEOUT_MS = 260;
 const SPACE_TRANSITION_READY_TIMEOUT_MS = 320;
@@ -64,8 +68,8 @@ export class PresentationCoordinator {
     this.publishState();
   }
 
-  showOverview() {
-    return this.request({ kind: "overview" });
+  showOverview(options?: PresentationRequestOptions) {
+    return this.request({ kind: "overview" }, undefined, options);
   }
 
   showSpace(spaceId: number, transition?: SpaceTransitionRequest) {
@@ -102,11 +106,15 @@ export class PresentationCoordinator {
     );
   }
 
-  private request(next: Presentation, transition?: SpaceTransitionRequest) {
+  private request(
+    next: Presentation,
+    transition?: SpaceTransitionRequest,
+    options: PresentationRequestOptions = {},
+  ) {
     const generation = ++this.generation;
     this.commitQueue = this.commitQueue.then(async () => {
       if (generation !== this.generation) return;
-      await this.commit(next, generation, transition);
+      await this.commit(next, generation, transition, options);
     });
     return this.commitQueue;
   }
@@ -115,6 +123,7 @@ export class PresentationCoordinator {
     next: Presentation,
     generation: number,
     transition?: SpaceTransitionRequest,
+    options: PresentationRequestOptions = {},
   ) {
     let nextPage: WebContentsView | null = null;
     let nextTargetId: string | null = null;
@@ -221,7 +230,11 @@ export class PresentationCoordinator {
       this.syncControlOverlay();
       this.syncPreviewActivity();
       this.publishState();
-      if (previousTarget && previousTarget !== nextTargetId) {
+      if (
+        options.parkPrevious !== false &&
+        previousTarget &&
+        previousTarget !== nextTargetId
+      ) {
         void this.manager.parkAfterPresentation(previousTarget).catch(() => undefined);
       }
       return;
@@ -277,7 +290,11 @@ export class PresentationCoordinator {
     this.syncControlOverlay();
     this.syncPreviewActivity();
     this.publishState();
-    if (previousTarget && previousTarget !== nextTargetId) {
+    if (
+      options.parkPrevious !== false &&
+      previousTarget &&
+      previousTarget !== nextTargetId
+    ) {
       void this.manager.parkAfterPresentation(previousTarget).catch(() => undefined);
     }
   }
@@ -329,7 +346,8 @@ export class PresentationCoordinator {
         current.kind === "space" &&
         this.window.isFocused()
       ) {
-        this.attachedPage?.webContents.focus();
+        const pageContents = this.attachedPage?.webContents;
+        if (pageContents && !pageContents.isDestroyed()) pageContents.focus();
       }
       return;
     }
@@ -350,11 +368,14 @@ export class PresentationCoordinator {
       name: space.name,
       task: space.agentTask,
     });
+    const overlayContents = this.views.overlay.webContents;
     if (
+      overlayContents &&
+      !overlayContents.isDestroyed() &&
       this.window.isFocused() &&
-      (newlyVisible || !this.views.overlay.webContents.isFocused())
+      (newlyVisible || !overlayContents.isFocused())
     ) {
-      this.views.overlay.webContents.focus();
+      overlayContents.focus();
     }
   }
 

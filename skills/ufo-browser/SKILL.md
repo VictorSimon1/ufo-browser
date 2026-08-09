@@ -82,6 +82,8 @@ After explicit user confirmation, to continue work from an existing user-owned, 
 
 `handOffTaskSpace` and `completeTaskSpace` resolve `{ done: true }` when the operation actually happened. Check `done` before telling the user the handoff/cleanup is finished — a `skipped` result usually means you targeted a space that was never yours.
 
+`completeTaskSpace(...)` is idempotent after cleanup: if the target Space has already disappeared (for example, another close path won the race), it resolves `{ done: false, skipped: 'not-found' }` instead of throwing. Report that the Space was already closed; do not describe a failed command as a successful new close.
+
 **`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required and defaults by policy to `false`: close the task space after completion unless there is a concrete reason to leave the live page visible.
 
 Use `{ keep: true }` only when the user explicitly asks to keep the page open, the task needs manual user action in that exact page, or the result cannot be delivered well as a URL, file, artifact, or summary. Do not keep a task space open merely because a page was visited, a document was created, or a screenshot was used for verification.

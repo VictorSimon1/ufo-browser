@@ -118,6 +118,9 @@ export class TaskSpaceManager {
   private readonly activeTabListeners = new Set<
     (spaceId: number, targetId: string) => void | Promise<void>
   >();
+  private readonly beforeSpaceCloseListeners = new Set<
+    (spaceId: number) => void | Promise<void>
+  >();
   private presentedTargetId: string | null = null;
   private presentationReservedTargetId: string | null = null;
   private readonly hiddenSurfaceTargets = new Set<string>();
@@ -185,6 +188,11 @@ export class TaskSpaceManager {
   ) {
     this.activeTabListeners.add(listener);
     return () => this.activeTabListeners.delete(listener);
+  }
+
+  onBeforeSpaceClose(listener: (spaceId: number) => void | Promise<void>) {
+    this.beforeSpaceCloseListeners.add(listener);
+    return () => this.beforeSpaceCloseListeners.delete(listener);
   }
 
   listSpaces(): PublicSpace[] {
@@ -282,8 +290,16 @@ export class TaskSpaceManager {
 
   async closeSpace(spaceId: number) {
     return this.enqueue(spaceId, async () => {
+      if (!this.state.spaces.some((space) => space.id === spaceId)) return false;
+      // The currently presented native page must be detached while its
+      // WebContents is still alive. Destroying it first leaves AppKit with a
+      // black child surface and makes overlay focus restoration race a missing
+      // webContents object.
+      for (const listener of this.beforeSpaceCloseListeners) {
+        await listener(spaceId);
+      }
       const index = this.state.spaces.findIndex((space) => space.id === spaceId);
-      if (index < 0) return;
+      if (index < 0) return false;
       const [space] = this.state.spaces.splice(index, 1);
       this.activeAgentConnections.delete(spaceId);
       for (const tab of space.tabs) this.destroyRuntime(tab.targetId);
@@ -294,6 +310,7 @@ export class TaskSpaceManager {
       this.publishedPreviewRevision.delete(spaceId);
       this.requestOverviewScreencastReconcile();
       await this.persistAndNotify();
+      return true;
     });
   }
 

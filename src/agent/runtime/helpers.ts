@@ -128,6 +128,7 @@ export async function listTaskSpaces() {
  *   handOffTaskSpace                    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: true }    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
+ *   completeTaskSpace missing target    -> skipped, resolves { done: false, skipped: "not-found" }
  *   takeOverTaskSpace / waitForAgentControl -> no ownership check (operates as-is)
  *
  * Keep this table in sync with the one in skills/ego-browser/SKILL.md.
@@ -270,7 +271,9 @@ async function selectTaskSpaceIfProvided(
  * space first, then closes it.
  * @param {string|number} nameOrId Task space id or name.
  * @param {{ keep: boolean }} options Required. `keep:true` hands the page to the user; `keep:false` closes the space.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when the space was completed or closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * Repeating completion after the Space has already disappeared is idempotent
+ * and resolves `{ done: false, skipped: "not-found" }` instead of throwing.
+ * @returns {Promise<{done: boolean, skipped?: "user-owned"|"not-found"}>} `{ done: true }` when the space was completed or closed; `{ done: false, skipped: "user-owned"|"not-found" }` when nothing was done.
  */
 export async function completeTaskSpace(
   nameOrId: string | number,
@@ -292,7 +295,7 @@ export async function completeTaskSpace(
   const spaces = await listTaskSpaces();
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) {
-    throw new Error(`task space not found: ${nameOrId}`);
+    return { done: false, skipped: "not-found" as const };
   }
   if (options.keep) {
     if (match.ownership === "user") {
