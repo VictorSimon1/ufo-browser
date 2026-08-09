@@ -154,12 +154,28 @@ async function verifyArtifacts(appRoot, expectArchives) {
     "Contents/Resources/skills/ufo-browser/SKILL.md",
     "Contents/Resources/skills/ufo-browser/agents/openai.yaml",
     "Contents/Resources/app.asar.unpacked/dist/bin/ufo-keychain-helper",
+    "Contents/Resources/app.asar.unpacked/dist/bin/ufo-transition.node",
+    "Contents/Resources/app.asar.unpacked/dist/bin/ufo-browser-chrome.node",
   ];
   for (const relative of required) await access(join(appRoot, relative));
   await access(
     join(
       appRoot,
       "Contents/Resources/app.asar.unpacked/dist/bin/ufo-keychain-helper",
+    ),
+    fsConstants.X_OK,
+  );
+  await access(
+    join(
+      appRoot,
+      "Contents/Resources/app.asar.unpacked/dist/bin/ufo-browser-chrome.node",
+    ),
+    fsConstants.X_OK,
+  );
+  await access(
+    join(
+      appRoot,
+      "Contents/Resources/app.asar.unpacked/dist/bin/ufo-transition.node",
     ),
     fsConstants.X_OK,
   );

@@ -1,7 +1,12 @@
-import type { BaseWindow, NativeImage, WebContentsView } from "electron";
+import type { BaseWindow, WebContentsView } from "electron";
 import { calculateShellLayout } from "./shell-page-bounds.js";
 import type { Presentation, Rect } from "./types.js";
 import { TaskSpaceManager } from "./manager.js";
+import {
+  NativeSpaceTransition,
+  type NativeSpaceTransitionRun,
+} from "./native-space-transition.js";
+import { NativeBrowserChrome } from "./native-browser-chrome.js";
 
 type ShellViews = {
   chat: WebContentsView;
@@ -12,15 +17,14 @@ type ShellViews = {
 
 type SpaceTransitionRequest = {
   source: Rect;
+  token?: string;
+  durationMs?: number;
+  nativeRun?: NativeSpaceTransitionRun;
 };
 
 type PresentationRequestOptions = {
   parkPrevious?: boolean;
 };
-
-const SPACE_TRANSITION_DURATION_MS = 180;
-const SPACE_TRANSITION_CAPTURE_TIMEOUT_MS = 260;
-const SPACE_TRANSITION_READY_TIMEOUT_MS = 320;
 
 export class PresentationCoordinator {
   private presentation: Presentation = { kind: "overview" };
@@ -29,16 +33,25 @@ export class PresentationCoordinator {
   private attachedPage: WebContentsView | null = null;
   private overlaySpaceId: number | null = null;
   private activeTransitionToken = "";
-  private transitionSequence = 0;
-  private readonly transitionReadyWaiters = new Map<string, () => void>();
-  private readonly transitionFinishedWaiters = new Map<string, () => void>();
+  private readonly expectedTransitionTokens = new Set<string>();
+  private readonly overviewTargets = new Map<number, Rect>();
+  private snapshotRefreshTimer?: ReturnType<typeof setTimeout>;
+  private snapshotRefreshGeneration = 0;
 
   constructor(
     private readonly window: BaseWindow,
     private readonly views: ShellViews,
     private readonly manager: TaskSpaceManager,
+    private readonly nativeTransition?: NativeSpaceTransition,
+    private readonly nativeChrome?: NativeBrowserChrome,
   ) {
-    this.window.on("resize", () => this.layout());
+    this.window.on("resize", () => {
+      this.layout();
+      const current = this.presentation;
+      if (current.kind === "space") {
+        this.scheduleSnapshotRefresh(current.spaceId, 220);
+      }
+    });
     this.window.on("minimize", () => this.manager.setOverviewPreviewActive(false));
     this.window.on("hide", () => this.manager.setOverviewPreviewActive(false));
     this.window.on("restore", () => {
@@ -59,6 +72,7 @@ export class PresentationCoordinator {
 
   syncWindowState() {
     this.layout();
+    this.nativeChrome?.setVisible(this.presentation.kind === "space");
     this.syncControlOverlay();
     this.syncPreviewActivity();
     // The shell can receive its initial Presentation while the native window
@@ -69,11 +83,59 @@ export class PresentationCoordinator {
   }
 
   showOverview(options?: PresentationRequestOptions) {
+    this.cancelSnapshotRefresh();
     return this.request({ kind: "overview" }, undefined, options);
   }
 
+  scheduleSnapshotRefresh(spaceId: number, delayMs = 160) {
+    if (!this.nativeTransition) return;
+    const current = this.presentation;
+    if (current.kind !== "space" || current.spaceId !== spaceId) return;
+    const generation = ++this.snapshotRefreshGeneration;
+    if (this.snapshotRefreshTimer) clearTimeout(this.snapshotRefreshTimer);
+    this.snapshotRefreshTimer = setTimeout(() => {
+      if (generation !== this.snapshotRefreshGeneration) return;
+      this.snapshotRefreshTimer = undefined;
+      void this.captureVisibleSnapshot(spaceId).catch(() => undefined);
+    }, Math.max(0, delayMs));
+  }
+
+  setOverviewTargets(targets: Array<{ id: number; rect: Rect }>) {
+    const next = new Map<number, Rect>();
+    for (const target of targets) {
+      if (!Number.isSafeInteger(target.id) || target.id <= 0) continue;
+      if (target.rect.width < 32 || target.rect.height < 32) continue;
+      next.set(target.id, { ...target.rect });
+    }
+    this.overviewTargets.clear();
+    for (const [spaceId, rect] of next) this.overviewTargets.set(spaceId, rect);
+  }
+
   showSpace(spaceId: number, transition?: SpaceTransitionRequest) {
-    return this.request({ kind: "space", spaceId }, transition);
+    const token = transition?.token;
+    if (token) this.expectedTransitionTokens.add(token);
+    const preparedTransition = transition ? { ...transition } : undefined;
+    if (token && preparedTransition && this.nativeTransition) {
+      const [width, height] = this.window.getContentSize();
+      const layout = calculateShellLayout(width, height);
+      const source = this.clampTransitionSource(
+        preparedTransition.source,
+        layout.content,
+      );
+      if (source) {
+        const run = this.nativeTransition.begin(spaceId, token, source);
+        if (run) {
+          preparedTransition.nativeRun = run;
+          this.activeTransitionToken = token;
+        }
+      }
+    }
+    return this.request({ kind: "space", spaceId }, preparedTransition).finally(() => {
+      if (!token) return;
+      this.nativeTransition?.cancel(token);
+      this.expectedTransitionTokens.delete(token);
+      if (this.activeTransitionToken === token) this.activeTransitionToken = "";
+    });
   }
 
   refreshSpace(spaceId: number) {
@@ -87,12 +149,11 @@ export class PresentationCoordinator {
     this.syncControlOverlay();
   }
 
-  notifyTransitionReady(token: string) {
-    return this.resolveTransitionWaiter(this.transitionReadyWaiters, token);
-  }
-
   notifyTransitionFinished(token: string) {
-    return this.resolveTransitionWaiter(this.transitionFinishedWaiters, token);
+    // Retained as a protocol-compatible acknowledgement for older installed
+    // skills/renderers. Native Core Animation no longer waits on a renderer
+    // animation completion signal.
+    return this.expectedTransitionTokens.has(token);
   }
 
   showAgentPointer(
@@ -165,6 +226,7 @@ export class PresentationCoordinator {
         transition,
       }).catch(() => false);
       if (transitioned) return;
+      if (transition.token) this.nativeTransition?.cancel(transition.token);
       if (generation !== this.generation) {
         this.manager.cancelPresentationPreparation(nextTargetId!);
         this.removeIfAttached(nextPage);
@@ -208,6 +270,7 @@ export class PresentationCoordinator {
       this.layout();
       this.syncControlOverlay();
       this.syncPreviewActivity();
+      this.scheduleSnapshotRefresh(next.spaceId);
       return;
     }
 
@@ -215,6 +278,7 @@ export class PresentationCoordinator {
     // page is removed and the prepared replacement is attached synchronously;
     // background parking happens only after the new visible state is committed.
     if (this.presentation.kind === "space" && next.kind === "space") {
+      const nativeChrome = this.nativeChrome?.isAvailable() === true;
       if (nextPage) this.setPageBounds(nextPage);
       if (previousPage && previousPage !== nextPage) {
         root.removeChildView(previousPage);
@@ -224,12 +288,18 @@ export class PresentationCoordinator {
         nextPage.setVisible(true);
       }
       this.attachedPage = nextPage;
+      if (nativeChrome) {
+        this.removeIfAttached(this.views.browser);
+        this.views.browser.setVisible(false);
+        this.nativeChrome?.setVisible(true);
+      }
       this.manager.setPresentedTarget(nextTargetId);
       this.presentation = next;
       this.layout();
       this.syncControlOverlay();
       this.syncPreviewActivity();
       this.publishState();
+      this.scheduleSnapshotRefresh(next.spaceId);
       if (
         options.parkPrevious !== false &&
         previousTarget &&
@@ -244,6 +314,56 @@ export class PresentationCoordinator {
     // browser window. Keep the chat runtime alive but detached so it can be
     // reintroduced later without creating a second state/control system.
     if (next.kind === "overview") {
+      const previousSpaceId =
+        this.presentation.kind === "space"
+          ? this.presentation.spaceId
+          : undefined;
+      const [width, height] = this.window.getContentSize();
+      const layout = calculateShellLayout(width, height);
+      this.views.overview.setBounds(layout.overview);
+
+      let exitRun: NativeSpaceTransitionRun | undefined;
+      let exitToken = "";
+      let refreshSnapshotAfterExit = false;
+      const nativeChromePng = this.nativeChrome?.capturePng();
+      if (previousPage && previousSpaceId !== undefined && this.nativeTransition) {
+        const target = await this.resolveOverviewTarget(previousSpaceId, layout.content);
+        if (target) {
+          const beginExit = () => {
+            exitToken = `overview-${previousSpaceId}-${Date.now().toString(36)}`;
+            return this.nativeTransition?.beginExit(
+              previousSpaceId,
+              exitToken,
+              target,
+            );
+          };
+          if (this.nativeTransition.hasSnapshot(previousSpaceId)) {
+            // A stable full-resolution frame is maintained while the Space is
+            // visible. Starting from it removes capturePage from the click's
+            // critical path, which is the difference between an immediate
+            // native zoom and a visible pause before the first moving frame.
+            exitRun = beginExit();
+            refreshSnapshotAfterExit = Boolean(exitRun);
+          }
+          if (!exitRun) {
+            const captured = await this.nativeTransition
+              .capture(
+                previousSpaceId,
+                this.views.browser,
+                previousPage,
+                {
+                  width,
+                  height,
+                  chromeHeight: layout.chrome.height,
+                },
+                nativeChromePng,
+              )
+              .catch(() => false);
+            if (captured) exitRun = beginExit();
+          }
+          if (exitRun) this.activeTransitionToken = exitToken;
+        }
+      }
       // Attach the destination at full size before removing the browser and
       // page below it. The Overview is opaque, so this gives AppKit one
       // continuous surface instead of briefly exposing the BaseWindow
@@ -253,6 +373,42 @@ export class PresentationCoordinator {
       this.manager.setPresentedTarget(null);
       this.presentation = next;
       this.layout();
+      this.nativeChrome?.setVisible(false);
+      this.syncPreviewActivity();
+      this.publishState();
+
+      if (exitRun) {
+        const remaining = this.nativeTransition?.remainingMs(exitToken) ?? 0;
+        if (remaining > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remaining));
+        }
+      }
+
+      // Recent native macOS browsers keep a stable, full-resolution page
+      // snapshot and hand it to Core Animation during the next switch. Capture
+      // while Browser Chrome/page are still attached but already hidden below
+      // the opaque Overview, so the user returns immediately and no readback
+      // work is added to the next click's critical path.
+      if (
+        (!exitRun || refreshSnapshotAfterExit) &&
+        previousPage &&
+        previousSpaceId !== undefined &&
+        this.nativeTransition
+      ) {
+        await this.nativeTransition
+          .capture(
+            previousSpaceId,
+            this.views.browser,
+            previousPage,
+            {
+              width,
+              height,
+              chromeHeight: layout.chrome.height,
+            },
+            nativeChromePng,
+          )
+          .catch(() => false);
+      }
 
       if (previousPage) {
         this.removeIfAttached(previousPage);
@@ -262,6 +418,12 @@ export class PresentationCoordinator {
       this.removeIfAttached(this.views.chat);
       this.views.browser.setVisible(false);
       this.views.chat.setVisible(false);
+      if (exitRun) {
+        this.nativeTransition?.finish(exitToken);
+        if (this.activeTransitionToken === exitToken) {
+          this.activeTransitionToken = "";
+        }
+      }
     } else {
       // The browser chrome and page together cover the complete destination
       // window. Stack them above Overview first, then retire Overview. This
@@ -269,9 +431,16 @@ export class PresentationCoordinator {
       // to be presented and removes the white flash during card activation.
       const [width, height] = this.window.getContentSize();
       const layout = calculateShellLayout(width, height);
-      this.views.browser.setBounds(layout.chrome);
-      this.ensureAttached(this.views.browser);
-      this.views.browser.setVisible(true);
+      const nativeChrome = this.nativeChrome?.isAvailable() === true;
+      if (nativeChrome) {
+        this.removeIfAttached(this.views.browser);
+        this.views.browser.setVisible(false);
+        this.nativeChrome?.setVisible(true);
+      } else {
+        this.views.browser.setBounds(layout.chrome);
+        this.ensureAttached(this.views.browser);
+        this.views.browser.setVisible(true);
+      }
       if (nextPage) {
         nextPage.setBounds(layout.page);
         this.ensureAttached(nextPage);
@@ -290,6 +459,7 @@ export class PresentationCoordinator {
     this.syncControlOverlay();
     this.syncPreviewActivity();
     this.publishState();
+    if (next.kind === "space") this.scheduleSnapshotRefresh(next.spaceId);
     if (
       options.parkPrevious !== false &&
       previousTarget &&
@@ -308,7 +478,9 @@ export class PresentationCoordinator {
     if (this.presentation.kind === "overview") {
       this.views.overview.setBounds(layout.overview);
     } else {
-      this.views.browser.setBounds(layout.chrome);
+      if (this.nativeChrome?.isAvailable() !== true) {
+        this.views.browser.setBounds(layout.chrome);
+      }
       this.attachedPage?.setBounds(layout.page);
       if (this.overlaySpaceId !== null) this.views.overlay.setBounds(layout.overlay);
     }
@@ -379,6 +551,51 @@ export class PresentationCoordinator {
     }
   }
 
+  private cancelSnapshotRefresh() {
+    this.snapshotRefreshGeneration += 1;
+    if (!this.snapshotRefreshTimer) return;
+    clearTimeout(this.snapshotRefreshTimer);
+    this.snapshotRefreshTimer = undefined;
+  }
+
+  private async captureVisibleSnapshot(spaceId: number) {
+    const current = this.presentation;
+    const page = this.attachedPage;
+    if (
+      !this.nativeTransition ||
+      this.activeTransitionToken ||
+      current.kind !== "space" ||
+      current.spaceId !== spaceId ||
+      !page ||
+      page.webContents.isDestroyed() ||
+      !this.manager.getSpace(spaceId)
+    ) {
+      return false;
+    }
+    if (this.manager.navigationState(spaceId).loading) {
+      this.scheduleSnapshotRefresh(spaceId, 260);
+      return false;
+    }
+    const nativeChromePng = this.nativeChrome?.capturePng();
+    if (this.nativeChrome?.isAvailable() === true && !nativeChromePng) {
+      this.scheduleSnapshotRefresh(spaceId, 120);
+      return false;
+    }
+    const [width, height] = this.window.getContentSize();
+    const layout = calculateShellLayout(width, height);
+    return this.nativeTransition.capture(
+      spaceId,
+      this.views.browser,
+      page,
+      {
+        width,
+        height,
+        chromeHeight: layout.chrome.height,
+      },
+      nativeChromePng,
+    );
+  }
+
   private removeIfAttached(view: WebContentsView) {
     if (!this.window.contentView.children.includes(view)) return;
     try {
@@ -416,6 +633,8 @@ export class PresentationCoordinator {
     transition: SpaceTransitionRequest;
   }) {
     const { next, generation, nextPage, nextTargetId, transition } = input;
+    const token = transition.token;
+    if (!token || !this.expectedTransitionTokens.has(token)) return false;
     const [width, height] = this.window.getContentSize();
     const layout = calculateShellLayout(width, height);
     const source = this.clampTransitionSource(transition.source, layout.content);
@@ -425,64 +644,44 @@ export class PresentationCoordinator {
     const overviewIndex = root.children.indexOf(this.views.overview);
     if (overviewIndex < 0) return false;
 
-    this.views.browser.setBounds(layout.chrome);
+    const nativeChrome = this.nativeChrome?.isAvailable() === true;
+    if (!nativeChrome) this.views.browser.setBounds(layout.chrome);
     nextPage.setBounds(layout.page);
-    this.attachAt(this.views.browser, overviewIndex);
-    this.attachAt(nextPage, overviewIndex + 1);
-    this.views.browser.setVisible(true);
-    nextPage.setVisible(true);
-
-    // Browser state is sent before showSpace() enters this coordinator. Give
-    // its renderer one compositor turn so the captured native Chrome matches
-    // the destination underneath the transition exactly.
-    await this.waitForRendererPaint(this.views.browser, 48);
-    if (generation !== this.generation) return false;
-
-    const [overviewFrame, chromeFrame, pageFrame] = await this.withTimeout(
-      Promise.all([
-        this.views.overview.webContents.capturePage(),
-        this.views.browser.webContents.capturePage(),
-        nextPage.webContents.capturePage(),
-      ]),
-      SPACE_TRANSITION_CAPTURE_TIMEOUT_MS,
-    );
-    if (overviewFrame.isEmpty() || chromeFrame.isEmpty() || pageFrame.isEmpty()) {
-      return false;
+    if (nativeChrome) {
+      this.removeIfAttached(this.views.browser);
+      this.views.browser.setVisible(false);
+      // Keep the live native chrome inside the destination window hidden while
+      // the cached full-browser surface expands. Showing it here creates a
+      // second, already-full-size toolbar above the moving snapshot.
+      this.nativeChrome?.setVisible(false);
+      this.attachAt(nextPage, overviewIndex);
+    } else {
+      this.attachAt(this.views.browser, overviewIndex);
+      this.views.browser.setVisible(true);
+      this.attachAt(nextPage, overviewIndex + 1);
     }
-    if (generation !== this.generation) return false;
-
-    const token = `${generation}-${++this.transitionSequence}`;
+    nextPage.setVisible(true);
     this.activeTransitionToken = token;
-    this.views.overlay.setBounds(layout.content);
-    this.ensureAttached(this.views.overlay);
-    this.views.overlay.setVisible(true);
-    const ready = this.waitForTransitionSignal(
-      this.transitionReadyWaiters,
-      token,
-      SPACE_TRANSITION_READY_TIMEOUT_MS,
-    );
-    this.views.overlay.webContents.send("x-browser:space-transition", {
-      phase: "prepare",
-      token,
-      durationMs: SPACE_TRANSITION_DURATION_MS,
-      source,
-      viewport: { width: layout.content.width, height: layout.content.height },
-      chromeHeight: layout.chrome.height,
-      pageHeight: layout.page.height,
-      overview: this.transitionImageDataUrl(
-        overviewFrame,
-        layout.content.width,
-        88,
-      ),
-      chrome: this.transitionImageDataUrl(
-        chromeFrame,
-        layout.chrome.width,
-        92,
-      ),
-      page: this.transitionImageDataUrl(pageFrame, layout.page.width, 88),
-    });
-    if (!(await ready) || generation !== this.generation) {
-      this.cancelSpaceTransition(token);
+
+    // The Overview renderer starts the card Hero animation synchronously in
+    // the click handler. The real Browser Chrome/page are attached underneath
+    // that opaque surface while it moves, so Chromium can compose normally
+    // without capturePage(), JPEG encoding, renderer decoding, or a delayed
+    // animation start. If preparation finishes early we wait for the Hero; if
+    // it finishes late, Overview holds the full-window final frame until this
+    // native swap is ready.
+    // Native Core Animation is the single visual owner of Overview -> Space.
+    // The old renderer Hero ran at the same time and remained visible through
+    // the transparent part of this native panel, producing two differently
+    // scaled browser surfaces and duplicated chrome on every intermediate
+    // frame. If the native addon/snapshot is unavailable, commit directly
+    // instead of bringing that competing renderer animation back.
+    const transitionFinished = transition.nativeRun
+      ? await this.waitForNativeTransition(token)
+      : true;
+    if (!transitionFinished || generation !== this.generation) {
+      this.nativeTransition?.cancel(token);
+      if (this.activeTransitionToken === token) this.activeTransitionToken = "";
       return false;
     }
 
@@ -493,26 +692,26 @@ export class PresentationCoordinator {
     this.removeIfAttached(this.views.chat);
     this.views.overview.setVisible(false);
     this.views.chat.setVisible(false);
-
-    const finished = this.waitForTransitionSignal(
-      this.transitionFinishedWaiters,
-      token,
-      SPACE_TRANSITION_DURATION_MS + 260,
-    );
-    this.views.overlay.webContents.send("x-browser:space-transition", {
-      phase: "go",
-      token,
-    });
-    const didFinish = await finished;
-    this.transitionReadyWaiters.delete(token);
-    this.transitionFinishedWaiters.delete(token);
-    if (!didFinish) this.cancelSpaceTransition(token);
     if (this.activeTransitionToken === token) this.activeTransitionToken = "";
 
     this.layout();
     this.syncControlOverlay();
     this.syncPreviewActivity();
     this.publishState();
+    // The transition panel is still holding its exact full-window final frame.
+    // Reveal the live in-window chrome behind it, then remove the panel for a
+    // single-frame handoff with no floating toolbar or duplicate browser UI.
+    if (nativeChrome) this.nativeChrome?.setVisible(true);
+    this.nativeTransition?.finish(token);
+    this.scheduleSnapshotRefresh(next.spaceId);
+    return true;
+  }
+
+  private async waitForNativeTransition(token: string) {
+    const remaining = this.nativeTransition?.remainingMs(token) ?? 0;
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remaining));
+    }
     return true;
   }
 
@@ -531,96 +730,46 @@ export class PresentationCoordinator {
     return { x, y, width, height };
   }
 
+  private async resolveOverviewTarget(spaceId: number, content: Rect) {
+    const cached = this.overviewTargets.get(spaceId);
+    if (cached) {
+      const safe = this.clampTransitionSource(cached, content);
+      if (safe) return safe;
+    }
+    const execute = this.views.overview.webContents.executeJavaScript;
+    if (typeof execute === "function") {
+      try {
+        const target = await Promise.race([
+          execute.call(
+            this.views.overview.webContents,
+            `(() => {
+              const card = document.querySelector('.space-card[data-space-id="${spaceId}"]');
+              const preview = card?.querySelector('.space-preview');
+              if (!preview) return null;
+              const rect = preview.getBoundingClientRect();
+              return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+            })()`,
+            true,
+          ),
+          new Promise<undefined>((resolve) =>
+            setTimeout(() => resolve(undefined), 120),
+          ),
+        ]);
+        if (target) {
+          const safe = this.clampTransitionSource(target as Rect, content);
+          if (safe) return safe;
+        }
+      } catch {
+        // Fall back to the last renderer-published target below.
+      }
+    }
+    return null;
+  }
+
   private attachAt(view: WebContentsView, index: number) {
     const root = this.window.contentView;
     if (root.children.includes(view)) root.removeChildView(view);
     root.addChildView(view, Math.max(0, Math.min(index, root.children.length)));
   }
 
-  private waitForRendererPaint(view: WebContentsView, timeoutMs: number) {
-    if (view.webContents.isDestroyed()) return Promise.resolve();
-    return this.withTimeout(
-      view.webContents.executeJavaScript(
-        `new Promise((resolve) => requestAnimationFrame(() => resolve(true)))`,
-        true,
-      ),
-      timeoutMs,
-    ).then(() => undefined, () => undefined);
-  }
-
-  private waitForTransitionSignal(
-    waiters: Map<string, () => void>,
-    token: string,
-    timeoutMs: number,
-  ) {
-    return new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!waiters.delete(token)) return;
-        resolve(false);
-      }, timeoutMs);
-      waiters.set(token, () => {
-        clearTimeout(timer);
-        waiters.delete(token);
-        resolve(true);
-      });
-    });
-  }
-
-  private resolveTransitionWaiter(
-    waiters: Map<string, () => void>,
-    token: string,
-  ) {
-    const resolve = waiters.get(token);
-    if (!resolve) return false;
-    resolve();
-    return true;
-  }
-
-  private cancelSpaceTransition(token: string) {
-    this.transitionReadyWaiters.delete(token);
-    this.transitionFinishedWaiters.delete(token);
-    if (!this.views.overlay.webContents.isDestroyed()) {
-      this.views.overlay.webContents.send("x-browser:space-transition", {
-        phase: "cancel",
-        token,
-      });
-    }
-    if (this.activeTransitionToken === token) this.activeTransitionToken = "";
-    if (this.overlaySpaceId === null) {
-      this.removeIfAttached(this.views.overlay);
-      this.views.overlay.setVisible(false);
-    }
-  }
-
-  private withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Space transition timed out")),
-        timeoutMs,
-      );
-      promise.then(
-        (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      );
-    });
-  }
-
-  private transitionImageDataUrl(
-    image: NativeImage,
-    targetWidth: number,
-    quality: number,
-  ) {
-    const size = image.getSize();
-    const frame =
-      size.width > targetWidth
-        ? image.resize({ width: targetWidth, quality: "good" })
-        : image;
-    return `data:image/jpeg;base64,${frame.toJPEG(quality).toString("base64")}`;
-  }
 }

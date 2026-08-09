@@ -16,8 +16,17 @@ contextBridge.exposeInMainWorld("xBrowser", {
       ipcRenderer.invoke("x-browser:overview:create", name, profileId),
     open: (
       spaceId: number,
-      rect?: { x: number; y: number; width: number; height: number },
-    ) => ipcRenderer.invoke("x-browser:overview:open", spaceId, rect),
+      transition?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        token?: string;
+        durationMs?: number;
+      },
+    ) => ipcRenderer.invoke("x-browser:overview:open", spaceId, transition),
+    transitionFinished: (token: string) =>
+      ipcRenderer.invoke("x-browser:space-transition:finished", token),
     rename: (spaceId: number, name: string) =>
       ipcRenderer.invoke("x-browser:overview:rename", spaceId, name),
     close: (spaceId: number) =>
@@ -109,12 +118,6 @@ contextBridge.exposeInMainWorld("xBrowser", {
       on("x-browser:agent-overlay-state", listener),
     onPointer: (listener: (state: any) => void) =>
       on("x-browser:agent-overlay-pointer", listener),
-    onSpaceTransition: (listener: (state: any) => void) =>
-      on("x-browser:space-transition", listener),
-    transitionReady: (token: string) =>
-      ipcRenderer.invoke("x-browser:space-transition:ready", token),
-    transitionFinished: (token: string) =>
-      ipcRenderer.invoke("x-browser:space-transition:finished", token),
   },
   chat: {
     send: (text: string) => ipcRenderer.invoke("x-browser:chat:send", text),

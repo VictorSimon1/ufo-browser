@@ -1,7 +1,7 @@
 import type { Rect } from "./types.js";
 
 export const DEFAULT_CHAT_WIDTH = 0;
-export const BROWSER_CHROME_HEIGHT = 82;
+export const BROWSER_CHROME_HEIGHT = 94;
 
 export type ShellLayout = {
   chat: Rect;

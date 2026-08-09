@@ -1,6 +1,6 @@
 import { chmod, cp, mkdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { build } from "esbuild";
 
 const root = process.cwd();
@@ -124,6 +124,49 @@ if (process.platform === "darwin") {
     join(dist, "bin", "ufo-keychain-helper"),
   ]);
   await chmod(join(dist, "bin", "ufo-keychain-helper"), 0o755);
+  const nodeInclude = resolve(dirname(process.execPath), "../include/node");
+  await run("/usr/bin/xcrun", [
+    "clang++",
+    "-std=c++17",
+    "-fobjc-arc",
+    "-bundle",
+    "-undefined",
+    "dynamic_lookup",
+    "-DNAPI_VERSION=10",
+    "-I",
+    nodeInclude,
+    "native/macos/ufo-transition-addon.mm",
+    "-framework",
+    "AppKit",
+    "-framework",
+    "QuartzCore",
+    "-framework",
+    "ImageIO",
+    "-O2",
+    "-o",
+    join(dist, "bin", "ufo-transition.node"),
+  ]);
+  await chmod(join(dist, "bin", "ufo-transition.node"), 0o755);
+  await run("/usr/bin/xcrun", [
+    "clang++",
+    "-std=c++17",
+    "-fobjc-arc",
+    "-bundle",
+    "-undefined",
+    "dynamic_lookup",
+    "-DNAPI_VERSION=10",
+    "-I",
+    nodeInclude,
+    "native/macos/ufo-browser-chrome-addon.mm",
+    "-framework",
+    "AppKit",
+    "-framework",
+    "QuartzCore",
+    "-O2",
+    "-o",
+    join(dist, "bin", "ufo-browser-chrome.node"),
+  ]);
+  await chmod(join(dist, "bin", "ufo-browser-chrome.node"), 0o755);
 }
 for (const name of ["ufo-browser", "x-browser"]) {
   await cp("scripts/ufo-browser-launcher.sh", join(dist, "bin", name));

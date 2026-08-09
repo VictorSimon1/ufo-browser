@@ -37,6 +37,8 @@ function harness(
     overviewAttached?: boolean;
     agentControlled?: boolean;
     windowFocused?: boolean;
+    nativeTransition?: any;
+    nativeChrome?: any;
   } = {},
 ) {
   const overview = fakeView("overview");
@@ -52,8 +54,11 @@ function harness(
   const children: FakeView[] = options.overviewAttached === false ? [] : [overview];
   const contentView = {
     children,
-    addChildView(view: FakeView) {
-      if (!children.includes(view)) children.push(view);
+    addChildView(view: FakeView, index?: number) {
+      if (!children.includes(view)) {
+        if (index === undefined) children.push(view);
+        else children.splice(Math.max(0, Math.min(index, children.length)), 0, view);
+      }
       minimumChildren = Math.min(minimumChildren, children.length);
       events.push(`add:${view.name}`);
     },
@@ -97,11 +102,14 @@ function harness(
       { id: 1, tabs: [{ targetId: "target-1" }] },
     ],
     getView: (targetId: string) => targetId === "target-1" ? page : undefined,
+    navigationState: () => ({ loading: false }),
   };
   const coordinator = new PresentationCoordinator(
     window as any,
     { chat, overview, browser, overlay } as any,
     manager as any,
+    options.nativeTransition,
+    options.nativeChrome,
   );
   return {
     coordinator,
@@ -146,6 +154,91 @@ test("Overview and Space transitions attach the destination before removing the 
   assert.ok(state.minimumChildren() >= 1);
 });
 
+test("returning to Overview starts from the maintained snapshot before refreshing it", async () => {
+  const calls: string[] = [];
+  const nativeTransition = {
+    hasSnapshot: () => true,
+    beginExit: (_spaceId: number, token: string) => {
+      calls.push("begin-exit");
+      return { token, durationMs: 1, startedAt: performance.now() - 1 };
+    },
+    remainingMs: () => 0,
+    capture: async () => {
+      calls.push("capture");
+      return true;
+    },
+    finish: () => {
+      calls.push("finish");
+      return true;
+    },
+    cancel: () => true,
+  };
+  const nativeChrome = {
+    isAvailable: () => true,
+    setVisible() {},
+    capturePng: () => Buffer.from("chrome"),
+  };
+  const state = harness({ nativeTransition, nativeChrome });
+  state.coordinator.setOverviewTargets([
+    { id: 1, rect: { x: 40, y: 120, width: 360, height: 240 } },
+  ]);
+
+  await state.coordinator.showSpace(1);
+  calls.length = 0;
+  await state.coordinator.showOverview();
+
+  assert.ok(calls.indexOf("begin-exit") >= 0);
+  assert.ok(calls.indexOf("capture") > calls.indexOf("begin-exit"));
+  assert.ok(calls.indexOf("finish") > calls.indexOf("capture"));
+});
+
+test("native snapshot handoff keeps Overview above the prepared destination", async () => {
+  let finishCalls = 0;
+  const nativeTransition = {
+    hasSnapshot: () => true,
+    begin: (_spaceId: number, token: string) => ({
+      token,
+      durationMs: 40,
+      startedAt: performance.now(),
+    }),
+    remainingMs: () => 40,
+    finish: () => {
+      finishCalls += 1;
+      return true;
+    },
+    cancel: () => true,
+  };
+  const state = harness({ nativeTransition });
+  const token = "space-1-transition";
+  const opening = state.coordinator.showSpace(1, {
+    source: { x: 40, y: 120, width: 360, height: 240 },
+    token,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(state.children.map((view) => view.name), [
+    "browser",
+    "page",
+    "overview",
+  ]);
+  assert.equal(state.coordinator.current().kind, "overview");
+
+  await opening;
+  assert.deepEqual(state.children.map((view) => view.name), ["browser", "page"]);
+  assert.deepEqual(state.coordinator.current(), { kind: "space", spaceId: 1 });
+  assert.equal(finishCalls, 1);
+});
+
+test("a transition request commits directly when no native snapshot is available", async () => {
+  const state = harness();
+  await state.coordinator.showSpace(1, {
+    source: { x: 40, y: 120, width: 360, height: 240 },
+    token: "space-1-no-native-transition",
+  });
+  assert.deepEqual(state.children.map((view) => view.name), ["browser", "page"]);
+  assert.deepEqual(state.coordinator.current(), { kind: "space", spaceId: 1 });
+});
+
 test("re-publishing Overview does not detach its native view", async () => {
   const state = harness();
   await state.coordinator.showOverview();
@@ -173,9 +266,9 @@ test("an Agent-controlled Space places the App overlay above the page only while
   assert.equal(state.views.overlay.visible, true);
   assert.deepEqual(state.views.overlay.bounds, {
     x: 0,
-    y: 82,
+    y: 94,
     width: 1200,
-    height: 718,
+    height: 706,
   });
   assert.equal(state.views.overlay.webContents.focused, true);
 

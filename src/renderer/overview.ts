@@ -38,6 +38,7 @@ let profileSyncHideTimer = 0;
 let createSpacePending = false;
 let createProfileMenuGeneration = 0;
 let openingSpaceId: number | undefined;
+let spaceTransitionSequence = 0;
 
 void api.app.info().then((info: any) => {
   const version = String(info?.version || "").trim();
@@ -299,20 +300,18 @@ function spaceCard(spaceId: number) {
     card.classList.add("opening");
     closeCardMenu();
     closeCreateProfileMenu();
+    const token = `${spaceId}-${Date.now().toString(36)}-${++spaceTransitionSequence}`;
     try {
-      // Native code prepares the warm renderer underneath Overview, captures
-      // the real Browser Chrome/page at full resolution, and performs the
-      // final handoff in the transparent shell overlay. Do not enlarge the
-      // low-resolution card canvas here: it exposes fake chrome and menu
-      // controls as a blurry full-window frame.
       await api.overview.open(spaceId, {
         x: previewRect.x,
         y: previewRect.y,
         width: previewRect.width,
         height: previewRect.height,
+        token,
       });
     } catch {
-      // The card returns to its normal state when native presentation fails.
+      // The card remains in place when native preparation fails, so clearing
+      // the opening state is sufficient to restore interaction.
     } finally {
       openingSpaceId = undefined;
       card.dataset.opening = "0";
@@ -1393,7 +1392,8 @@ function publishVisibleCards() {
   const cardRects = [...cards.entries()]
     .filter(([, card]) => card.isConnected)
     .map(([id, card]) => {
-      const rect = card.getBoundingClientRect();
+      const preview = card.querySelector<HTMLElement>(".space-preview");
+      const rect = (preview ?? card).getBoundingClientRect();
       return {
         id,
         rect: {

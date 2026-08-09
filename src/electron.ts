@@ -12,6 +12,11 @@ import { AgentServer } from "./main/agent-server.js";
 import { CdpBroker } from "./main/cdp-broker.js";
 import { TaskSpaceManager } from "./main/manager.js";
 import { PresentationCoordinator } from "./main/presentation-coordinator.js";
+import { NativeSpaceTransition } from "./main/native-space-transition.js";
+import {
+  NativeBrowserChrome,
+  type NativeBrowserChromeEvent,
+} from "./main/native-browser-chrome.js";
 import { SnapshotService } from "./main/snapshot.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
@@ -193,6 +198,33 @@ async function start() {
   traceStart("shell-created");
 
   const userDataPath = app.getPath("userData");
+  const nativeTransitionAddonPath = app.isPackaged
+    ? join(
+        process.resourcesPath,
+        "app.asar.unpacked",
+        "dist",
+        "bin",
+        "ufo-transition.node",
+      )
+    : join(projectRoot, "dist", "bin", "ufo-transition.node");
+  const nativeTransition = new NativeSpaceTransition(
+    window,
+    join(userDataPath, "Transition Snapshots"),
+    nativeTransitionAddonPath,
+  );
+  const nativeBrowserChromeAddonPath = app.isPackaged
+    ? join(
+        process.resourcesPath,
+        "app.asar.unpacked",
+        "dist",
+        "bin",
+        "ufo-browser-chrome.node",
+      )
+    : join(projectRoot, "dist", "bin", "ufo-browser-chrome.node");
+  const nativeChrome = new NativeBrowserChrome(
+    window,
+    nativeBrowserChromeAddonPath,
+  );
   const partitionsRoot = join(userDataPath, "Partitions");
   const profileAvatars = new ProfileAvatarStore(
     join(userDataPath, "Profile Avatars"),
@@ -394,6 +426,9 @@ async function start() {
     },
   });
   await manager.initialize();
+  await nativeTransition.prime(
+    manager.listSpaces().slice(0, 6).map((space) => space.id),
+  );
   traceStart("manager-initialized");
   if (manager.listSpaces().length === 0) {
     await manager.createSpace("Welcome Space", "user");
@@ -448,7 +483,17 @@ async function start() {
       overlay: overlayView,
     },
     manager,
+    nativeTransition,
+    nativeChrome,
   );
+  nativeChrome.install((event) => {
+    void handleNativeBrowserChromeEvent(
+      event,
+      manager,
+      presentation,
+      nativeChrome,
+    ).catch(() => undefined);
+  });
   manager.onActiveTabChanged((spaceId) => {
     const current = presentation.current();
     if (current.kind !== "space" || current.spaceId !== spaceId) return;
@@ -478,6 +523,7 @@ async function start() {
     chatView,
     overviewView,
     browserView,
+    nativeChrome,
     claude,
     profiles,
     chromeImport,
@@ -506,6 +552,8 @@ async function start() {
         "x-browser:browser-state",
         manager.navigationState(current.spaceId),
       );
+      nativeChrome.update(manager.navigationState(current.spaceId));
+      presentation.scheduleSnapshotRefresh(current.spaceId);
     }
     presentation.refreshControlOverlay();
   };
@@ -535,6 +583,7 @@ async function start() {
       "x-browser:browser-state",
       manager.navigationState(requestedTestSpaceId),
     );
+    nativeChrome.update(manager.navigationState(requestedTestSpaceId));
     traceStart("test-space-presented");
   }
   publish();
@@ -701,6 +750,7 @@ async function start() {
         manager,
         presentation,
         browserView,
+        nativeChrome,
       }).catch(async (error) => {
         await writeFile(
           join(testRoot, "interaction-audit.json"),
@@ -718,7 +768,6 @@ async function start() {
         profiles,
         presentation,
         overviewView,
-        overlayView,
       }).catch(
         async (error) => {
           await writeFile(
@@ -1127,6 +1176,7 @@ type IpcContext = {
   chatView: WebContentsView;
   overviewView: WebContentsView;
   browserView: WebContentsView;
+  nativeChrome: NativeBrowserChrome;
   claude: ClaudeSessionManager;
   profiles: BrowserProfileRegistry;
   chromeImport: ChromeLoginImportService;
@@ -1144,6 +1194,7 @@ function registerIpc(context: IpcContext) {
     shellIds,
     overviewView,
     browserView,
+    nativeChrome,
     profiles,
     chromeImport,
     profileSync,
@@ -1251,24 +1302,40 @@ function registerIpc(context: IpcContext) {
     await presentation.showSpace(space.id);
     profileSync.notifyProfileActive(space.profileId);
     browserView.webContents.send("x-browser:browser-state", manager.navigationState(space.id));
+    nativeChrome.update(manager.navigationState(space.id));
     return space;
   });
   shell("x-browser:overview:open", async (_event, spaceId: number, value?: unknown) => {
     const id = assertSpaceId(spaceId);
+    const transition = (value ?? {}) as {
+      token?: unknown;
+      durationMs?: unknown;
+    };
     const source = value
       ? clippedCaptureRect(value, overviewView.getBounds())
       : undefined;
+    const token =
+      typeof transition.token === "string" &&
+      transition.token.length > 0 &&
+      transition.token.length <= 128
+        ? transition.token
+        : undefined;
+    const durationMs = Math.max(
+      1,
+      Math.min(2_000, Math.round(finiteNumber(transition.durationMs))),
+    );
     const space = manager.getSpace(id);
     if (space) profileSync.notifyProfileActive(space.profileId);
     browserView.webContents.send(
       "x-browser:browser-state",
       manager.navigationState(id),
     );
-    await presentation.showSpace(id, source ? { source } : undefined);
+    nativeChrome.update(manager.navigationState(id));
+    await presentation.showSpace(
+      id,
+      source ? { source, token, durationMs } : undefined,
+    );
   });
-  shell("x-browser:space-transition:ready", (_event, token: string) =>
-    presentation.notifyTransitionReady(String(token)),
-  );
   shell("x-browser:space-transition:finished", (_event, token: string) =>
     presentation.notifyTransitionFinished(String(token)),
   );
@@ -1309,6 +1376,7 @@ function registerIpc(context: IpcContext) {
       manager.setVisiblePreviewSpaces(
         visibleSpaceIds(safeCards, safeViewport, 8),
       );
+      presentation.setOverviewTargets(safeCards);
     },
   );
 
@@ -1402,6 +1470,48 @@ function currentBrowserState(context: IpcContext) {
   return context.manager.navigationState(presentation.spaceId);
 }
 
+async function handleNativeBrowserChromeEvent(
+  event: NativeBrowserChromeEvent,
+  manager: TaskSpaceManager,
+  presentation: PresentationCoordinator,
+  nativeChrome: NativeBrowserChrome,
+) {
+  if (event.type === "show-overview") {
+    await presentation.showOverview();
+    return;
+  }
+  const spaceId = currentSpaceId(presentation);
+  assertUserControl(manager, spaceId);
+  switch (event.type) {
+    case "new-tab":
+      await manager.createTab(spaceId);
+      setTimeout(() => nativeChrome.focusAddress(), 60);
+      break;
+    case "activate-tab":
+      await manager.activateTab(spaceId, String(event.targetId));
+      break;
+    case "close-tab":
+      await manager.closeTab(spaceId, String(event.targetId));
+      break;
+    case "navigate":
+      await manager.navigate(spaceId, String(event.value));
+      break;
+    case "back":
+      await manager.goBack(spaceId);
+      break;
+    case "forward":
+      await manager.goForward(spaceId);
+      break;
+    case "reload":
+      await manager.reload(spaceId);
+      break;
+  }
+  const current = presentation.current();
+  if (current.kind === "space") {
+    nativeChrome.update(manager.navigationState(current.spaceId));
+  }
+}
+
 function currentSpaceId(presentation: PresentationCoordinator) {
   const current = presentation.current();
   if (current.kind !== "space") throw new Error("no visible space");
@@ -1463,13 +1573,142 @@ async function captureWebContentsPng(view: WebContentsView) {
   return Buffer.from(result.data, "base64");
 }
 
+async function runNativeBrowserInteractionAudit(context: {
+  testRoot: string;
+  window: BaseWindow;
+  manager: TaskSpaceManager;
+  presentation: PresentationCoordinator;
+  browserView: WebContentsView;
+  nativeChrome: NativeBrowserChrome;
+}) {
+  const { testRoot, window, manager, presentation, nativeChrome } = context;
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const pageUrl =
+    "data:text/html,<title>Native%20Chrome%20Audit</title><main>Native%20Chrome%20Audit</main>";
+  const space = await manager.createSpace("Native browser interaction audit", "user");
+  try {
+    const page = await manager.createTab(space.id, pageUrl);
+    await presentation.showSpace(space.id);
+    nativeChrome.update(manager.navigationState(space.id));
+    await wait(100);
+    const pageView = manager.getView(page.targetId)!;
+    await pageView.webContents.executeJavaScript(
+      "globalThis.__ufoNativeChromeAudit = 'kept-context'",
+      true,
+    );
+    const initial = nativeChrome.inspect();
+    const initialRootChildCount = window.contentView.children.length;
+
+    const tabsBeforeNew = manager.getSpaceOrThrow(space.id).tabs.length;
+    await handleNativeBrowserChromeEvent(
+      { type: "new-tab" },
+      manager,
+      presentation,
+      nativeChrome,
+    );
+    await wait(120);
+    const afterNewSpace = manager.getSpaceOrThrow(space.id);
+    const afterNewTabCount = afterNewSpace.tabs.length;
+    const newTargetId = afterNewSpace.activeTabId;
+    const afterNew = nativeChrome.inspect();
+
+    await handleNativeBrowserChromeEvent(
+      { type: "activate-tab", targetId: page.targetId },
+      manager,
+      presentation,
+      nativeChrome,
+    );
+    await wait(80);
+    const afterActivate = nativeChrome.inspect();
+    const activatedTargetId = manager.getSpaceOrThrow(space.id).activeTabId;
+
+    await handleNativeBrowserChromeEvent(
+      { type: "close-tab", targetId: newTargetId },
+      manager,
+      presentation,
+      nativeChrome,
+    );
+    await wait(80);
+    const afterClose = nativeChrome.inspect();
+    const contextToken = await pageView.webContents.executeJavaScript(
+      "globalThis.__ufoNativeChromeAudit",
+      true,
+    );
+    const chromePng = nativeChrome.capturePng();
+    if (chromePng) {
+      await writeFile(join(testRoot, "browser-interaction-polish.png"), chromePng);
+    }
+
+    await handleNativeBrowserChromeEvent(
+      { type: "show-overview" },
+      manager,
+      presentation,
+      nativeChrome,
+    );
+    const overview = {
+      presentation: presentation.current(),
+      rootChildCount: window.contentView.children.length,
+      chrome: nativeChrome.inspect(),
+    };
+    const ok =
+      initial?.visible === true &&
+      initial.tabCount === tabsBeforeNew &&
+      initial.spacesCount === String(manager.listSpaces().length) &&
+      initial.addressFrame.height === 32 &&
+      initial.addressFrame.width > 500 &&
+      initial.titleHitClass === "NSButton" &&
+      initial.addressHitClass === "NSSearchField" &&
+      initialRootChildCount === 1 &&
+      afterNewTabCount === tabsBeforeNew + 1 &&
+      afterNew?.tabCount === tabsBeforeNew + 1 &&
+      afterNew.addressFocused === true &&
+      activatedTargetId === page.targetId &&
+      afterActivate?.tabCount === tabsBeforeNew + 1 &&
+      manager.getSpaceOrThrow(space.id).tabs.length === tabsBeforeNew &&
+      afterClose?.tabCount === tabsBeforeNew &&
+      contextToken === "kept-context" &&
+      Boolean(chromePng && chromePng.byteLength > 1_000) &&
+      overview.presentation.kind === "overview" &&
+      overview.rootChildCount === 1 &&
+      overview.chrome?.visible === false;
+    await writeFile(
+      join(testRoot, "interaction-audit.json"),
+      `${JSON.stringify(
+        {
+          ok,
+          mode: "native-appkit",
+          initial,
+          initialRootChildCount,
+          afterNew,
+          afterNewTabCount,
+          afterActivate,
+          afterClose,
+          contextToken,
+          chromePngBytes: chromePng?.byteLength ?? 0,
+          overview,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } finally {
+    await presentation.showOverview().catch(() => undefined);
+    await manager.closeSpace(space.id).catch(() => undefined);
+  }
+}
+
 async function runBrowserInteractionAudit(context: {
   testRoot: string;
   window: BaseWindow;
   manager: TaskSpaceManager;
   presentation: PresentationCoordinator;
   browserView: WebContentsView;
+  nativeChrome: NativeBrowserChrome;
 }) {
+  if (context.nativeChrome.isAvailable()) {
+    await runNativeBrowserInteractionAudit(context);
+    return;
+  }
   const { testRoot, window, manager, presentation, browserView } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitUntil = async (predicate: () => boolean, timeoutMs = 500) => {
@@ -2159,7 +2398,6 @@ async function runSpaceUiAudit(context: {
   profiles: BrowserProfileRegistry;
   presentation: PresentationCoordinator;
   overviewView: WebContentsView;
-  overlayView: WebContentsView;
 }) {
   const {
     testRoot,
@@ -2167,7 +2405,6 @@ async function runSpaceUiAudit(context: {
     profiles,
     presentation,
     overviewView,
-    overlayView,
   } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const initial = manager.listSpaces()[0];
@@ -2319,54 +2556,16 @@ async function runSpaceUiAudit(context: {
     originalLifecycle,
   );
   const transitionStartedAt = performance.now();
+  const rendererTransitionBefore = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      stagePresent: Boolean(document.querySelector('.space-enter-transition')),
+      bodyLocked: document.body.classList.contains('space-entering'),
+    }))()`,
+    true,
+  );
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('[data-space-id="${initial.id}"]')?.click()`,
     true,
-  );
-  await waitForRenderer(
-    overlayView,
-    `Boolean(document.querySelector('.space-transition.ready'))`,
-  );
-  await wait(56);
-  const openingTransition = await overlayView.webContents.executeJavaScript(
-    `(() => {
-      const stage = document.querySelector('.space-transition');
-      const surface = stage?.querySelector('.transition-surface');
-      const shade = stage?.querySelector('.transition-shade');
-      const overview = stage?.querySelector('.transition-overview');
-      const chrome = stage?.querySelector('.transition-chrome');
-      const page = stage?.querySelector('.transition-page');
-      const surfaceStyle = surface ? getComputedStyle(surface) : null;
-      const surfaceRect = surface?.getBoundingClientRect();
-      return {
-        motion: stage?.getAttribute('data-motion') || '',
-        durationMs: Number(stage?.getAttribute('data-duration-ms') || 0),
-        sourceWidth: Number(stage?.getAttribute('data-source-width') || 0),
-        sourceHeight: Number(stage?.getAttribute('data-source-height') || 0),
-        bodyLocked: document.body.classList.contains('space-transitioning'),
-        overviewNaturalWidth: overview?.naturalWidth || 0,
-        overviewNaturalHeight: overview?.naturalHeight || 0,
-        chromeNaturalWidth: chrome?.naturalWidth || 0,
-        chromeNaturalHeight: chrome?.naturalHeight || 0,
-        pageNaturalWidth: page?.naturalWidth || 0,
-        pageNaturalHeight: page?.naturalHeight || 0,
-        renderedWidth: surfaceRect?.width || 0,
-        renderedHeight: surfaceRect?.height || 0,
-        viewportWidth: innerWidth,
-        viewportHeight: innerHeight,
-        transform: surfaceStyle?.transform || '',
-        borderRadius: surfaceStyle?.borderRadius || '',
-        shadeOpacity: shade ? Number(getComputedStyle(shade).opacity) : 0,
-        activeAnimations: stage?.getAnimations({ subtree: true }).filter((animation) => animation.playState === 'running').length || 0,
-        cardMenuPresent: Boolean(stage?.querySelector('.card-menu')),
-        fakeChromePresent: Boolean(stage?.querySelector('.preview-browser-chrome')),
-      };
-    })()`,
-    true,
-  );
-  await writeFile(
-    join(testRoot, "space-open-transition.png"),
-    await captureWebContentsPng(overlayView),
   );
   await waitUntil(
     () => {
@@ -2375,19 +2574,18 @@ async function runSpaceUiAudit(context: {
     },
     3_000,
   );
-  await waitForRenderer(overlayView, `document.querySelector('.space-transition')?.hidden === true`);
   const transitionElapsedMs = Number(
     (performance.now() - transitionStartedAt).toFixed(1),
   );
-  await presentation.showOverview();
-  await wait(140);
-  const transitionCleanup = await overlayView.webContents.executeJavaScript(
+  const rendererTransitionAfter = await overviewView.webContents.executeJavaScript(
     `(() => ({
-      stageHidden: document.querySelector('.space-transition')?.hidden === true,
-      bodyLocked: document.body.classList.contains('space-transitioning'),
+      stagePresent: Boolean(document.querySelector('.space-enter-transition')),
+      bodyLocked: document.body.classList.contains('space-entering'),
     }))()`,
     true,
   );
+  await presentation.showOverview();
+  await wait(140);
   const initialSpaceCount = manager.listSpaces().length;
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('.create-space-profile-trigger')?.click()`,
@@ -2482,30 +2680,11 @@ async function runSpaceUiAudit(context: {
     controlledVisual.frameAnimation === "agent-card-frame-breathe" &&
     Math.abs(controlledVisual.titleX - visualBefore.titleX) < 0.5 &&
     controlledVisual.previewShadow !== visualBefore.previewShadow &&
-    openingTransition.motion === "space-live-handoff-v2" &&
-    openingTransition.durationMs === 180 &&
-    openingTransition.sourceWidth > 200 &&
-    openingTransition.sourceHeight > 120 &&
-    openingTransition.bodyLocked === true &&
-    openingTransition.overviewNaturalWidth >= openingTransition.viewportWidth &&
-    openingTransition.overviewNaturalHeight >= openingTransition.viewportHeight &&
-    openingTransition.chromeNaturalWidth >= openingTransition.viewportWidth &&
-    openingTransition.chromeNaturalHeight > 0 &&
-    openingTransition.pageNaturalWidth >= openingTransition.viewportWidth &&
-    openingTransition.pageNaturalHeight >= openingTransition.viewportHeight &&
-    openingTransition.renderedWidth > openingTransition.sourceWidth &&
-    openingTransition.renderedWidth < openingTransition.viewportWidth &&
-    openingTransition.renderedHeight > openingTransition.sourceHeight &&
-    openingTransition.renderedHeight < openingTransition.viewportHeight &&
-    openingTransition.transform !== "none" &&
-    openingTransition.activeAnimations >= 2 &&
-    openingTransition.shadeOpacity > 0 &&
-    openingTransition.cardMenuPresent === false &&
-    openingTransition.fakeChromePresent === false &&
-    transitionElapsedMs >= 150 &&
+    rendererTransitionBefore.stagePresent === false &&
+    rendererTransitionBefore.bodyLocked === false &&
+    rendererTransitionAfter.stagePresent === false &&
+    rendererTransitionAfter.bodyLocked === false &&
     transitionElapsedMs < 900 &&
-    transitionCleanup.stageHidden === true &&
-    transitionCleanup.bodyLocked === false &&
     createMenu.expanded === "true" &&
     createMenu.heading === "使用其他个人资料创建 Space" &&
     createMenu.profileIds.includes(defaultProfileId) &&
@@ -2534,9 +2713,9 @@ async function runSpaceUiAudit(context: {
         visualBefore,
         controlledVisual,
         openingTransition: {
-          ...openingTransition,
+          rendererBefore: rendererTransitionBefore,
+          rendererAfter: rendererTransitionAfter,
           elapsedMs: transitionElapsedMs,
-          cleanup: transitionCleanup,
         },
         createMenu,
         defaultCreation: {
