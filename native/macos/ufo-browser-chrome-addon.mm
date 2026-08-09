@@ -67,10 +67,435 @@ bool safeBool(id value) {
 
 }  // namespace
 
+@interface UFOChromeRoundButton : NSButton
+@property(nonatomic, strong) NSTrackingArea *hoverTrackingArea;
+@property(nonatomic) BOOL pointerInside;
+- (instancetype)initWithSymbol:(NSString *)symbolName
+                     pointSize:(CGFloat)pointSize
+                        target:(id)target
+                        action:(SEL)action;
+@end
+
+@implementation UFOChromeRoundButton
+
+- (instancetype)initWithSymbol:(NSString *)symbolName
+                     pointSize:(CGFloat)pointSize
+                        target:(id)target
+                        action:(SEL)action {
+  self = [super initWithFrame:NSZeroRect];
+  if (!self) return nil;
+  self.target = target;
+  self.action = action;
+  self.image = symbol(symbolName, pointSize, NSFontWeightMedium);
+  self.imagePosition = NSImageOnly;
+  self.imageScaling = NSImageScaleProportionallyDown;
+  self.bordered = NO;
+  self.focusRingType = NSFocusRingTypeNone;
+  self.contentTintColor = color(0.45);
+  self.wantsLayer = YES;
+  self.layer.cornerCurve = kCACornerCurveContinuous;
+  self.layer.borderWidth = 0.5;
+  self.layer.borderColor = color(0.84, 0.42).CGColor;
+  [self refreshAppearance];
+  return self;
+}
+
+- (void)layout {
+  [super layout];
+  self.layer.cornerRadius = MIN(NSWidth(self.bounds), NSHeight(self.bounds)) / 2.0;
+}
+
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (self.hoverTrackingArea) [self removeTrackingArea:self.hoverTrackingArea];
+  self.hoverTrackingArea = [[NSTrackingArea alloc]
+      initWithRect:NSZeroRect
+           options:NSTrackingMouseEnteredAndExited |
+                   NSTrackingActiveInKeyWindow |
+                   NSTrackingInVisibleRect
+             owner:self
+          userInfo:nil];
+  [self addTrackingArea:self.hoverTrackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+  self.pointerInside = YES;
+  [self refreshAppearance];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+  self.pointerInside = NO;
+  [self refreshAppearance];
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+  [super setHighlighted:highlighted];
+  [self refreshAppearance];
+}
+
+- (void)setEnabled:(BOOL)enabled {
+  [super setEnabled:enabled];
+  [self refreshAppearance];
+}
+
+- (void)refreshAppearance {
+  if (!self.layer) return;
+  CGFloat fill = self.isHighlighted ? 0.93 : (self.pointerInside ? 0.965 : 0.985);
+  self.layer.backgroundColor = color(fill).CGColor;
+  self.contentTintColor = self.enabled ? color(0.56) : color(0.74);
+}
+
+@end
+
+@interface UFOChromeHoverButton : NSButton
+@property(nonatomic, strong) NSTrackingArea *hoverTrackingArea;
+@property(nonatomic) BOOL pointerInside;
+- (instancetype)initWithSymbol:(NSString *)symbolName
+                     pointSize:(CGFloat)pointSize
+                        target:(id)target
+                        action:(SEL)action;
+- (void)refreshAppearance;
+@end
+
+@implementation UFOChromeHoverButton
+
+- (instancetype)initWithSymbol:(NSString *)symbolName
+                     pointSize:(CGFloat)pointSize
+                        target:(id)target
+                        action:(SEL)action {
+  self = [super initWithFrame:NSZeroRect];
+  if (!self) return nil;
+  self.target = target;
+  self.action = action;
+  self.image = symbol(symbolName, pointSize, NSFontWeightMedium);
+  self.imagePosition = NSImageOnly;
+  self.imageScaling = NSImageScaleProportionallyDown;
+  self.bordered = NO;
+  self.focusRingType = NSFocusRingTypeNone;
+  self.contentTintColor = color(0.31, 0.88);
+  self.wantsLayer = YES;
+  self.layer.cornerCurve = kCACornerCurveContinuous;
+  [self refreshAppearance];
+  return self;
+}
+
+- (void)layout {
+  [super layout];
+  self.layer.cornerRadius = MIN(NSWidth(self.bounds), NSHeight(self.bounds)) / 2.0;
+}
+
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (self.hoverTrackingArea) [self removeTrackingArea:self.hoverTrackingArea];
+  self.hoverTrackingArea = [[NSTrackingArea alloc]
+      initWithRect:NSZeroRect
+           options:NSTrackingMouseEnteredAndExited |
+                   NSTrackingActiveInKeyWindow |
+                   NSTrackingInVisibleRect
+             owner:self
+          userInfo:nil];
+  [self addTrackingArea:self.hoverTrackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+  self.pointerInside = YES;
+  [self refreshAppearance];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+  self.pointerInside = NO;
+  [self refreshAppearance];
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+  [super setHighlighted:highlighted];
+  [self refreshAppearance];
+}
+
+- (void)setEnabled:(BOOL)enabled {
+  [super setEnabled:enabled];
+  [self refreshAppearance];
+}
+
+- (void)refreshAppearance {
+  if (!self.layer) return;
+  if (self.isHighlighted) {
+    self.layer.backgroundColor = color(0.875).CGColor;
+  } else if (self.state == NSControlStateValueOn) {
+    self.layer.backgroundColor = color(0.90).CGColor;
+  } else if (self.pointerInside) {
+    self.layer.backgroundColor = color(0.94).CGColor;
+  } else {
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
+  }
+  self.contentTintColor = self.enabled ? color(0.27, 0.90) : color(0.70);
+}
+
+@end
+
+@interface UFOFlippedView : NSView
+@end
+
+@implementation UFOFlippedView
+- (BOOL)isFlipped { return YES; }
+@end
+
+@interface UFOTabSearchCellView : NSTableCellView
+@property(nonatomic, strong) NSView *iconBackdrop;
+@property(nonatomic, strong) NSImageView *siteIcon;
+@property(nonatomic, strong) NSTextField *titleLabel;
+@property(nonatomic, strong) NSTextField *subtitleLabel;
+@property(nonatomic, strong) UFOChromeHoverButton *closeButton;
+@property(nonatomic, copy) NSString *targetID;
+- (instancetype)initWithCloseTarget:(id)target action:(SEL)action;
+- (void)configureWithTab:(NSDictionary *)tab active:(BOOL)active;
+@end
+
+@implementation UFOTabSearchCellView
+
+- (instancetype)initWithCloseTarget:(id)target action:(SEL)action {
+  self = [super initWithFrame:NSZeroRect];
+  if (!self) return nil;
+  self.wantsLayer = YES;
+  self.layer.cornerCurve = kCACornerCurveContinuous;
+  self.layer.cornerRadius = 8;
+
+  _iconBackdrop = [[NSView alloc] initWithFrame:NSZeroRect];
+  _iconBackdrop.wantsLayer = YES;
+  _iconBackdrop.layer.backgroundColor = color(0.955).CGColor;
+  _iconBackdrop.layer.cornerCurve = kCACornerCurveContinuous;
+  _iconBackdrop.layer.cornerRadius = 9;
+  [self addSubview:_iconBackdrop];
+
+  _siteIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+  _siteIcon.image = symbol(@"globe", 15, NSFontWeightMedium);
+  _siteIcon.imageScaling = NSImageScaleProportionallyDown;
+  _siteIcon.contentTintColor = color(0.48);
+  [self addSubview:_siteIcon];
+
+  _titleLabel = [NSTextField labelWithString:@""];
+  _titleLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+  _titleLabel.textColor = color(0.18);
+  _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  [self addSubview:_titleLabel];
+
+  _subtitleLabel = [NSTextField labelWithString:@""];
+  _subtitleLabel.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightRegular];
+  _subtitleLabel.textColor = color(0.42);
+  _subtitleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  [self addSubview:_subtitleLabel];
+
+  _closeButton = [[UFOChromeHoverButton alloc]
+      initWithSymbol:@"xmark"
+           pointSize:11
+              target:target
+              action:action];
+  _closeButton.toolTip = @"关闭标签页";
+  [self addSubview:_closeButton];
+  return self;
+}
+
+- (BOOL)isFlipped { return YES; }
+
+- (void)layout {
+  [super layout];
+  const CGFloat width = NSWidth(self.bounds);
+  self.iconBackdrop.frame = NSMakeRect(8, 7, 42, 42);
+  self.siteIcon.frame = NSMakeRect(20, 19, 18, 18);
+  self.titleLabel.frame = NSMakeRect(62, 8, MAX(70, width - 108), 20);
+  self.subtitleLabel.frame = NSMakeRect(62, 29, MAX(70, width - 108), 18);
+  self.closeButton.frame = NSMakeRect(width - 38, 14, 28, 28);
+}
+
+- (void)setTargetID:(NSString *)targetID {
+  _targetID = [targetID copy];
+  self.closeButton.identifier = targetID;
+}
+
+- (void)configureWithTab:(NSDictionary *)tab active:(BOOL)active {
+  self.targetID = safeString(tab[@"targetId"]);
+  self.titleLabel.stringValue = safeString(tab[@"title"], @"新标签页");
+  NSString *url = safeString(tab[@"url"]);
+  NSURL *parsed = [NSURL URLWithString:url];
+  self.subtitleLabel.stringValue = parsed.host.length > 0 ? parsed.host : url;
+  self.layer.backgroundColor = active ? color(0.91).CGColor : NSColor.clearColor.CGColor;
+}
+
+@end
+
+@interface UFOTabSearchViewController
+    : NSViewController <NSSearchFieldDelegate, NSTableViewDelegate, NSTableViewDataSource>
+@property(nonatomic, strong) NSSearchField *searchField;
+@property(nonatomic, strong) NSTableView *tableView;
+@property(nonatomic, strong) NSArray<NSDictionary *> *tabs;
+@property(nonatomic, strong) NSArray<NSDictionary *> *filteredTabs;
+@property(nonatomic, copy) NSString *activeTargetID;
+@property(nonatomic, copy) void (^activateTarget)(NSString *targetID);
+@property(nonatomic, copy) void (^closeTarget)(NSString *targetID);
+- (void)updateTabs:(NSArray<NSDictionary *> *)tabs activeTargetID:(NSString *)activeTargetID;
+@end
+
+@implementation UFOTabSearchViewController
+
+- (void)loadView {
+  UFOFlippedView *root = [[UFOFlippedView alloc]
+      initWithFrame:NSMakeRect(0, 0, 360, 420)];
+  root.wantsLayer = YES;
+  root.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+  self.view = root;
+
+  _searchField = [[NSSearchField alloc] initWithFrame:NSMakeRect(18, 14, 324, 38)];
+  _searchField.placeholderString = @"搜索标签页";
+  _searchField.font = [NSFont systemFontOfSize:14 weight:NSFontWeightRegular];
+  _searchField.delegate = self;
+  [root addSubview:_searchField];
+
+  NSView *separator = [[NSView alloc] initWithFrame:NSMakeRect(0, 64, 360, 1)];
+  separator.wantsLayer = YES;
+  separator.layer.backgroundColor = color(0.84, 0.62).CGColor;
+  [root addSubview:separator];
+
+  NSTextField *heading = [NSTextField labelWithString:@"打开的标签页"];
+  heading.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+  heading.textColor = color(0.28);
+  heading.frame = NSMakeRect(20, 81, 300, 22);
+  [root addSubview:heading];
+
+  NSScrollView *scroll = [[NSScrollView alloc]
+      initWithFrame:NSMakeRect(12, 110, 336, 298)];
+  scroll.drawsBackground = NO;
+  scroll.hasVerticalScroller = YES;
+  scroll.autohidesScrollers = YES;
+  scroll.borderType = NSNoBorder;
+
+  _tableView = [[NSTableView alloc] initWithFrame:scroll.bounds];
+  NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"tab"];
+  column.width = 332;
+  [_tableView addTableColumn:column];
+  _tableView.headerView = nil;
+  _tableView.backgroundColor = NSColor.clearColor;
+  _tableView.intercellSpacing = NSMakeSize(0, 2);
+  _tableView.rowHeight = 56;
+  _tableView.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
+  _tableView.delegate = self;
+  _tableView.dataSource = self;
+  scroll.documentView = _tableView;
+  [root addSubview:scroll];
+}
+
+- (void)updateTabs:(NSArray<NSDictionary *> *)tabs activeTargetID:(NSString *)activeTargetID {
+  self.tabs = [tabs copy] ?: @[];
+  self.activeTargetID = [activeTargetID copy] ?: @"";
+  (void)self.view;
+  [self applyFilter];
+}
+
+- (void)applyFilter {
+  NSString *query = [self.searchField.stringValue
+      stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  if (query.length == 0) {
+    self.filteredTabs = self.tabs ?: @[];
+  } else {
+    NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(
+        NSDictionary *tab, NSDictionary *bindings) {
+      NSString *haystack = [NSString stringWithFormat:@"%@ %@",
+          safeString(tab[@"title"]), safeString(tab[@"url"])];
+      return [haystack rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound;
+    }];
+    self.filteredTabs = [self.tabs filteredArrayUsingPredicate:predicate];
+  }
+  [self.tableView reloadData];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+  return self.filteredTabs.count;
+}
+
+- (NSView *)tableView:(NSTableView *)tableView
+    viewForTableColumn:(NSTableColumn *)tableColumn
+                   row:(NSInteger)row {
+  if (row < 0 || row >= (NSInteger)self.filteredTabs.count) return nil;
+  NSDictionary *tab = self.filteredTabs[(NSUInteger)row];
+  UFOTabSearchCellView *cell = [[UFOTabSearchCellView alloc]
+      initWithCloseTarget:self
+                  action:@selector(closeTabRow:)];
+  NSString *targetID = safeString(tab[@"targetId"]);
+  [cell configureWithTab:tab active:[targetID isEqualToString:self.activeTargetID]];
+  return cell;
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+  NSInteger row = self.tableView.selectedRow;
+  if (row < 0 || row >= (NSInteger)self.filteredTabs.count) return;
+  NSString *targetID = safeString(self.filteredTabs[(NSUInteger)row][@"targetId"]);
+  if (targetID.length > 0 && self.activateTarget) self.activateTarget(targetID);
+}
+
+- (void)closeTabRow:(NSButton *)sender {
+  NSString *targetID = sender.identifier;
+  if (targetID.length > 0 && self.closeTarget) self.closeTarget(targetID);
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+  [self applyFilter];
+}
+
+@end
+
+@interface UFOChromeAddressFieldCell : NSTextFieldCell
+- (NSRect)centeredTextRectForBounds:(NSRect)rect;
+@end
+
+@implementation UFOChromeAddressFieldCell
+
+- (NSRect)centeredTextRectForBounds:(NSRect)rect {
+  NSFont *font = self.font ?: [NSFont systemFontOfSize:14];
+  const CGFloat textHeight = MIN(NSHeight(rect),
+      ceil(font.ascender - font.descender + font.leading));
+  const CGFloat y = floor((NSHeight(rect) - textHeight) / 2.0);
+  return NSMakeRect(NSMinX(rect), NSMinY(rect) + y, NSWidth(rect), textHeight);
+}
+
+- (NSRect)drawingRectForBounds:(NSRect)rect {
+  return [self centeredTextRectForBounds:rect];
+}
+
+- (NSRect)titleRectForBounds:(NSRect)rect {
+  return [self centeredTextRectForBounds:rect];
+}
+
+- (void)editWithFrame:(NSRect)rect
+                inView:(NSView *)controlView
+                editor:(NSText *)textObject
+              delegate:(id)delegate
+                 event:(NSEvent *)event {
+  [super editWithFrame:[self centeredTextRectForBounds:rect]
+                inView:controlView
+                editor:textObject
+              delegate:delegate
+                 event:event];
+}
+
+- (void)selectWithFrame:(NSRect)rect
+                  inView:(NSView *)controlView
+                  editor:(NSText *)textObject
+                delegate:(id)delegate
+                   start:(NSInteger)selectionStart
+                  length:(NSInteger)selectionLength {
+  [super selectWithFrame:[self centeredTextRectForBounds:rect]
+                  inView:controlView
+                  editor:textObject
+                delegate:delegate
+                   start:selectionStart
+                  length:selectionLength];
+}
+
+@end
+
 @interface UFOChromeTabItem : NSView
 @property(nonatomic, copy) NSString *targetID;
 @property(nonatomic, strong) NSButton *selectButton;
-@property(nonatomic, strong) NSButton *closeButton;
+@property(nonatomic, strong) UFOChromeHoverButton *closeButton;
 @property(nonatomic, strong) NSView *identityDot;
 - (instancetype)initWithTarget:(id)target;
 - (void)updateTitle:(NSString *)title active:(BOOL)active enabled:(BOOL)enabled;
@@ -83,31 +508,28 @@ bool safeBool(id value) {
   if (!self) return nil;
   self.wantsLayer = YES;
   self.layer.cornerCurve = kCACornerCurveContinuous;
-  self.layer.cornerRadius = 12.0;
+  self.layer.cornerRadius = 11.0;
 
   _identityDot = [[NSView alloc] initWithFrame:NSZeroRect];
   _identityDot.wantsLayer = YES;
-  _identityDot.layer.cornerRadius = 4.0;
-  _identityDot.layer.backgroundColor =
-      [NSColor colorWithRed:0.48 green:0.59 blue:0.56 alpha:0.42].CGColor;
+  _identityDot.layer.cornerRadius = 4.5;
+  _identityDot.layer.backgroundColor = color(0.68).CGColor;
   [self addSubview:_identityDot];
 
   _selectButton = [NSButton buttonWithTitle:@"" target:target action:@selector(activateTab:)];
   _selectButton.bordered = NO;
   _selectButton.alignment = NSTextAlignmentLeft;
-  _selectButton.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
-  _selectButton.contentTintColor = color(0.20);
+  _selectButton.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  _selectButton.contentTintColor = color(0.18);
   _selectButton.lineBreakMode = NSLineBreakByTruncatingTail;
   _selectButton.focusRingType = NSFocusRingTypeNone;
   [self addSubview:_selectButton];
 
-  _closeButton = [NSButton buttonWithImage:symbol(@"xmark", 10, NSFontWeightSemibold)
-                                    target:target
-                                    action:@selector(closeTab:)];
-  _closeButton.bordered = NO;
-  _closeButton.imagePosition = NSImageOnly;
-  _closeButton.contentTintColor = color(0.36, 0.82);
-  _closeButton.focusRingType = NSFocusRingTypeNone;
+  _closeButton = [[UFOChromeHoverButton alloc]
+      initWithSymbol:@"xmark"
+           pointSize:10
+              target:target
+              action:@selector(closeTab:)];
   _closeButton.toolTip = @"关闭标签页";
   [self addSubview:_closeButton];
   return self;
@@ -118,9 +540,9 @@ bool safeBool(id value) {
 - (void)layout {
   [super layout];
   const CGFloat height = NSHeight(self.bounds);
-  self.identityDot.frame = NSMakeRect(11, (height - 8) / 2.0, 8, 8);
-  self.closeButton.frame = NSMakeRect(NSWidth(self.bounds) - 31, 5, 26, height - 10);
-  self.selectButton.frame = NSMakeRect(24, 0, MAX(20, NSWidth(self.bounds) - 56), height);
+  self.identityDot.frame = NSMakeRect(12, (height - 9) / 2.0, 9, 9);
+  self.closeButton.frame = NSMakeRect(NSWidth(self.bounds) - 30, 4, 26, height - 8);
+  self.selectButton.frame = NSMakeRect(27, 0, MAX(20, NSWidth(self.bounds) - 57), height);
 }
 
 - (void)setTargetID:(NSString *)targetID {
@@ -134,40 +556,49 @@ bool safeBool(id value) {
   self.selectButton.enabled = enabled;
   self.closeButton.enabled = enabled;
   self.closeButton.hidden = !active;
-  self.layer.backgroundColor = active ? color(0.935).CGColor : NSColor.clearColor.CGColor;
-  self.layer.borderWidth = active ? 0.5 : 0.0;
-  self.layer.borderColor = color(0.72, 0.28).CGColor;
+  self.layer.backgroundColor = active ? color(0.925).CGColor : NSColor.clearColor.CGColor;
+  self.layer.borderWidth = 0.0;
   self.identityDot.layer.backgroundColor = active
-      ? [NSColor colorWithRed:0.42 green:0.55 blue:0.51 alpha:0.68].CGColor
-      : [NSColor colorWithRed:0.48 green:0.59 blue:0.56 alpha:0.34].CGColor;
+      ? color(0.62).CGColor
+      : color(0.72).CGColor;
 }
 
 @end
 
-@interface UFOBrowserChromeView : NSView <NSSearchFieldDelegate>
+@interface UFOBrowserChromeView : NSView <NSTextFieldDelegate, NSPopoverDelegate>
 @property(nonatomic, copy) void (^eventSink)(NSDictionary *event);
 @property(nonatomic, weak) NSWindow *parentWindow;
 @property(nonatomic, strong) NSButton *backButton;
 @property(nonatomic, strong) NSButton *forwardButton;
 @property(nonatomic, strong) NSButton *reloadButton;
-@property(nonatomic, strong) NSButton *addTabButton;
-@property(nonatomic, strong) NSButton *spacesButton;
-@property(nonatomic, strong) NSButton *profileButton;
-@property(nonatomic, strong) NSButton *titlebarMenuButton;
+@property(nonatomic, strong) UFOChromeHoverButton *addTabButton;
+@property(nonatomic, strong) UFOChromeRoundButton *spacesButton;
+@property(nonatomic, strong) UFOChromeRoundButton *profileButton;
+@property(nonatomic, strong) UFOChromeHoverButton *titlebarMenuButton;
 @property(nonatomic, strong) NSView *addressBackdrop;
-@property(nonatomic, strong) NSView *spacesBackdrop;
-@property(nonatomic, strong) NSSearchField *addressField;
+@property(nonatomic, strong) NSImageView *addressIcon;
+@property(nonatomic, strong) NSTextField *addressField;
+@property(nonatomic, strong) NSButton *addressClearButton;
 @property(nonatomic, strong) NSView *separator;
 @property(nonatomic, strong) NSMutableArray<UFOChromeTabItem *> *tabItems;
+@property(nonatomic, strong) NSArray<NSDictionary *> *tabState;
+@property(nonatomic, copy) NSString *activeTargetID;
+@property(nonatomic, strong) NSPopover *tabSearchPopover;
+@property(nonatomic, strong) UFOTabSearchViewController *tabSearchController;
 @property(nonatomic) BOOL addressEditing;
 @property(nonatomic) BOOL controlled;
+@property(nonatomic) NSInteger spaceCount;
 - (void)updateState:(NSDictionary *)state;
 - (NSData *)pngRepresentation;
 - (NSDictionary *)inspection;
 - (void)focusAddress;
+- (void)alignAddressFieldEditor;
 - (BOOL)handleMouseDownAtPoint:(NSPoint)point;
 - (void)activateTab:(NSButton *)sender;
 - (void)closeTab:(NSButton *)sender;
+- (void)clearAddress:(id)sender;
+- (void)toggleTabSearch:(id)sender;
+- (void)showProfileMenu:(id)sender;
 @end
 
 @implementation UFOBrowserChromeView
@@ -176,15 +607,17 @@ bool safeBool(id value) {
   self = [super initWithFrame:frameRect];
   if (!self) return nil;
   self.wantsLayer = YES;
-  self.layer.backgroundColor = NSColor.clearColor.CGColor;
-  self.layer.shadowColor = NSColor.blackColor.CGColor;
-  self.layer.shadowOpacity = 0.035;
-  self.layer.shadowRadius = 5.0;
-  self.layer.shadowOffset = CGSizeMake(0, -1);
+  self.layer.backgroundColor = NSColor.whiteColor.CGColor;
   _tabItems = [[NSMutableArray alloc] init];
+  _tabState = @[];
+  _spaceCount = 1;
 
-  _titlebarMenuButton = [self symbolButton:@"chevron.down" action:@selector(showOverview:)];
-  _titlebarMenuButton.toolTip = @"返回 Spaces";
+  _titlebarMenuButton = [[UFOChromeHoverButton alloc]
+      initWithSymbol:@"chevron.down"
+           pointSize:13
+              target:self
+              action:@selector(toggleTabSearch:)];
+  _titlebarMenuButton.toolTip = @"搜索标签页";
   [self addSubview:_titlebarMenuButton];
 
   _backButton = [self symbolButton:@"chevron.left" action:@selector(goBack:)];
@@ -197,47 +630,53 @@ bool safeBool(id value) {
   _reloadButton.toolTip = @"刷新";
   [self addSubview:_reloadButton];
 
-  _addTabButton = [self symbolButton:@"plus" action:@selector(newTab:)];
+  _addTabButton = [[UFOChromeHoverButton alloc]
+      initWithSymbol:@"plus"
+           pointSize:14
+              target:self
+              action:@selector(newTab:)];
   _addTabButton.toolTip = @"新建标签页";
   [self addSubview:_addTabButton];
 
-  _spacesBackdrop = [[NSView alloc] initWithFrame:NSZeroRect];
-  _spacesBackdrop.wantsLayer = YES;
-  _spacesBackdrop.layer.backgroundColor = color(0.965).CGColor;
-  _spacesBackdrop.layer.cornerCurve = kCACornerCurveContinuous;
-  _spacesBackdrop.layer.cornerRadius = 15.0;
-  _spacesBackdrop.layer.borderWidth = 0.5;
-  _spacesBackdrop.layer.borderColor = color(0.76, 0.24).CGColor;
-  _spacesBackdrop.layer.shadowColor = NSColor.blackColor.CGColor;
-  _spacesBackdrop.layer.shadowOpacity = 0.045;
-  _spacesBackdrop.layer.shadowRadius = 5.0;
-  _spacesBackdrop.layer.shadowOffset = CGSizeMake(0, -1);
-  [self addSubview:_spacesBackdrop];
-
-  _spacesButton = [NSButton buttonWithTitle:@"1" target:self action:@selector(showOverview:)];
-  _spacesButton.bordered = NO;
-  _spacesButton.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-  _spacesButton.contentTintColor = color(0.24);
-  _spacesButton.focusRingType = NSFocusRingTypeNone;
-  _spacesButton.wantsLayer = YES;
-  _spacesButton.layer.backgroundColor = NSColor.clearColor.CGColor;
+  _spacesButton = [[UFOChromeRoundButton alloc]
+      initWithSymbol:@"square.grid.2x2.fill"
+           pointSize:14
+              target:self
+              action:@selector(showOverview:)];
   _spacesButton.toolTip = @"返回 Spaces";
   [self addSubview:_spacesButton];
 
-  _profileButton = [self symbolButton:@"person.crop.circle" action:@selector(showOverview:)];
-  _profileButton.toolTip = @"Space 总览";
+  _profileButton = [[UFOChromeRoundButton alloc]
+      initWithSymbol:@"person.crop.circle"
+           pointSize:18
+              target:self
+              action:@selector(showProfileMenu:)];
+  _profileButton.toolTip = @"浏览器菜单";
   [self addSubview:_profileButton];
 
   _addressBackdrop = [[NSView alloc] initWithFrame:NSZeroRect];
   _addressBackdrop.wantsLayer = YES;
-  _addressBackdrop.layer.backgroundColor = color(0.948).CGColor;
+  _addressBackdrop.layer.backgroundColor = color(0.969).CGColor;
   _addressBackdrop.layer.cornerCurve = kCACornerCurveContinuous;
   _addressBackdrop.layer.cornerRadius = 16.0;
   _addressBackdrop.layer.borderWidth = 0.5;
-  _addressBackdrop.layer.borderColor = color(0.78, 0.24).CGColor;
+  _addressBackdrop.layer.borderColor = color(0.84, 0.30).CGColor;
   [self addSubview:_addressBackdrop];
 
-  _addressField = [[NSSearchField alloc] initWithFrame:NSZeroRect];
+  _addressIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+  _addressIcon.image = symbol(@"magnifyingglass", 14, NSFontWeightRegular);
+  _addressIcon.imageScaling = NSImageScaleProportionallyDown;
+  _addressIcon.contentTintColor = color(0.43);
+  [self addSubview:_addressIcon];
+
+  _addressField = [[NSTextField alloc] initWithFrame:NSZeroRect];
+  UFOChromeAddressFieldCell *addressCell =
+      [[UFOChromeAddressFieldCell alloc] initTextCell:@""];
+  addressCell.usesSingleLineMode = YES;
+  addressCell.scrollable = YES;
+  addressCell.wraps = NO;
+  addressCell.lineBreakMode = NSLineBreakByClipping;
+  _addressField.cell = addressCell;
   _addressField.delegate = self;
   _addressField.target = self;
   _addressField.action = @selector(submitAddress:);
@@ -252,9 +691,16 @@ bool safeBool(id value) {
   _addressField.layer.backgroundColor = NSColor.clearColor.CGColor;
   [self addSubview:_addressField];
 
+  _addressClearButton = [self symbolButton:@"xmark.circle.fill"
+                                    action:@selector(clearAddress:)];
+  _addressClearButton.contentTintColor = color(0.38, 0.86);
+  _addressClearButton.toolTip = @"清除地址";
+  _addressClearButton.hidden = YES;
+  [self addSubview:_addressClearButton];
+
   _separator = [[NSView alloc] initWithFrame:NSZeroRect];
   _separator.wantsLayer = YES;
-  _separator.layer.backgroundColor = color(0.82, 0.52).CGColor;
+  _separator.layer.backgroundColor = color(0.87, 0.82).CGColor;
   [self addSubview:_separator];
   return self;
 }
@@ -299,7 +745,12 @@ bool safeBool(id value) {
     [self.profileButton performClick:nil];
     return YES;
   }
-  if (NSPointInRect(point, self.addressField.frame)) {
+  if (!self.addressClearButton.hidden &&
+      NSPointInRect(point, self.addressClearButton.frame)) {
+    [self.addressClearButton performClick:nil];
+    return YES;
+  }
+  if (NSPointInRect(point, self.addressBackdrop.frame)) {
     [self focusAddress];
     return YES;
   }
@@ -333,7 +784,7 @@ bool safeBool(id value) {
                                         action:action];
   button.bordered = NO;
   button.imagePosition = NSImageOnly;
-  button.contentTintColor = color(0.31, 0.90);
+  button.contentTintColor = color(0.30, 0.90);
   button.focusRingType = NSFocusRingTypeNone;
   return button;
 }
@@ -341,39 +792,46 @@ bool safeBool(id value) {
 - (void)layout {
   [super layout];
   const CGFloat width = NSWidth(self.bounds);
-  self.titlebarMenuButton.frame = NSMakeRect(84, 7, 28, 28);
-  self.spacesBackdrop.frame = NSMakeRect(width - 48, 6, 34, 30);
-  self.spacesButton.frame = NSMakeRect(width - 48, 6, 34, 30);
+  // Chromium's tab-search control uses the same visual scale as a normal tab
+  // affordance: a compact 28pt circle whose centre sits immediately after the
+  // traffic lights.  Keeping the former 34pt hit box made it read as a pasted
+  // toolbar button instead of part of the native titlebar.
+  self.titlebarMenuButton.frame = NSMakeRect(82, 16, 28, 28);
+  self.spacesButton.frame = NSMakeRect(width - 42, 13, 34, 34);
 
-  const CGFloat tabsLeft = 120;
+  const CGFloat tabsLeft = 112;
   const CGFloat tabsRight = width - 58;
   const CGFloat tabsWidth = MAX(80, tabsRight - tabsLeft - 35);
   const NSUInteger count = self.tabItems.count;
   const CGFloat itemWidth = count > 0
-      ? MIN(250.0, MAX(118.0, (tabsWidth - MAX(0, (NSInteger)count - 1) * 4.0) / count))
+      ? MIN(232.0, MAX(116.0, (tabsWidth - MAX(0, (NSInteger)count - 1) * 3.0) / count))
       : 0;
   CGFloat tabX = tabsLeft;
   for (UFOChromeTabItem *item in self.tabItems) {
-    item.frame = NSMakeRect(tabX, 4, itemWidth, 34);
-    tabX += itemWidth + 4;
+    item.frame = NSMakeRect(tabX, 12, itemWidth, 32);
+    tabX += itemWidth + 3;
   }
-  self.addTabButton.frame = NSMakeRect(MIN(tabX + 2, tabsRight), 7, 28, 28);
+  self.addTabButton.frame = NSMakeRect(MIN(tabX + 2, tabsRight), 14, 28, 28);
 
   const CGFloat toolbarY = 54;
-  self.backButton.frame = NSMakeRect(16, toolbarY + 3, 30, 30);
-  self.forwardButton.frame = NSMakeRect(52, toolbarY + 3, 30, 30);
-  self.reloadButton.frame = NSMakeRect(88, toolbarY + 3, 30, 30);
-  self.profileButton.frame = NSMakeRect(width - 48, toolbarY + 3, 32, 30);
+  self.backButton.frame = NSMakeRect(0, toolbarY + 3, 30, 30);
+  self.forwardButton.frame = NSMakeRect(36, toolbarY + 3, 30, 30);
+  self.reloadButton.frame = NSMakeRect(72, toolbarY + 3, 30, 30);
+  self.profileButton.frame = NSMakeRect(width - 42, toolbarY + 1, 34, 34);
   self.addressBackdrop.frame = NSMakeRect(
-      126,
+      110,
       toolbarY + 2,
-      MAX(120, width - 126 - 60),
+      MAX(120, width - 110 - 54),
       32);
+  const CGFloat addressLeft = NSMinX(self.addressBackdrop.frame);
+  const CGFloat addressRight = NSMaxX(self.addressBackdrop.frame);
+  self.addressIcon.frame = NSMakeRect(addressLeft + 10, toolbarY + 9, 18, 18);
+  self.addressClearButton.frame = NSMakeRect(addressRight - 30, toolbarY + 5, 26, 26);
   self.addressField.frame = NSMakeRect(
-      130,
-      toolbarY + 2,
-      MAX(112, width - 130 - 64),
-      32);
+      addressLeft + 36,
+      toolbarY + 4,
+      MAX(72, addressRight - addressLeft - 70),
+      28);
   self.separator.frame = NSMakeRect(0, kChromeHeight - 1, width, 1);
 }
 
@@ -383,6 +841,8 @@ bool safeBool(id value) {
       : @{};
   NSArray *tabs = [space[@"tabs"] isKindOfClass:NSArray.class] ? space[@"tabs"] : @[];
   NSString *activeTarget = safeString(space[@"activeTabId"]);
+  self.tabState = [tabs copy];
+  self.activeTargetID = activeTarget;
   self.controlled = [safeString(space[@"ownership"]) isEqualToString:@"agent"] &&
       [safeString(space[@"lifecycle"]) isEqualToString:@"active"];
 
@@ -406,18 +866,25 @@ bool safeBool(id value) {
                active:[targetID isEqualToString:activeTarget]
               enabled:!self.controlled];
   }];
+  if (self.tabSearchPopover.isShown) {
+    [self.tabSearchController updateTabs:self.tabState activeTargetID:activeTarget];
+  }
 
-  self.spacesButton.title = [NSString stringWithFormat:@"%ld",
-      (long)MAX(1, safeInteger(state[@"spaceCount"], 1))];
+  self.spaceCount = MAX(1, safeInteger(state[@"spaceCount"], 1));
   self.backButton.enabled = !self.controlled && safeBool(state[@"canGoBack"]);
   self.forwardButton.enabled = !self.controlled && safeBool(state[@"canGoForward"]);
   self.reloadButton.enabled = !self.controlled;
   self.addTabButton.enabled = !self.controlled;
   self.addressField.editable = !self.controlled;
   self.addressField.selectable = !self.controlled;
+  self.addressClearButton.enabled = !self.controlled;
   self.addressBackdrop.layer.backgroundColor = self.controlled
       ? [NSColor colorWithRed:0.94 green:0.95 blue:0.98 alpha:1.0].CGColor
-      : color(0.948).CGColor;
+      : color(0.969).CGColor;
+  if (!self.addressEditing) {
+    self.addressBackdrop.layer.borderWidth = 0.5;
+    self.addressBackdrop.layer.borderColor = color(0.84, 0.30).CGColor;
+  }
   self.layer.borderWidth = self.controlled ? 1.0 : 0.0;
   self.layer.borderColor = self.controlled
       ? [NSColor colorWithRed:0.39 green:0.55 blue:0.94 alpha:0.42].CGColor
@@ -434,6 +901,7 @@ bool safeBool(id value) {
     } else {
       self.addressField.stringValue = url;
     }
+    self.addressClearButton.hidden = self.addressField.stringValue.length == 0;
   }
   [self setNeedsLayout:YES];
 }
@@ -462,7 +930,7 @@ bool safeBool(id value) {
   return @{
     @"visible": @(!self.hidden && self.window.isVisible),
     @"tabCount": @(self.tabItems.count),
-    @"spacesCount": self.spacesButton.title ?: @"",
+    @"spacesCount": [NSString stringWithFormat:@"%ld", (long)self.spaceCount],
     @"addressValue": self.addressField.stringValue ?: @"",
     @"addressFocused": @(self.addressField.currentEditor != nil),
     @"addressFrame": @{
@@ -479,7 +947,15 @@ bool safeBool(id value) {
 - (void)focusAddress {
   if (!self.addressField.editable || !self.window) return;
   [self.window makeFirstResponder:self.addressField];
+  [self alignAddressFieldEditor];
   [self.addressField selectText:nil];
+}
+
+- (void)alignAddressFieldEditor {
+  NSText *currentEditor = self.addressField.currentEditor;
+  if (![currentEditor isKindOfClass:NSTextView.class]) return;
+  NSTextView *fieldEditor = (NSTextView *)currentEditor;
+  fieldEditor.textContainerInset = NSMakeSize(0, 0);
 }
 
 - (void)emit:(NSString *)type extra:(NSDictionary *)extra {
@@ -500,6 +976,99 @@ bool safeBool(id value) {
 - (void)reload:(id)sender { [self emit:@"reload" extra:nil]; }
 - (void)newTab:(id)sender { [self emit:@"new-tab" extra:nil]; }
 - (void)showOverview:(id)sender { [self emit:@"show-overview" extra:nil]; }
+- (void)toggleTabSearch:(id)sender {
+  if (self.tabSearchPopover.isShown) {
+    [self.tabSearchPopover close];
+    return;
+  }
+
+  UFOTabSearchViewController *controller =
+      [[UFOTabSearchViewController alloc] init];
+  __weak UFOBrowserChromeView *weakSelf = self;
+  controller.activateTarget = ^(NSString *targetID) {
+    UFOBrowserChromeView *strongSelf = weakSelf;
+    if (!strongSelf) return;
+    [strongSelf emit:@"activate-tab" extra:@{ @"targetId": targetID ?: @"" }];
+    [strongSelf.tabSearchPopover close];
+  };
+  controller.closeTarget = ^(NSString *targetID) {
+    UFOBrowserChromeView *strongSelf = weakSelf;
+    if (!strongSelf) return;
+    [strongSelf emit:@"close-tab" extra:@{ @"targetId": targetID ?: @"" }];
+  };
+  [controller updateTabs:self.tabState activeTargetID:self.activeTargetID ?: @""];
+
+  NSPopover *popover = [[NSPopover alloc] init];
+  popover.behavior = NSPopoverBehaviorTransient;
+  popover.animates = YES;
+  popover.contentSize = NSMakeSize(360, 420);
+  popover.contentViewController = controller;
+  popover.delegate = self;
+  self.tabSearchController = controller;
+  self.tabSearchPopover = popover;
+  self.titlebarMenuButton.state = NSControlStateValueOn;
+  [self.titlebarMenuButton refreshAppearance];
+  [popover showRelativeToRect:self.titlebarMenuButton.bounds
+                       ofView:self.titlebarMenuButton
+                preferredEdge:NSRectEdgeMaxY];
+  [controller.searchField.window makeFirstResponder:controller.searchField];
+}
+
+- (void)popoverWillClose:(NSNotification *)notification {
+  self.titlebarMenuButton.state = NSControlStateValueOff;
+  [self.titlebarMenuButton refreshAppearance];
+}
+- (void)clearAddress:(id)sender {
+  if (!self.addressField.editable) return;
+  self.addressField.stringValue = @"";
+  self.addressClearButton.hidden = YES;
+  [self focusAddress];
+}
+- (void)showProfileMenu:(id)sender {
+  NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
+  menu.autoenablesItems = NO;
+
+  NSMenuItem *profileItem = [[NSMenuItem alloc]
+      initWithTitle:@"您的 UFO-Browser"
+             action:nil
+      keyEquivalent:@""];
+  profileItem.image = symbol(@"person.crop.circle", 16, NSFontWeightMedium);
+  profileItem.enabled = NO;
+  [menu addItem:profileItem];
+  [menu addItem:NSMenuItem.separatorItem];
+
+  NSMenuItem *newTabItem = [[NSMenuItem alloc]
+      initWithTitle:@"打开新的标签页"
+             action:@selector(newTab:)
+      keyEquivalent:@"t"];
+  newTabItem.target = self;
+  newTabItem.image = symbol(@"plus.square", 14, NSFontWeightRegular);
+  newTabItem.enabled = !self.controlled;
+  [menu addItem:newTabItem];
+
+  NSMenuItem *reloadItem = [[NSMenuItem alloc]
+      initWithTitle:@"重新加载当前页面"
+             action:@selector(reload:)
+      keyEquivalent:@"r"];
+  reloadItem.target = self;
+  reloadItem.image = symbol(@"arrow.clockwise", 14, NSFontWeightRegular);
+  reloadItem.enabled = !self.controlled;
+  [menu addItem:reloadItem];
+  [menu addItem:NSMenuItem.separatorItem];
+
+  NSMenuItem *overviewItem = [[NSMenuItem alloc]
+      initWithTitle:@"返回 Spaces"
+             action:@selector(showOverview:)
+      keyEquivalent:@""];
+  overviewItem.target = self;
+  overviewItem.image = symbol(@"square.grid.2x2", 14, NSFontWeightRegular);
+  overviewItem.enabled = YES;
+  [menu addItem:overviewItem];
+
+  NSPoint anchor = NSMakePoint(NSMaxX(self.profileButton.frame) - 4,
+                               NSMaxY(self.profileButton.frame) + 2);
+  [menu popUpMenuPositioningItem:nil atLocation:anchor inView:self];
+}
 - (void)submitAddress:(id)sender {
   NSString *value = [self.addressField.stringValue
       stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -511,9 +1080,21 @@ bool safeBool(id value) {
 
 - (void)controlTextDidBeginEditing:(NSNotification *)notification {
   self.addressEditing = YES;
+  [self alignAddressFieldEditor];
+  self.addressClearButton.hidden = self.addressField.stringValue.length == 0;
+  self.addressBackdrop.layer.borderWidth = 1.5;
+  self.addressBackdrop.layer.borderColor =
+      [NSColor colorWithRed:0.10 green:0.43 blue:0.91 alpha:0.92].CGColor;
 }
 - (void)controlTextDidEndEditing:(NSNotification *)notification {
   self.addressEditing = NO;
+  self.addressClearButton.hidden = self.addressField.stringValue.length == 0;
+  self.addressBackdrop.layer.borderWidth = 0.5;
+  self.addressBackdrop.layer.borderColor = color(0.84, 0.30).CGColor;
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+  self.addressClearButton.hidden = self.addressField.stringValue.length == 0;
 }
 
 @end

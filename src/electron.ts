@@ -148,7 +148,7 @@ async function start() {
     title: "UFO-Browser",
     icon: appIconPath,
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 18 },
+    trafficLightPosition: { x: 18, y: 22 },
     backgroundColor: "#f6f9f8",
   });
 
@@ -1597,6 +1597,13 @@ async function runNativeBrowserInteractionAudit(context: {
       true,
     );
     const initial = nativeChrome.inspect();
+    const initialChromePng = nativeChrome.capturePng();
+    if (initialChromePng) {
+      await writeFile(
+        join(testRoot, "browser-interaction-initial.png"),
+        initialChromePng,
+      );
+    }
     const initialRootChildCount = window.contentView.children.length;
 
     const tabsBeforeNew = manager.getSpaceOrThrow(space.id).tabs.length;
@@ -1656,8 +1663,8 @@ async function runNativeBrowserInteractionAudit(context: {
       initial.spacesCount === String(manager.listSpaces().length) &&
       initial.addressFrame.height === 32 &&
       initial.addressFrame.width > 500 &&
-      initial.titleHitClass === "NSButton" &&
-      initial.addressHitClass === "NSSearchField" &&
+      initial.titleHitClass === "UFOChromeHoverButton" &&
+      initial.addressHitClass === "NSTextField" &&
       initialRootChildCount === 1 &&
       afterNewTabCount === tabsBeforeNew + 1 &&
       afterNew?.tabCount === tabsBeforeNew + 1 &&

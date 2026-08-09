@@ -327,7 +327,7 @@ export class PresentationCoordinator {
       let refreshSnapshotAfterExit = false;
       const nativeChromePng = this.nativeChrome?.capturePng();
       if (previousPage && previousSpaceId !== undefined && this.nativeTransition) {
-        const target = await this.resolveOverviewTarget(previousSpaceId, layout.content);
+        const target = this.resolveOverviewTarget(previousSpaceId, layout.content);
         if (target) {
           const beginExit = () => {
             exitToken = `overview-${previousSpaceId}-${Date.now().toString(36)}`;
@@ -344,22 +344,6 @@ export class PresentationCoordinator {
             // native zoom and a visible pause before the first moving frame.
             exitRun = beginExit();
             refreshSnapshotAfterExit = Boolean(exitRun);
-          }
-          if (!exitRun) {
-            const captured = await this.nativeTransition
-              .capture(
-                previousSpaceId,
-                this.views.browser,
-                previousPage,
-                {
-                  width,
-                  height,
-                  chromeHeight: layout.chrome.height,
-                },
-                nativeChromePng,
-              )
-              .catch(() => false);
-            if (captured) exitRun = beginExit();
           }
           if (exitRun) this.activeTransitionToken = exitToken;
         }
@@ -730,38 +714,11 @@ export class PresentationCoordinator {
     return { x, y, width, height };
   }
 
-  private async resolveOverviewTarget(spaceId: number, content: Rect) {
+  private resolveOverviewTarget(spaceId: number, content: Rect) {
     const cached = this.overviewTargets.get(spaceId);
     if (cached) {
       const safe = this.clampTransitionSource(cached, content);
       if (safe) return safe;
-    }
-    const execute = this.views.overview.webContents.executeJavaScript;
-    if (typeof execute === "function") {
-      try {
-        const target = await Promise.race([
-          execute.call(
-            this.views.overview.webContents,
-            `(() => {
-              const card = document.querySelector('.space-card[data-space-id="${spaceId}"]');
-              const preview = card?.querySelector('.space-preview');
-              if (!preview) return null;
-              const rect = preview.getBoundingClientRect();
-              return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-            })()`,
-            true,
-          ),
-          new Promise<undefined>((resolve) =>
-            setTimeout(() => resolve(undefined), 120),
-          ),
-        ]);
-        if (target) {
-          const safe = this.clampTransitionSource(target as Rect, content);
-          if (safe) return safe;
-        }
-      } catch {
-        // Fall back to the last renderer-published target below.
-      }
     }
     return null;
   }

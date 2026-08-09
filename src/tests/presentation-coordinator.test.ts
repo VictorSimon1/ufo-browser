@@ -192,6 +192,37 @@ test("returning to Overview starts from the maintained snapshot before refreshin
   assert.ok(calls.indexOf("finish") > calls.indexOf("capture"));
 });
 
+test("a cold Overview return becomes visible before snapshot capture completes", async () => {
+  let releaseCapture!: (value: boolean) => void;
+  const capturePending = new Promise<boolean>((resolve) => {
+    releaseCapture = resolve;
+  });
+  const nativeTransition = {
+    hasSnapshot: () => false,
+    capture: () => capturePending,
+    finish: () => true,
+    cancel: () => true,
+  };
+  const nativeChrome = {
+    isAvailable: () => true,
+    setVisible() {},
+    capturePng: () => Buffer.from("chrome"),
+  };
+  const state = harness({ nativeTransition, nativeChrome });
+  state.coordinator.setOverviewTargets([
+    { id: 1, rect: { x: 40, y: 120, width: 360, height: 240 } },
+  ]);
+
+  await state.coordinator.showSpace(1);
+  const closing = state.coordinator.showOverview();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(state.views.overview.visible, true);
+  assert.deepEqual(state.coordinator.current(), { kind: "overview" });
+  releaseCapture(true);
+  await closing;
+});
+
 test("native snapshot handoff keeps Overview above the prepared destination", async () => {
   let finishCalls = 0;
   const nativeTransition = {
