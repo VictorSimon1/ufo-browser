@@ -25,6 +25,7 @@ type NativeBrowserChromeAddon = {
 
 export type NativeBrowserChromeInspection = {
   visible: boolean;
+  titlebarDraggable: boolean;
   tabCount: number;
   spacesCount: string;
   addressValue: string;
@@ -37,6 +38,7 @@ export type NativeBrowserChromeInspection = {
 export class NativeBrowserChrome {
   private readonly addon?: NativeBrowserChromeAddon;
   private installed = false;
+  private cachedCapture?: Buffer;
 
   constructor(
     private readonly window: BaseWindow,
@@ -108,10 +110,16 @@ export class NativeBrowserChrome {
     if (!this.isAvailable()) return undefined;
     try {
       const png = this.addon?.captureChrome();
-      return png && png.byteLength > 0 ? png : undefined;
+      if (!png || png.byteLength === 0) return undefined;
+      this.cachedCapture = png;
+      return png;
     } catch {
       return undefined;
     }
+  }
+
+  cachedPng() {
+    return this.cachedCapture;
   }
 
   inspect() {

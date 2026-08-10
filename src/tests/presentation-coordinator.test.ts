@@ -176,7 +176,10 @@ test("returning to Overview starts from the maintained snapshot before refreshin
   const nativeChrome = {
     isAvailable: () => true,
     setVisible() {},
-    capturePng: () => Buffer.from("chrome"),
+    cachedPng: () => Buffer.from("chrome"),
+    capturePng: () => {
+      throw new Error("showOverview must not synchronously capture native chrome");
+    },
   };
   const state = harness({ nativeTransition, nativeChrome });
   state.coordinator.setOverviewTargets([
@@ -206,7 +209,10 @@ test("a cold Overview return becomes visible before snapshot capture completes",
   const nativeChrome = {
     isAvailable: () => true,
     setVisible() {},
-    capturePng: () => Buffer.from("chrome"),
+    cachedPng: () => undefined,
+    capturePng: () => {
+      throw new Error("cold showOverview must not synchronously capture native chrome");
+    },
   };
   const state = harness({ nativeTransition, nativeChrome });
   state.coordinator.setOverviewTargets([

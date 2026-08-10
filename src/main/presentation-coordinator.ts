@@ -325,7 +325,12 @@ export class PresentationCoordinator {
       let exitRun: NativeSpaceTransitionRun | undefined;
       let exitToken = "";
       let refreshSnapshotAfterExit = false;
-      const nativeChromePng = this.nativeChrome?.capturePng();
+      // AppKit view readback and PNG encoding are synchronous. On a first use
+      // or after macOS has idled the backing store, doing that work here can
+      // freeze the click before Overview is attached. The normal background
+      // snapshot refresh already maintains an exact chrome image, so reuse it
+      // on the latency-sensitive return path.
+      const nativeChromePng = this.nativeChrome?.cachedPng();
       if (previousPage && previousSpaceId !== undefined && this.nativeTransition) {
         const target = this.resolveOverviewTarget(previousSpaceId, layout.content);
         if (target) {
