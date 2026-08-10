@@ -11,6 +11,7 @@
 namespace {
 
 constexpr CGFloat kChromeHeight = 94.0;
+constexpr CGFloat kTitlebarHeight = 54.0;
 
 void throwError(napi_env env, const char *message) {
   napi_throw_error(env, nullptr, message);
@@ -594,6 +595,7 @@ bool safeBool(id value) {
 - (void)focusAddress;
 - (void)alignAddressFieldEditor;
 - (BOOL)handleMouseDownAtPoint:(NSPoint)point;
+- (BOOL)isWindowDragPoint:(NSPoint)point;
 - (void)activateTab:(NSButton *)sender;
 - (void)closeTab:(NSButton *)sender;
 - (void)clearAddress:(id)sender;
@@ -711,7 +713,17 @@ bool safeBool(id value) {
 - (void)mouseDown:(NSEvent *)event {
   NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
   if ([self handleMouseDownAtPoint:point]) return;
+  if ([self isWindowDragPoint:point] && self.parentWindow) {
+    [self.parentWindow performWindowDragWithEvent:event];
+    return;
+  }
   [super mouseDown:event];
+}
+
+- (BOOL)isWindowDragPoint:(NSPoint)point {
+  return !self.hidden &&
+      NSPointInRect(point, self.bounds) &&
+      point.y >= 0 && point.y < kTitlebarHeight;
 }
 
 - (BOOL)handleMouseDownAtPoint:(NSPoint)point {
@@ -929,6 +941,8 @@ bool safeBool(id value) {
   NSView *addressHit = [self hitTest:addressPoint];
   return @{
     @"visible": @(!self.hidden && self.window.isVisible),
+    @"titlebarDraggable": @([self isWindowDragPoint:NSMakePoint(
+        MAX(112.0, NSWidth(self.bounds) * 0.72), 6.0)]),
     @"tabCount": @(self.tabItems.count),
     @"spacesCount": [NSString stringWithFormat:@"%ld", (long)self.spaceCount],
     @"addressValue": self.addressField.stringValue ?: @"",

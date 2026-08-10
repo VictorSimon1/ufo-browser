@@ -1660,6 +1660,7 @@ async function runNativeBrowserInteractionAudit(context: {
     };
     const ok =
       initial?.visible === true &&
+      initial.titlebarDraggable === true &&
       initial.tabCount === tabsBeforeNew &&
       initial.spacesCount === String(manager.listSpaces().length) &&
       initial.addressFrame.height === 32 &&
