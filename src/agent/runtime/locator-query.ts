@@ -178,7 +178,18 @@ function querySelectorAllExpression(rootExpression: string, selector: string) {
     );
     return `${querySelectorAllExpression(rootExpression, hasText.base)}.filter((el) => ${match})`;
   }
-  return `Array.from(${rootExpression}.querySelectorAll(${JSON.stringify(selector)}))`;
+  return `(() => {
+    const out = [];
+    const visit = (root) => {
+      if (!root || typeof root.querySelectorAll !== "function") return;
+      out.push(...root.querySelectorAll(${JSON.stringify(selector)}));
+      for (const element of root.querySelectorAll("*")) {
+        if (element.shadowRoot) visit(element.shadowRoot);
+      }
+    };
+    visit(${rootExpression});
+    return out;
+  })()`;
 }
 
 function parsePlaywrightHasTextSelector(selector: string) {
@@ -273,10 +284,7 @@ function textMatchExpression(valueExpression, text, exact) {
 }
 
 function textElementsExpression(locator, rootExpression = "document") {
-  const query =
-    rootExpression === "document"
-      ? "document.querySelectorAll('body *')"
-      : `${rootExpression}.querySelectorAll('*')`;
+  const query = querySelectorAllExpression(rootExpression, "*");
   const match = textMatchExpression(
     "el.innerText || el.textContent",
     locator.text,
@@ -287,7 +295,7 @@ function textElementsExpression(locator, rootExpression = "document") {
     locator.text,
     locator.exact,
   );
-  return `Array.from(${query}).filter((el) => {
+  return `${query}.filter((el) => {
     if (!(${match})) return false;
     return !Array.from(el.children || []).some((child) => ${childMatch});
   })`;
@@ -313,14 +321,14 @@ function labelElementsExpression(locator, rootExpression = "document") {
     const controls = [];
     for (const label of ${querySelectorAllExpression(rootExpression, "label")}) {
       if (!(${labelMatch})) continue;
-      const control = label.control || (label.getAttribute('for') ? document.getElementById(label.getAttribute('for')) : null);
+      const control = label.control || (label.getAttribute('for') ? label.ownerDocument.getElementById(label.getAttribute('for')) : null);
       if (control) controls.push(control);
     }
     for (const el of ${querySelectorAllExpression(rootExpression, "input, textarea, select, button, [role]")}) {
       if (el.getAttribute('aria-label') && ${ariaMatch}) controls.push(el);
       const ids = (el.getAttribute('aria-labelledby') || '').split(/\\s+/).filter(Boolean);
       if (ids.length) {
-        const labelledBy = ids.map((id) => document.getElementById(id)?.textContent || '').join(' ');
+        const labelledBy = ids.map((id) => el.ownerDocument.getElementById(id)?.textContent || '').join(' ');
         if (${labelledByMatch}) controls.push(el);
       }
     }
@@ -362,15 +370,15 @@ function roleElementsExpression(locator, rootExpression = "document") {
       const labelledBy = (el.getAttribute('aria-labelledby') || '')
         .split(/\\s+/)
         .filter(Boolean)
-        .map((id) => document.getElementById(id)?.textContent || '')
+        .map((id) => el.ownerDocument.getElementById(id)?.textContent || '')
         .join(' ')
         .replace(/\\s+/g, ' ')
         .trim();
       if (labelledBy) return labelledBy;
       const aria = el.getAttribute('aria-label');
       if (aria) return aria.replace(/\\s+/g, ' ').trim();
-      if (el instanceof HTMLImageElement) return (el.getAttribute('alt') || '').replace(/\\s+/g, ' ').trim();
-      if (el instanceof HTMLInputElement && (el.type === 'button' || el.type === 'submit' || el.type === 'reset')) {
+      if (el.tagName === 'IMG') return (el.getAttribute('alt') || '').replace(/\\s+/g, ' ').trim();
+      if (el.tagName === 'INPUT' && (el.type === 'button' || el.type === 'submit' || el.type === 'reset')) {
         return (el.value || el.getAttribute('value') || '').replace(/\\s+/g, ' ').trim();
       }
       if ('labels' in el && el.labels && el.labels.length) {

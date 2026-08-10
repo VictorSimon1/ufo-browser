@@ -961,6 +961,7 @@ async function start() {
       .close()
       .catch(() => undefined)
       .then(() => profileSync.close().catch(() => undefined))
+      .then(() => manager.flushState().catch(() => undefined))
       .then(() => {
         if (!captureWindow.isDestroyed()) captureWindow.close();
       });

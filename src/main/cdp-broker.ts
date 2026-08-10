@@ -213,7 +213,13 @@ export class CdpBroker {
       route.ownerTargetId,
     );
     this.bindDebugger(route.ownerTargetId, view.webContents);
-    await this.manager.ensureBackgroundSurface(route.spaceId, route.ownerTargetId);
+    const controlsPausedRequest = method.startsWith("Fetch.");
+    if (!controlsPausedRequest) {
+      await this.manager.ensureBackgroundSurface(
+        route.spaceId,
+        route.ownerTargetId,
+      );
+    }
     const isInput = method.startsWith("Input.");
     if (method === "Page.setDownloadBehavior") {
       await this.downloads.configure({
@@ -241,7 +247,9 @@ export class CdpBroker {
       // only for the bounded Agent command burst; this keeps screenshots,
       // evaluate and trusted input independent from the human-control overlay
       // without leaving background pages at foreground GPU cadence.
-      await this.beginAgentActivity(route.ownerTargetId, view.webContents);
+      if (!controlsPausedRequest) {
+        await this.beginAgentActivity(route.ownerTargetId, view.webContents);
+      }
       // Input preparation can itself race navigation or renderer teardown.
       // Keep it inside the cleanup boundary so temporary focus emulation is
       // always released. The App-level overlay is a separate native View and
@@ -275,7 +283,9 @@ export class CdpBroker {
       throw error;
     } finally {
       if (isInput) this.endAgentInput(route.ownerTargetId, view.webContents);
-      this.endAgentActivity(route.ownerTargetId, view.webContents);
+      if (!controlsPausedRequest) {
+        this.endAgentActivity(route.ownerTargetId, view.webContents);
+      }
     }
   }
 

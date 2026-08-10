@@ -434,7 +434,7 @@ export class TaskSpaceManager {
 
   async closeTab(spaceId: number, targetId: string) {
     const wasActive = this.getSpaceOrThrow(spaceId).activeTabId === targetId;
-    await this.mutate(spaceId, async (space) => {
+    await this.mutateSoon(spaceId, async (space) => {
       const index = space.tabs.findIndex((tab) => tab.targetId === targetId);
       if (index < 0) throw new Error(`tab not found: ${targetId}`);
       space.tabs.splice(index, 1);
@@ -463,6 +463,10 @@ export class TaskSpaceManager {
   async activeView(spaceId: number) {
     const space = this.getSpaceOrThrow(spaceId);
     return this.ensureTabRuntime(spaceId, space.activeTabId);
+  }
+
+  flushState() {
+    return this.options.store.flush();
   }
 
   async activeViewForPresentation(spaceId: number) {
@@ -2497,6 +2501,18 @@ export class TaskSpaceManager {
       const space = this.getSpaceOrThrow(spaceId);
       await mutation(space);
       await this.persistAndNotify();
+    });
+  }
+
+  private mutateSoon(
+    spaceId: number,
+    mutation: (space: SpaceRecord) => Promise<void>,
+  ) {
+    return this.enqueue(spaceId, async () => {
+      const space = this.getSpaceOrThrow(spaceId);
+      await mutation(space);
+      this.notify();
+      void this.options.store.save(this.state).catch(() => undefined);
     });
   }
 

@@ -15,7 +15,14 @@ import * as observe from "./driver/observe.js";
 import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
 import * as downloads from "./driver/downloads.js";
+import * as routing from "./driver/routing.js";
+import * as storage from "./driver/storage-state.js";
+import * as tracing from "./driver/tracing.js";
 import * as screencast from "./driver/screencast.js";
+import {
+  frameLocatorSelector,
+  parseFrameLocatorSelector,
+} from "./driver/element-ops.js";
 import { browserFetch, serverFetch } from "./http.js";
 import {
   loadBrowserToolSource,
@@ -98,6 +105,9 @@ export {
   waitForResponse,
 } from "./driver/waits.js";
 export { setInputFiles } from "./driver/files.js";
+export { route, unroute, unrouteAll } from "./driver/routing.js";
+export { storageState, setStorageState } from "./driver/storage-state.js";
+export { startTracing, stopTracing } from "./driver/tracing.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
 export { browserFetch, serverFetch } from "./http.js";
 
@@ -525,7 +535,7 @@ function createLocator(selector) {
   return {
     selector,
     first: () => createLocator(nthSelector(selector, 0)),
-    last: () => createLocator(`internal:last;${selector}`),
+    last: () => createLocator(lastSelector(selector)),
     nth: (index) => {
       const value = Number(index);
       if (!Number.isInteger(value) || value < 0) {
@@ -534,33 +544,57 @@ function createLocator(selector) {
       return createLocator(nthSelector(selector, value));
     },
     locator: (child) =>
-      createLocator(scopedSelector(selector, locatorSelector(child))),
+      createLocator(
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, locatorSelector(child)),
+        ),
+      ),
     getByRole: (role, options: any = {}) =>
-      createLocator(scopedSelector(selector, roleSelector(role, options))),
+      createLocator(
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, roleSelector(role, options)),
+        ),
+      ),
     getByText: (text, options: any = {}) =>
       createLocator(
-        scopedSelector(selector, textSelector("text", text, options)),
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, textSelector("text", text, options)),
+        ),
       ),
     getByLabel: (text, options: any = {}) =>
       createLocator(
-        scopedSelector(selector, textSelector("label", text, options)),
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, textSelector("label", text, options)),
+        ),
       ),
     getByPlaceholder: (text, options: any = {}) =>
       createLocator(
-        scopedSelector(selector, textSelector("placeholder", text, options)),
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, textSelector("placeholder", text, options)),
+        ),
       ),
     getByAltText: (text, options: any = {}) =>
       createLocator(
-        scopedSelector(selector, textSelector("alt", text, options)),
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, textSelector("alt", text, options)),
+        ),
       ),
     getByTitle: (text, options: any = {}) =>
       createLocator(
-        scopedSelector(selector, textSelector("title", text, options)),
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, textSelector("title", text, options)),
+        ),
       ),
     getByTestId: (testId) =>
-      createLocator(scopedSelector(selector, testIdSelector(testId))),
+      createLocator(
+        mapLocatorSelector(selector, (base) =>
+          scopedSelector(base, testIdSelector(testId)),
+        ),
+      ),
     filter: (options: any = {}) =>
-      createLocator(filterSelector(selector, options)),
+      createLocator(
+        mapLocatorSelector(selector, (base) => filterSelector(base, options)),
+      ),
     click: (options = {}) => pointer.click(selector, options),
     dblclick: (options = {}) => pointer.dblclick(selector, options),
     hover: (options = {}) => pointer.hover(selector, options),
@@ -614,8 +648,62 @@ function createLocator(selector) {
   };
 }
 
+function createFrameLocator(selector) {
+  return {
+    selector,
+    first: () => createFrameLocator(nthSelector(selector, 0)),
+    last: () => createFrameLocator(lastSelector(selector)),
+    nth: (index) => {
+      const value = Number(index);
+      if (!Number.isInteger(value) || value < 0) {
+        throw new Error("frameLocator.nth requires a non-negative integer");
+      }
+      return createFrameLocator(nthSelector(selector, value));
+    },
+    locator: (child) =>
+      createLocator(frameLocatorSelector(selector, locatorSelector(child))),
+    getByRole: (role, options: any = {}) =>
+      createLocator(frameLocatorSelector(selector, roleSelector(role, options))),
+    getByText: (text, options: any = {}) =>
+      createLocator(
+        frameLocatorSelector(selector, textSelector("text", text, options)),
+      ),
+    getByLabel: (text, options: any = {}) =>
+      createLocator(
+        frameLocatorSelector(selector, textSelector("label", text, options)),
+      ),
+    getByPlaceholder: (text, options: any = {}) =>
+      createLocator(
+        frameLocatorSelector(
+          selector,
+          textSelector("placeholder", text, options),
+        ),
+      ),
+    getByTestId: (testId) =>
+      createLocator(frameLocatorSelector(selector, testIdSelector(testId))),
+    frameLocator: (child) =>
+      createFrameLocator(
+        frameLocatorSelector(selector, locatorSelector(child)),
+      ),
+  };
+}
+
 function nthSelector(selector, index) {
-  return `internal:nth=${index};${selector}`;
+  return mapLocatorSelector(
+    selector,
+    (value) => `internal:nth=${index};${value}`,
+  );
+}
+
+function lastSelector(selector) {
+  return mapLocatorSelector(selector, (value) => `internal:last;${value}`);
+}
+
+function mapLocatorSelector(selector, transform) {
+  const frame = parseFrameLocatorSelector(selector);
+  return frame
+    ? frameLocatorSelector(frame.frame, transform(frame.child))
+    : transform(selector);
 }
 
 function internalSelector(kind, data) {
@@ -710,6 +798,7 @@ function createPageFacade() {
     url: async () => (await nav.pageInfo()).url,
     title: async () => (await nav.pageInfo()).title,
     locator: createLocator,
+    frameLocator: createFrameLocator,
     getByRole: (role, options: any = {}) => {
       return createLocator(roleSelector(role, options));
     },
@@ -731,6 +820,11 @@ function createPageFacade() {
     waitForURL: waits.waitForURL,
     waitForRequest: waits.waitForRequest,
     waitForResponse: waits.waitForResponse,
+    route: routing.route,
+    unroute: routing.unroute,
+    unrouteAll: routing.unrouteAll,
+    storageState: storage.storageState,
+    setStorageState: storage.setStorageState,
     waitForEvent: downloads.waitForEvent,
     evaluate,
     screenshot: observe.screenshot,
@@ -741,6 +835,10 @@ function createPageFacade() {
     screencast: {
       start: screencast.startScreencast,
       stop: screencast.stopScreencast,
+    },
+    tracing: {
+      start: tracing.startTracing,
+      stop: tracing.stopTracing,
     },
     keyboard: {
       press: keyboard.press,
@@ -783,6 +881,8 @@ function createBrowserFacade() {
     closeTab: nav.closeTab,
     ensureRealTab: nav.ensureRealTab,
     iframeTarget: nav.iframeTarget,
+    storageState: storage.storageState,
+    setStorageState: storage.setStorageState,
   };
 }
 
@@ -811,11 +911,11 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.waitForEvent("download" | "popup"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
-    "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
+    "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), inputValue(), isVisible(), isEnabled(), isEditable(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Actions retry while elements become visible, enabled, stable, and able to receive events. Snapshot refs automatically recover after navigation or DOM replacement when a unique stable locator is available. Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
   browser:
-    "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
+    "browser: tab and storage facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), browser.closeTab(target), browser.storageState(options), and browser.setStorageState(stateOrPath, options). Treat targetId as short-lived: obtain and validate it in the current script before acting.",
   taskSpaces:
     "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",

@@ -32,6 +32,10 @@ export class BrowserStateStore {
     return this.writeQueue;
   }
 
+  flush(): Promise<void> {
+    return this.writeQueue;
+  }
+
   private async writeAtomically(state: BrowserState) {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     const temp = `${this.path}.${process.pid}.tmp`;

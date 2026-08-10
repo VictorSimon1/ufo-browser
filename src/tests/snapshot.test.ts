@@ -44,3 +44,58 @@ test("snapshot refs retain iframe routing and collision-safe public ids", () => 
   assert.equal(refs[0].refId, 1_000_000_000);
   assert.equal(refs[0].frameId, "oopif-frame");
 });
+
+test("snapshot omits non-executable stable locator placeholders", () => {
+  const refs: any[] = [];
+  const content = formatAxTree(
+    [
+      {
+        nodeId: "1",
+        backendDOMNodeId: 42,
+        role: { value: "button" },
+        name: { value: "" },
+      },
+    ],
+    refs,
+  );
+  assert.equal(content, "button [ref=42]");
+  assert.equal(refs[0].loc, undefined);
+});
+
+test("snapshot emits locators only when they are unique and root-executable", () => {
+  const refs: any[] = [];
+  const content = formatAxTree(
+    [
+      { nodeId: "1", role: { value: "root" }, childIds: ["2", "3", "4"] },
+      {
+        nodeId: "2",
+        backendDOMNodeId: 42,
+        role: { value: "button" },
+        name: { value: "Save" },
+      },
+      {
+        nodeId: "3",
+        backendDOMNodeId: 43,
+        role: { value: "button" },
+        name: { value: "Save" },
+      },
+      {
+        nodeId: "4",
+        backendDOMNodeId: 44,
+        role: { value: "iframe" },
+        name: { value: "Embedded" },
+        childIds: ["5"],
+      },
+      {
+        nodeId: "5",
+        backendDOMNodeId: 45,
+        role: { value: "button" },
+        name: { value: "Inside frame" },
+      },
+    ],
+    refs,
+  );
+  assert.doesNotMatch(content, /loc=role:button\[name="Save"\]/);
+  assert.match(content, /iframe "Embedded" \[ref=44, loc=role:iframe/);
+  assert.doesNotMatch(content, /Inside frame.*loc=/);
+});

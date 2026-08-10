@@ -2,8 +2,13 @@
 import { cdp, evaluate } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
 import { elementCenter } from "./observe.js";
-import { resolveAndCall } from "./element-ops.js";
+import {
+  releaseHandle,
+  resolveAndCall,
+  waitForActionableHandle,
+} from "./element-ops.js";
 import { waitForSelector } from "./waits.js";
+import { state } from "../state.js";
 
 type MouseButton = "left" | "middle" | "right";
 type Point = {
@@ -62,6 +67,10 @@ let currentMousePoint: Point = { x: 0, y: 0, sessionId: undefined };
  * @returns {Promise<void>}
  */
 export async function click(target: MouseTarget, options: ClickOptions = {}) {
+  const selector = directSelectorTarget(target);
+  if (selector) {
+    return clickSelector(selector, options);
+  }
   const point = await resolveMouseTarget(target, options.timeout);
   rememberMousePoint(point);
   const button = options.button || "left";
@@ -93,6 +102,64 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
   }
   const completed = await finishClickProbe(point, probeId, clickCount);
   if (dispatchError && !completed) throw dispatchError;
+}
+
+async function clickSelector(selector: string, options: ClickOptions) {
+  const timeout = options.timeout ?? state.defaultTimeout;
+  const deadline = state.now() + Math.max(0, timeout);
+  let lastFailure = "trusted click was not observed";
+  do {
+    const remaining = Math.max(0, deadline - state.now());
+    const handle = await waitForActionableHandle(selector, "click", {
+      timeout: remaining,
+      operation: "click",
+    });
+    const point = {
+      x: handle.x,
+      y: handle.y,
+      sessionId: handle.sessionId,
+    } as Point;
+    rememberMousePoint(point);
+    maybeHighlight(point, options.label);
+    const button = options.button || "left";
+    const buttons = pressedButtons(button);
+    const clickCount = options.clickCount ?? 1;
+    let dispatchError: unknown = null;
+    let outcome = { seen: false, contextGone: false };
+    try {
+      const probeId = await installElementClickProbe(handle);
+      try {
+        await dispatchMouse(point, "mouseMoved", {
+          button: "none",
+          buttons: 0,
+        });
+        await dispatchMouse(point, "mousePressed", {
+          button,
+          buttons,
+          clickCount,
+        });
+        await dispatchMouse(point, "mouseReleased", {
+          button,
+          buttons: 0,
+          clickCount,
+        });
+      } catch (error) {
+        dispatchError = error;
+      }
+      outcome = await finishElementClickProbe(probeId, handle);
+    } finally {
+      await releaseHandle(handle.objectId, handle.sessionId);
+    }
+    if (outcome.seen || outcome.contextGone) return;
+    if (dispatchError && !isInputDispatchTimeout(dispatchError)) {
+      throw dispatchError;
+    }
+    if (dispatchError) lastFailure = String(dispatchError);
+    const retryRemaining = deadline - state.now();
+    if (retryRemaining <= 0) break;
+    await state.sleep(Math.min(16, retryRemaining));
+  } while (state.now() <= deadline);
+  throw new Error(`click: ${lastFailure}: ${JSON.stringify(selector)}`);
 }
 
 /**
@@ -220,6 +287,84 @@ export async function up(options: ClickOptions = {}) {
 
 function inputEventDelay(ms = INPUT_EVENT_DELAY_MS) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function directSelectorTarget(target: MouseTarget) {
+  if (typeof target === "string") return target;
+  if (
+    target &&
+    !Array.isArray(target) &&
+    typeof target === "object" &&
+    "selector" in target &&
+    typeof target.selector === "string" &&
+    target.selector &&
+    target.x === undefined &&
+    target.y === undefined
+  ) {
+    return target.selector;
+  }
+  return null;
+}
+
+async function installElementClickProbe({ objectId, sessionId }) {
+  if (!canProbeInputFallback()) return null;
+  const id = `click_target_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  try {
+    const result = await cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration: `function(id){
+          const target = this;
+          const probe = { seen: false, target };
+          probe.handler = (event) => {
+            if (event.isTrusted && event.composedPath().includes(target)) probe.seen = true;
+          };
+          target.ownerDocument.addEventListener("click", probe.handler, true);
+          target.__egoBrowserInputProbes ||= {};
+          target.__egoBrowserInputProbes[id] = probe;
+          return true;
+        }`,
+        objectId,
+        arguments: [{ value: id }],
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      sessionId,
+    );
+    return result.result?.value ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+async function finishElementClickProbe(id: string | null, handle) {
+  if (!id) return { seen: false, contextGone: false };
+  try {
+    const result = await cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration: `function(id){
+          const probes = this.__egoBrowserInputProbes || {};
+          const probe = probes[id];
+          if (!probe) return { seen: false, contextGone: true };
+          this.ownerDocument.removeEventListener("click", probe.handler, true);
+          delete probes[id];
+          return { seen: probe.seen, contextGone: false };
+        }`,
+        objectId: handle.objectId,
+        arguments: [{ value: id }],
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      handle.sessionId,
+    );
+    return result.result?.value || { seen: false, contextGone: false };
+  } catch (error) {
+    if (/context|session|target|closed|destroyed|navigation/i.test(String(error))) {
+      return { seen: false, contextGone: true };
+    }
+    return { seen: false, contextGone: false };
+  }
 }
 
 async function installClickProbe(point: Point) {

@@ -7,7 +7,13 @@ import {
 import { queryAllExpression as buildQueryAllExpression } from "../locator-query.js";
 import { parseRef } from "../ref-map.js";
 import { state } from "../state.js";
-import { releaseHandle, resolveAndCall, resolveHandle } from "./element-ops.js";
+import {
+  evaluateFrameElements,
+  parseFrameLocatorSelector,
+  releaseHandle,
+  resolveAndCall,
+  resolveHandle,
+} from "./element-ops.js";
 
 /**
  * Return element.textContent for a single element.
@@ -27,7 +33,7 @@ export async function innerText(selector) {
   return readElement(
     selector,
     `function(){
-      if (!(this instanceof HTMLElement)) throw new Error("innerText target must be an HTMLElement");
+      if (this?.nodeType !== 1 || typeof this.innerText !== "string") throw new Error("innerText target must be an HTMLElement");
       return this.innerText;
     }`,
   );
@@ -42,7 +48,7 @@ export async function innerHTML(selector) {
   return readElement(
     selector,
     `function(){
-      if (!(this instanceof Element)) throw new Error("innerHTML target must be an Element");
+      if (this?.nodeType !== 1) throw new Error("innerHTML target must be an Element");
       return this.innerHTML;
     }`,
   );
@@ -57,12 +63,8 @@ export async function inputValue(selector) {
   return readElement(
     selector,
     `function(){
-      const target = this instanceof HTMLLabelElement && this.control ? this.control : this;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      ) {
+      const target = this?.tagName === "LABEL" && this.control ? this.control : this;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName)) {
         return target.value;
       }
       throw new Error("inputValue target must be an input, textarea, or select");
@@ -79,8 +81,8 @@ export async function isChecked(selector) {
   return readElement(
     selector,
     `function(){
-      const target = this instanceof HTMLLabelElement && this.control ? this.control : this;
-      if (!(target instanceof HTMLInputElement) || (target.type !== "checkbox" && target.type !== "radio")) {
+      const target = this?.tagName === "LABEL" && this.control ? this.control : this;
+      if (target?.tagName !== "INPUT" || (target.type !== "checkbox" && target.type !== "radio")) {
         throw new Error("isChecked target must be a checkbox or radio input");
       }
       return target.checked;
@@ -97,7 +99,7 @@ export async function isVisible(selector) {
   return readOptionalElement(
     selector,
     `function(){
-      if (!(this instanceof Element)) return false;
+      if (this?.nodeType !== 1) return false;
       if (typeof this.checkVisibility === "function") {
         return this.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
       }
@@ -129,8 +131,8 @@ export async function isEnabled(selector) {
   return readOptionalElement(
     selector,
     `function(){
-      const target = this instanceof HTMLLabelElement && this.control ? this.control : this;
-      if (!(target instanceof Element)) return false;
+      const target = this?.tagName === "LABEL" && this.control ? this.control : this;
+      if (target?.nodeType !== 1) return false;
       if (target.getAttribute("aria-disabled") === "true") return false;
       if ("disabled" in target && target.disabled) return false;
       const disabledFieldset = target.closest("fieldset[disabled]");
@@ -159,10 +161,10 @@ export async function isEditable(selector) {
   return readOptionalElement(
     selector,
     `function(){
-      const target = this instanceof HTMLLabelElement && this.control ? this.control : this;
-      if (!(target instanceof Element)) return false;
+      const target = this?.tagName === "LABEL" && this.control ? this.control : this;
+      if (target?.nodeType !== 1) return false;
       if (target.isContentEditable) return true;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
         return !target.disabled && !target.readOnly;
       }
       return false;
@@ -204,7 +206,7 @@ export async function boundingBox(selector) {
   return readElement(
     selector,
     `function(){
-      if (!(this instanceof Element)) return null;
+      if (this?.nodeType !== 1) return null;
       const rect = this.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return null;
       return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
@@ -223,6 +225,9 @@ export async function count(selector) {
     await releaseHandle(handle.objectId, handle.sessionId);
     return 1;
   }
+  if (parseFrameLocatorSelector(selector)) {
+    return evaluateFrameElements(selector, "return elements.length;");
+  }
   const backendNodeIds = await queryRoleBackendNodeIds(selector);
   if (backendNodeIds !== null) {
     return backendNodeIds.length;
@@ -239,7 +244,7 @@ export async function allInnerTexts(selector) {
   return readQueryAll(
     selector,
     `return elements.map((element) => {
-      if (!(element instanceof HTMLElement)) throw new Error("allInnerTexts targets must be HTMLElements");
+      if (element?.nodeType !== 1 || typeof element.innerText !== "string") throw new Error("allInnerTexts targets must be HTMLElements");
       return element.innerText;
     });`,
   );
@@ -295,6 +300,13 @@ export async function evaluateAll(selector, pageFunction, arg = undefined) {
       [functionSource, arg],
     );
   }
+  if (parseFrameLocatorSelector(selector)) {
+    return evaluateFrameElements(
+      selector,
+      `const pageFunction = (0, eval)(${JSON.stringify(`(${functionSource})`)}); return pageFunction(elements, ${serializedArg(arg)});`,
+      true,
+    );
+  }
   const backendNodeIds = await queryRoleBackendNodeIds(selector);
   if (backendNodeIds !== null) {
     return evaluateRoleBackendNodes(backendNodeIds, functionSource, arg, true);
@@ -342,6 +354,9 @@ async function readOptionalElement(
 }
 
 async function readQueryAll(selector, body) {
+  if (parseFrameLocatorSelector(selector)) {
+    return evaluateFrameElements(selector, body);
+  }
   const backendNodeIds = await queryRoleBackendNodeIds(selector);
   if (backendNodeIds !== null) {
     return evaluateRoleBackendNodes(

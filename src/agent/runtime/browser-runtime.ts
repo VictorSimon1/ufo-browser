@@ -1,9 +1,9 @@
 // @ts-nocheck
 import { state } from "./state.js";
 import { assertNoEgoError, buildEgoError } from "./ego-errors.js";
+import { markBrowserRefsStale } from "./ref-state.js";
 
 const RESPONSE_TIMEOUT_MS = 15000;
-const SESSION_TTL_MS = 2000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
 const MAX_BUFFERED_EVENTS = 10000;
@@ -21,6 +21,9 @@ const pending = new Map();
 const events = [];
 const eventWaiters = [];
 const eventSubscribers = new Set<BrowserEventSubscriber>();
+const sessionInvalidationSubscribers = new Set<
+  (sessionId: string) => void | Promise<void>
+>();
 const pageEnabledSessions = new Set();
 const pendingDialogs = new Map();
 const iframeSessions = new Map<string, string>();
@@ -107,7 +110,7 @@ export async function browserCdp(
 }
 
 export async function ensureSession() {
-  if (state.sessionId && Date.now() - state.sessionAt < SESSION_TTL_MS) {
+  if (state.sessionId) {
     return state.sessionId;
   }
   if (state.sessionInflight) {
@@ -146,6 +149,7 @@ export async function ensureSession() {
 }
 
 export function invalidateSession() {
+  const sessionId = state.sessionId;
   if (state.sessionId) {
     pageEnabledSessions.delete(state.sessionId);
     pendingDialogs.delete(state.sessionId);
@@ -153,6 +157,22 @@ export function invalidateSession() {
   state.sessionId = null;
   state.sessionTargetId = null;
   state.sessionAt = 0;
+  if (sessionId) {
+    for (const listener of sessionInvalidationSubscribers) {
+      try {
+        void listener(sessionId);
+      } catch {
+        // Session cleanup is best-effort; the invalidation itself must finish.
+      }
+    }
+  }
+}
+
+export function subscribeSessionInvalidation(
+  listener: (sessionId: string) => void | Promise<void>,
+) {
+  sessionInvalidationSubscribers.add(listener);
+  return () => sessionInvalidationSubscribers.delete(listener);
 }
 
 export async function ensureIframeSession(frameId: string) {
@@ -284,6 +304,12 @@ function handleMessage(message) {
       invalidateSession();
     }
   }
+  if (
+    data.method === "Page.frameNavigated" ||
+    data.method === "Runtime.executionContextsCleared"
+  ) {
+    markBrowserRefsStale();
+  }
   if (data.method === "Page.javascriptDialogOpening") {
     const sessionId = data.sessionId || state.sessionId;
     if (sessionId) {
@@ -344,6 +370,7 @@ export function browserSnapshotRefsToRefMap(refMap, refs = []) {
       ref.name,
       undefined,
       ref.frameId,
+      ref.loc,
     );
   }
 }

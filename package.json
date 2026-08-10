@@ -28,6 +28,7 @@
     "verify:agent-focus-isolation": "npm run build && node scripts/agent-focus-isolation-e2e.mjs",
     "verify:energy-budget": "npm run build && node scripts/agent-surface-budget-e2e.mjs",
     "verify:helper-parity": "npm run build && node scripts/helper-parity-e2e.mjs",
+    "verify:locator-reliability": "npm run build && node scripts/locator-reliability-e2e.mjs",
     "verify:window-lifecycle": "npm run build && node scripts/window-lifecycle-e2e.mjs",
     "verify:app-quit": "npm run build && node scripts/app-quit-e2e.mjs",
     "verify:popup-download": "npm run build && node scripts/popup-download-e2e.mjs",

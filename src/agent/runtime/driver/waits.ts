@@ -36,6 +36,7 @@ type LoadState = "load" | "domcontentloaded" | "networkidle";
 let networkEventUsers = 0;
 let networkEventsOwnDomain = false;
 let networkEnableInFlight: Promise<void> | null = null;
+const SELECTOR_POLL_INTERVAL_MS = 20;
 
 /**
  * Sleep for a fixed number of milliseconds.
@@ -258,11 +259,14 @@ async function waitForNetworkMatch(
   const networkEvents = acquireNetworkEvents();
   let matched;
   try {
-    void networkEvents.ready;
+    await networkEvents.ready;
     await waitForBrowserEvent((event) => {
       matched = processNetworkEvent(kind, matcher, event, requests, timeout);
       return Boolean(matched);
     }, browserEventTimeout(timeout));
+    if (kind === "response") {
+      await matched?.__bufferBody?.();
+    }
     return matched;
   } catch (error) {
     if (/page\.waitForEvent timed out/i.test(error?.message || "")) {
@@ -379,6 +383,9 @@ function createResponseFacade(info, timeout) {
     });
   const status = Number(response.status || 0);
   const headers = normalizeHeaders(response.headers);
+  let bodyPromise;
+  const loadBody = () =>
+    (bodyPromise ||= readResponseBody(info.requestId, timeout));
   const facade: any = {
     url: () => response.url || request.url || "",
     status: () => status,
@@ -387,18 +394,19 @@ function createResponseFacade(info, timeout) {
     headers: () => ({ ...headers }),
     request: () => createRequestFacade(request),
     body: async () => {
-      const body = await readResponseBody(info.requestId, timeout);
+      const body = await loadBody();
       return body.base64Encoded
         ? Buffer.from(body.body || "", "base64")
         : Buffer.from(body.body || "", "utf8");
     },
     text: async () => {
-      const body = await readResponseBody(info.requestId, timeout);
+      const body = await loadBody();
       return body.base64Encoded
         ? Buffer.from(body.body || "", "base64").toString("utf8")
         : body.body || "";
     },
   };
+  Object.defineProperty(facade, "__bufferBody", { value: loadBody });
   facade.json = async () => JSON.parse(await facade.text());
   return facade;
 }
@@ -504,7 +512,9 @@ export async function waitForSelector(
       handle = await resolveHandle(selector);
     } catch (err) {
       if (err instanceof ElementResolutionError && err.kind === "transient") {
-        await state.sleep(300);
+        await state.sleep(
+          Math.min(SELECTOR_POLL_INTERVAL_MS, Math.max(0, deadline - state.now())),
+        );
         continue; // not found / not ready yet — keep polling.
       }
       throw err; // permanent (bad selector / ambiguous) or unknown error — fail loud.
@@ -527,7 +537,9 @@ export async function waitForSelector(
     } finally {
       await releaseHandle(handle.objectId, handle.sessionId);
     }
-    await state.sleep(300);
+    await state.sleep(
+      Math.min(SELECTOR_POLL_INTERVAL_MS, Math.max(0, deadline - state.now())),
+    );
   }
   return false;
 }

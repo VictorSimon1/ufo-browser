@@ -1,3 +1,4 @@
+import type { WebContents, WebContentsView } from "electron";
 import { TaskSpaceManager } from "./manager.js";
 import { scopedChildTargets } from "./cdp-broker.js";
 
@@ -36,23 +37,116 @@ type SnapshotRef = {
   frameId?: string;
 };
 
+type SnapshotOptions = {
+  includeActionMarks?: boolean;
+  includeStableLocator?: boolean;
+  maxResultLength?: number;
+};
+
+type SnapshotVersion = {
+  documentId: string;
+  generation: number;
+};
+
+type CachedSnapshot = {
+  version: SnapshotVersion;
+  optionsKey: string;
+  content: string;
+  refs: SnapshotRef[];
+};
+
+const SNAPSHOT_VERSION_SOURCE = `(() => {
+  const key = Symbol.for("ufo-browser.snapshot-state");
+  let state = globalThis[key];
+  if (!state || state.document !== document) {
+    state = {
+      document,
+      documentId: globalThis.crypto?.randomUUID?.() || String(performance.timeOrigin),
+      generation: 0,
+    };
+    const changed = () => { state.generation += 1; };
+    state.observer = new MutationObserver(changed);
+    state.observer.observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    document.addEventListener("load", (event) => {
+      if (event.target?.tagName === "IFRAME") changed();
+    }, true);
+    globalThis.addEventListener("resize", changed, { passive: true });
+    Object.defineProperty(globalThis, key, {
+      value: state,
+      configurable: true,
+    });
+  }
+  return { documentId: state.documentId, generation: state.generation };
+})()`;
+
 export class SnapshotService {
+  private readonly accessibilityEnabled = new WeakSet<WebContents>();
+  private readonly cache = new WeakMap<WebContents, CachedSnapshot>();
+
   constructor(private readonly manager: TaskSpaceManager) {}
 
   async snapshot(
     spaceId: number,
-    options: {
-      includeActionMarks?: boolean;
-      includeStableLocator?: boolean;
-      maxResultLength?: number;
-    } = {},
+    options: SnapshotOptions = {},
   ) {
     const tab = this.manager.getActiveTab(spaceId);
     const view = await this.manager.ensureTabRuntime(spaceId, tab.targetId);
     if (!view.webContents.debugger.isAttached()) {
       view.webContents.debugger.attach("1.3");
+      this.accessibilityEnabled.delete(view.webContents);
     }
-    await view.webContents.debugger.sendCommand("Accessibility.enable");
+    const optionsKey = snapshotOptionsKey(options);
+    let version = await readSnapshotVersion(view.webContents).catch(
+      () => undefined,
+    );
+    const cached = this.cache.get(view.webContents);
+    if (
+      version &&
+      cached?.optionsKey === optionsKey &&
+      sameSnapshotVersion(cached.version, version)
+    ) {
+      return snapshotResult(cached.content, cached.refs, options);
+    }
+
+    let captured = await this.capture(view, options);
+    let after = await readSnapshotVersion(view.webContents).catch(
+      () => undefined,
+    );
+    if (version && after && !sameSnapshotVersion(version, after)) {
+      version = after;
+      captured = await this.capture(view, options);
+      after = await readSnapshotVersion(view.webContents).catch(
+        () => undefined,
+      );
+    }
+    if (
+      !captured.hasChildTargets &&
+      version &&
+      after &&
+      sameSnapshotVersion(version, after)
+    ) {
+      this.cache.set(view.webContents, {
+        version: after,
+        optionsKey,
+        content: captured.content,
+        refs: captured.refs,
+      });
+    } else {
+      this.cache.delete(view.webContents);
+    }
+    return snapshotResult(captured.content, captured.refs, options);
+  }
+
+  private async capture(view: WebContentsView, options: SnapshotOptions) {
+    if (!this.accessibilityEnabled.has(view.webContents)) {
+      await view.webContents.debugger.sendCommand("Accessibility.enable");
+      this.accessibilityEnabled.add(view.webContents);
+    }
     const result = (await view.webContents.debugger.sendCommand(
       "Accessibility.getFullAXTree",
     )) as { nodes: AxNode[] };
@@ -64,7 +158,8 @@ export class SnapshotService {
     let nextSyntheticRef = 1_000_000_000;
     const childSections: string[] = [];
 
-    for (const target of await scopedChildTargets(view.webContents)) {
+    const childTargets = await scopedChildTargets(view.webContents);
+    for (const target of childTargets) {
       let upstreamSessionId: string | undefined;
       try {
         const attached = await view.webContents.debugger.sendCommand(
@@ -122,13 +217,61 @@ export class SnapshotService {
     }
     const content = [rootContent, ...childSections].filter(Boolean).join("\n");
     return {
-      content:
-        typeof options.maxResultLength === "number"
-          ? content.slice(0, options.maxResultLength)
-          : content,
+      content,
       refs,
+      hasChildTargets: childTargets.length > 0,
     };
   }
+}
+
+async function readSnapshotVersion(webContents: WebContents) {
+  const response = await webContents.debugger.sendCommand("Runtime.evaluate", {
+    expression: SNAPSHOT_VERSION_SOURCE,
+    returnByValue: true,
+    awaitPromise: false,
+  });
+  if (response.exceptionDetails) {
+    throw new Error(
+      response.exceptionDetails.exception?.description ||
+        response.exceptionDetails.text ||
+        "snapshot version evaluation failed",
+    );
+  }
+  const value = response.result?.value;
+  if (
+    typeof value?.documentId !== "string" ||
+    !Number.isSafeInteger(value?.generation)
+  ) {
+    throw new Error("snapshot version evaluation returned an invalid value");
+  }
+  return value as SnapshotVersion;
+}
+
+function sameSnapshotVersion(left: SnapshotVersion, right: SnapshotVersion) {
+  return (
+    left.documentId === right.documentId &&
+    left.generation === right.generation
+  );
+}
+
+function snapshotOptionsKey(options: SnapshotOptions) {
+  return `${options.includeActionMarks !== false ? 1 : 0}:${
+    options.includeStableLocator !== false ? 1 : 0
+  }`;
+}
+
+function snapshotResult(
+  content: string,
+  refs: SnapshotRef[],
+  options: SnapshotOptions,
+) {
+  return {
+    content:
+      typeof options.maxResultLength === "number"
+        ? content.slice(0, options.maxResultLength)
+        : content,
+    refs,
+  };
 }
 
 export function formatAxTree(
@@ -144,12 +287,13 @@ export function formatAxTree(
   const byId = new Map(nodes.map((node) => [node.nodeId, node]));
   const childIds = new Set(nodes.flatMap((node) => node.childIds ?? []));
   const roots = nodes.filter((node) => !childIds.has(node.nodeId));
+  const locatorCounts = countStableLocators(roots, byId);
   const lines: string[] = [];
-  const visit = (node: AxNode, depth: number) => {
+  const visit = (node: AxNode, depth: number, insideFrame = false) => {
     if (node.ignored) {
       for (const id of node.childIds ?? []) {
         const child = byId.get(id);
-        if (child) visit(child, depth);
+        if (child) visit(child, depth, insideFrame);
       }
       return;
     }
@@ -158,10 +302,12 @@ export function formatAxTree(
     const actionable =
       ACTION_ROLES.has(role.toLowerCase()) &&
       typeof node.backendDOMNodeId === "number";
-    const locator =
-      actionable && options.includeStableLocator !== false
+    const candidate =
+      actionable && !insideFrame && options.includeStableLocator !== false
         ? stableLocator(role, name, node)
         : undefined;
+    const locator =
+      candidate && locatorCounts.get(candidate) === 1 ? candidate : undefined;
     let suffix = "";
     if (actionable && options.includeActionMarks !== false) {
       const refId = options.refIdForBackendNodeId
@@ -186,11 +332,37 @@ export function formatAxTree(
     }
     for (const id of node.childIds ?? []) {
       const child = byId.get(id);
-      if (child) visit(child, depth);
+      if (child) {
+        visit(child, depth, insideFrame || role.toLowerCase() === "iframe");
+      }
     }
   };
   for (const root of roots) visit(root, 0);
   return lines.join("\n");
+}
+
+function countStableLocators(roots: AxNode[], byId: Map<string, AxNode>) {
+  const counts = new Map<string, number>();
+  const visit = (node: AxNode, insideFrame = false) => {
+    const role = String(node.role?.value || "container");
+    const name = String(node.name?.value || "").trim();
+    if (
+      !node.ignored &&
+      !insideFrame &&
+      ACTION_ROLES.has(role.toLowerCase()) &&
+      typeof node.backendDOMNodeId === "number"
+    ) {
+      const locator = stableLocator(role, name, node);
+      if (locator) counts.set(locator, (counts.get(locator) || 0) + 1);
+    }
+    const childInsideFrame = insideFrame || role.toLowerCase() === "iframe";
+    for (const id of node.childIds ?? []) {
+      const child = byId.get(id);
+      if (child) visit(child, childInsideFrame);
+    }
+  };
+  for (const root of roots) visit(root);
+  return counts;
 }
 
 function indent(content: string, depth: number) {
@@ -206,5 +378,5 @@ function stableLocator(role: string, name: string, node: AxNode) {
     ?.value;
   if (role === "link" && typeof url === "string") return `href:${url}`;
   if (name) return `role:${role}[name=${JSON.stringify(name)}]`;
-  return "unstable";
+  return undefined;
 }

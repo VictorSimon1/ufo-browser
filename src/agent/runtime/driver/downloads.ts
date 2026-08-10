@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { cdp } from "../cdp-eval.js";
 import { ensureSession, waitForBrowserEvent } from "../browser-runtime.js";
 import { state } from "../state.js";
+import { closeTab, listTabs, switchTab } from "./nav.js";
 
 type WaitForEventOptions = {
   timeout?: number;
@@ -30,8 +31,8 @@ type DownloadProgress = {
 };
 
 /**
- * Wait for a Playwright-style page event. Currently supports "download".
- * @param {"download"} eventName Event name.
+ * Wait for a Playwright-style page event. Supports "download" and "popup".
+ * @param {"download"|"popup"} eventName Event name.
  * @param {{timeout?: number}} [options] Timeout in milliseconds.
  * @returns {Promise<object>} Download facade with suggestedFilename(), path(), saveAs(path), url().
  */
@@ -39,12 +40,34 @@ export async function waitForEvent(
   eventName,
   options: WaitForEventOptions = {},
 ) {
-  if (eventName !== "download") {
-    throw new Error(
-      `page.waitForEvent currently supports only "download", got ${JSON.stringify(eventName)}`,
-    );
-  }
-  return waitForDownload(options);
+  if (eventName === "download") return waitForDownload(options);
+  if (eventName === "popup") return waitForPopup(options);
+  throw new Error(
+    `page.waitForEvent supports "download" and "popup", got ${JSON.stringify(eventName)}`,
+  );
+}
+
+async function waitForPopup(options: WaitForEventOptions = {}) {
+  const timeout = options.timeout ?? state.defaultTimeout;
+  const existing = new Set((await listTabs()).map((tab) => tab.targetId));
+  const deadline = state.now() + Math.max(0, timeout);
+  do {
+    const tabs = await listTabs();
+    const popup = tabs.find((tab) => !existing.has(tab.targetId));
+    if (popup) {
+      return {
+        targetId: popup.targetId,
+        url: () => popup.url,
+        title: () => popup.title,
+        close: () => closeTab(popup.targetId),
+        bringToFront: () => switchTab(popup.targetId),
+      };
+    }
+    const remaining = deadline - state.now();
+    if (remaining <= 0) break;
+    await state.sleep(Math.min(20, remaining));
+  } while (state.now() <= deadline);
+  throw new Error(`page.waitForEvent("popup") timed out after ${timeout}ms`);
 }
 
 async function waitForDownload(options: WaitForEventOptions = {}) {

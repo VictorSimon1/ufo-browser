@@ -101,6 +101,19 @@ export async function resolveElementCenter(
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
+    const stableLocator = parseLocator(entry.selector);
+    if (stableLocator) {
+      try {
+        return await resolveLocatorCenter(cdp, effectiveSessionId, stableLocator);
+      } catch (error) {
+        if (
+          !(error instanceof ElementResolutionError) ||
+          error.kind !== "transient"
+        ) {
+          throw error;
+        }
+      }
+    }
     const backendNodeId = await findBackendNodeIdByRoleName(
       cdp,
       sessionId,
@@ -182,6 +195,23 @@ export async function resolveElementObjectId(
         }
       } catch {
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
+      }
+    }
+    const stableLocator = parseLocator(entry.selector);
+    if (stableLocator) {
+      try {
+        return await resolveLocatorObjectId(
+          cdp,
+          effectiveSessionId,
+          stableLocator,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof ElementResolutionError) ||
+          error.kind !== "transient"
+        ) {
+          throw error;
+        }
       }
     }
     const backendNodeId = await findBackendNodeIdByRoleName(
@@ -608,98 +638,7 @@ function hrefElementsJs(href) {
 }
 
 function buildLocatorAllJs(locator) {
-  if (locator.kind === "text") {
-    return textElementsJs(locator);
-  }
-  if (locator.kind === "label") {
-    return labelElementsJs(locator);
-  }
-  if (locator.kind === "placeholder") {
-    return attributeElementsJs(
-      "input[placeholder], textarea[placeholder]",
-      "placeholder",
-      locator,
-    );
-  }
-  if (locator.kind === "alt") {
-    return attributeElementsJs("img[alt], input[alt]", "alt", locator);
-  }
-  if (locator.kind === "title") {
-    return attributeElementsJs("[title]", "title", locator);
-  }
-  if (locator.kind === "testid") {
-    return attributeElementsJs("[data-testid]", "data-testid", locator);
-  }
-  throw new Error(`unsupported locator kind: ${locator.kind}`);
-}
-
-function textElementsJs(locator) {
-  const match = textMatchJs(
-    "el.innerText || el.textContent",
-    locator.text,
-    locator.exact,
-  );
-  const childMatch = textMatchJs(
-    "child.innerText || child.textContent",
-    locator.text,
-    locator.exact,
-  );
-  return `Array.from(document.querySelectorAll('body *')).filter((el) => {
-            if (!(${match})) return false;
-            return !Array.from(el.children || []).some((child) => ${childMatch});
-          })`;
-}
-
-function labelElementsJs(locator) {
-  const labelMatch = textMatchJs(
-    "label.innerText || label.textContent",
-    locator.text,
-    locator.exact,
-  );
-  const ariaMatch = textMatchJs(
-    "el.getAttribute('aria-label')",
-    locator.text,
-    locator.exact,
-  );
-  const labelledByMatch = textMatchJs(
-    "labelledBy",
-    locator.text,
-    locator.exact,
-  );
-  return `(() => {
-            const controls = [];
-            for (const label of document.querySelectorAll('label')) {
-              if (!(${labelMatch})) continue;
-              const control = label.control || (label.getAttribute('for') ? document.getElementById(label.getAttribute('for')) : null);
-              if (control) controls.push(control);
-            }
-            for (const el of document.querySelectorAll('input, textarea, select, button, [role]')) {
-              if (el.getAttribute('aria-label') && ${ariaMatch}) controls.push(el);
-              const ids = (el.getAttribute('aria-labelledby') || '').split(/\\s+/).filter(Boolean);
-              if (ids.length) {
-                const labelledBy = ids.map((id) => document.getElementById(id)?.textContent || '').join(' ');
-                if (${labelledByMatch}) controls.push(el);
-              }
-            }
-            return Array.from(new Set(controls));
-          })()`;
-}
-
-function attributeElementsJs(selector, attribute, locator) {
-  const match = textMatchJs(
-    `el.getAttribute(${JSON.stringify(attribute)})`,
-    locator.text,
-    locator.exact,
-  );
-  return `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).filter((el) => ${match})`;
-}
-
-function textMatchJs(valueExpression, text, exact) {
-  const needle = JSON.stringify(String(text).replace(/\s+/g, " ").trim());
-  const normalized = `String(${valueExpression} || '').replace(/\\s+/g, ' ').trim()`;
-  return exact
-    ? `${normalized} === ${needle}`
-    : `${normalized}.includes(${needle})`;
+  return queryAllExpression(locator.raw);
 }
 
 function buildSelectorCenterJs(selector) {
@@ -898,7 +837,14 @@ function axNameMatches(actual, expected) {
       .trim();
     return expected.exact ? normalized === text : normalized.includes(text);
   }
-  return String(actual) === String(expected);
+  return (
+    String(actual || "")
+      .replace(/\s+/g, " ")
+      .trim() ===
+    String(expected || "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 function isTextMatcher(value) {

@@ -17,15 +17,21 @@ export class RefMap {
     name,
     nth = undefined,
     frameId = undefined,
+    selector = undefined,
   ) {
     this.map.set(refId, {
       backendNodeId,
       role,
       name,
       nth,
-      selector: undefined,
+      selector,
       frameId,
+      stale: false,
     });
+  }
+
+  set(refId, entry) {
+    this.map.set(refId, entry);
   }
 
   get(refId) {
@@ -38,6 +44,10 @@ export class RefMap {
 
   clear() {
     this.map.clear();
+  }
+
+  markStale() {
+    for (const entry of this.map.values()) entry.stale = true;
   }
 }
 

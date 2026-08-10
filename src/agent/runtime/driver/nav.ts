@@ -94,7 +94,7 @@ export async function pageInfo() {
   }
   const expression = `(() => {
     const root = document.documentElement;
-    return JSON.stringify({
+    return {
       url: location.href,
       title: document.title,
       w: innerWidth,
@@ -103,9 +103,9 @@ export async function pageInfo() {
       sy: scrollY,
       pw: root?.scrollWidth ?? innerWidth,
       ph: root?.scrollHeight ?? innerHeight,
-    });
+    };
   })()`;
-  const info = JSON.parse(await evaluate(expression));
+  const info = await evaluate(expression);
   if (isPhysicalNewTabUrl(info.url)) {
     info.url = "x-browser://newtab/";
   }
@@ -222,20 +222,20 @@ export async function openOrReuseTab(
  * @returns {Promise<string>} Closed target id.
  */
 export async function closeTab(target: TabTarget | undefined = undefined) {
-  const tabs = await listTabs();
   const targetId =
     target === undefined
-      ? (tabs.find((tab) => tab.active) || tabs[0])?.targetId
+      ? (await currentTab()).targetId
       : targetIdFrom(target, "closeTab");
   if (!targetId) throw new Error("closeTab requires a targetId");
-  currentTargetFrom(tabs, targetId, "closeTab");
-  await cdp("Target.closeTarget", { targetId });
-  invalidateSession();
+  const result = await cdp("Target.closeTarget", { targetId });
+  if (result.success === false) {
+    throw new Error(`closeTab failed: ${JSON.stringify(targetId)}`);
+  }
+  if (state.sessionTargetId === targetId) {
+    invalidateSession();
+  }
   if (state.preferredTargetId === targetId) {
     clearPreferredTarget();
-  }
-  if (tabs.length > 1) {
-    await waitForClosedTarget(targetId);
   }
   return targetId;
 }
@@ -350,18 +350,4 @@ function currentTargetFrom(
       `Refresh browser.listTabs() and select a current targetId. ` +
       `Available tabs: ${JSON.stringify(available)}`,
   );
-}
-
-async function waitForClosedTarget(targetId: string) {
-  const deadline = state.now() + 2000;
-  while (true) {
-    const tabs = await listTabs();
-    if (!tabs.some((tab) => tab.targetId === targetId)) return tabs;
-    if (state.now() >= deadline) {
-      throw new Error(
-        `closeTab timed out waiting for target to close: ${JSON.stringify(targetId)}`,
-      );
-    }
-    await state.sleep(50);
-  }
 }

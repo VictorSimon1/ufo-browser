@@ -90,17 +90,26 @@ export class AgentServer {
       const line = connection.buffer.slice(0, newline);
       connection.buffer = connection.buffer.slice(newline + 1);
       if (!line.trim()) continue;
-      connection.queue = connection.queue.then(() => this.handle(connection, line));
+      let message: any;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (message.type === "cdp-send") {
+        // CDP is a multiplexed protocol: a paused Fetch request must be able to
+        // receive Fetch.continue/fulfill while the originating Runtime.evaluate
+        // is still pending. Serializing these by socket creates a hard deadlock.
+        void this.handle(connection, message);
+      } else {
+        connection.queue = connection.queue.then(() =>
+          this.handle(connection, message),
+        );
+      }
     }
   }
 
-  private async handle(connection: Connection, line: string) {
-    let message: any;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      return;
-    }
+  private async handle(connection: Connection, message: any) {
     if (message.type === "rpc") {
       try {
         const result = await this.rpc(connection, message.method, message.args ?? []);

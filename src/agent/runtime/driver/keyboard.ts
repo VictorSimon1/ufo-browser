@@ -1,7 +1,12 @@
 // @ts-nocheck
 import { cdp } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
-import { withHandle, resolveAndCall } from "./element-ops.js";
+import {
+  releaseHandle,
+  resolveAndCall,
+  waitForActionableHandle,
+  withHandle,
+} from "./element-ops.js";
 import { waitForSelector } from "./waits.js";
 import { state } from "../state.js";
 
@@ -281,49 +286,73 @@ export async function focus(selector) {
 export async function fill(selector, value, options: FillOptions = {}) {
   const clearFirst = options.clearFirst ?? true;
   const timeout = options.timeout ?? state.defaultTimeout;
-  if (timeout > 0 && !(await waitForSelector(selector, { timeout }))) {
-    throw new Error(`fill: element not found: ${JSON.stringify(selector)}`);
-  }
-  await withHandle(selector, async ({ objectId, sessionId }) => {
-    const focusSource = clearFirst
-      ? "function(){this.focus(); if(this.isContentEditable){const range=document.createRange();range.selectNodeContents(this);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}else if(typeof this.select==='function') this.select();}"
-      : "function(){this.focus();}";
-    await cdp(
+  const text = String(value);
+  const handle = await waitForActionableHandle(selector, "editable", {
+    timeout,
+    operation: "fill",
+  });
+  try {
+    const prepared = await cdp(
       "Runtime.callFunctionOn",
       {
-        functionDeclaration: focusSource,
-        objectId,
+        functionDeclaration: `function(clearFirst){
+          const target = this;
+          const previous = target.isContentEditable ? target.textContent || "" : target.value;
+          target.focus();
+          if (!clearFirst) return previous;
+          if (target.isContentEditable) {
+            target.textContent = "";
+          } else {
+            target.value = "";
+            if (typeof target.select === "function") target.select();
+          }
+          target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+          return previous;
+        }`,
+        objectId: handle.objectId,
+        arguments: [{ value: clearFirst }],
         returnByValue: true,
         awaitPromise: false,
       },
-      sessionId,
+      handle.sessionId,
     );
-    if (clearFirst) {
+    const previous = String(prepared.result?.value ?? "");
+    if (text) {
+      await cdp("Input.insertText", { text }, handle.sessionId);
+    }
+    const verified = await cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration: `function(){
+          this.dispatchEvent(new Event("change", { bubbles: true }));
+          return this.isContentEditable ? this.textContent || "" : this.value;
+        }`,
+        objectId: handle.objectId,
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      handle.sessionId,
+    );
+    const expected = clearFirst ? text : previous + text;
+    const actual = String(verified.result?.value ?? "");
+    if (actual !== expected) {
       await cdp(
         "Runtime.callFunctionOn",
         {
-          functionDeclaration:
-            "function(){if(this.isContentEditable){this.textContent='';}else if('value' in this){this.value='';}else{throw new Error('fill target is not editable');} this.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'}));}",
-          objectId,
+          functionDeclaration: "function(){this.blur();}",
+          objectId: handle.objectId,
           returnByValue: true,
           awaitPromise: false,
         },
-        sessionId,
+        handle.sessionId,
+      ).catch(() => undefined);
+      throw new Error(
+        `fill: value verification failed for ${JSON.stringify(selector)}; expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
       );
     }
-    await cdp("Input.insertText", { text: value }, sessionId);
-    await cdp(
-      "Runtime.callFunctionOn",
-      {
-        functionDeclaration:
-          "function(){this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true}));}",
-        objectId,
-        returnByValue: true,
-        awaitPromise: false,
-      },
-      sessionId,
-    );
-  });
+  } finally {
+    await releaseHandle(handle.objectId, handle.sessionId);
+  }
 }
 
 /**
@@ -348,12 +377,14 @@ export async function pressSequentially(
     text = selectorOrText;
     effectiveOptions = textOrOptions || {};
   }
+  const delay = Number(effectiveOptions.delay ?? 0);
+  if (delay <= 0) {
+    await insertText(String(text));
+    return;
+  }
   for (const char of String(text)) {
     await press(char);
-    const delay = Number(effectiveOptions.delay ?? 0);
-    if (delay > 0) {
-      await state.sleep(delay);
-    }
+    await state.sleep(delay);
   }
 }
 
@@ -401,7 +432,7 @@ export async function setChecked(selector, checked) {
   await resolveAndCall(
     selector,
     `function(checked){
-      if (!(this instanceof HTMLInputElement) || (this.type !== "checkbox" && this.type !== "radio")) {
+      if (this?.tagName !== "INPUT" || (this.type !== "checkbox" && this.type !== "radio")) {
         throw new Error("setChecked target must be a checkbox or radio input");
       }
       if (this.type === "radio" && !checked) {
@@ -429,7 +460,7 @@ export async function selectOption(
   const { result } = await resolveAndCall(
     selector,
     `function(values){
-      if (!(this instanceof HTMLSelectElement)) {
+      if (this?.tagName !== "SELECT") {
         throw new Error("selectOption target must be a select element");
       }
       const wanted = Array.isArray(values) ? values : [values];
@@ -592,9 +623,7 @@ async function finishKeyProbe(
       };
       target.dispatchEvent(new KeyboardEvent("keydown", keyboardInit));
 
-      const isEditable =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement;
+      const isEditable = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
       if (isEditable) {
         if (commands.includes("selectAll") && typeof target.select === "function") {
           target.select();
