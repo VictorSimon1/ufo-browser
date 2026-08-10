@@ -98,6 +98,22 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Locator",
     example: "await page.locator('button[type=submit]').click()",
   },
+  "page.frameLocator": {
+    signature: "page.frameLocator(selector) => FrameLocator",
+    description:
+      "Create a locator rooted in an iframe. Supports nested same-process frames and cross-origin OOPIFs.",
+    params: [
+      {
+        name: "selector",
+        type: "string",
+        required: true,
+        description: "Selector for the iframe element.",
+      },
+    ],
+    returns: "FrameLocator",
+    example:
+      "await page.frameLocator('iframe').getByRole('button', { name: 'Continue' }).click()",
+  },
   "page.getByRole": {
     signature: "page.getByRole(role, options?) => Locator",
     description:
@@ -356,15 +372,54 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example:
       "const res = await page.waitForResponse(r => r.url().includes('/api') && r.status() === 200)",
   },
+  "page.route": {
+    signature: "page.route(matcher, handler, options?) => Promise<void>",
+    description:
+      "Intercept matching requests. The handler can continue, fulfill, or abort each request.",
+    params: [
+      {
+        name: "matcher",
+        type: "string | RegExp | Function",
+        required: true,
+        description: "Exact URL, glob, URL regex, or predicate receiving a URL object.",
+      },
+      {
+        name: "handler",
+        type: "Function",
+        required: true,
+        description: "Receives route and request facades.",
+      },
+      {
+        name: "options",
+        type: "{ times?: number }",
+        description: "Optionally limit how many requests this route handles.",
+      },
+    ],
+    returns: "Promise<void>",
+    example:
+      "await page.route('**/api/data', route => route.fulfill({ json: { ok: true } }))",
+  },
+  "page.unroute": {
+    signature: "page.unroute(matcher, handler?) => Promise<void>",
+    description: "Remove matching request route handlers from the current page.",
+    returns: "Promise<void>",
+    example: "await page.unroute('**/api/data')",
+  },
+  "page.unrouteAll": {
+    signature: "page.unrouteAll() => Promise<void>",
+    description: "Remove all request route handlers from the current page.",
+    returns: "Promise<void>",
+    example: "await page.unrouteAll()",
+  },
   "page.waitForEvent": {
     signature: "page.waitForEvent(eventName, options?) => Promise<any>",
-    description: "Wait for a page event. Currently useful for download events.",
+    description: "Wait for a download or popup page event.",
     params: [
       {
         name: "eventName",
         type: "string",
         required: true,
-        description: "Event name, such as download.",
+        description: "Event name: download or popup.",
       },
       {
         name: "options",
@@ -373,7 +428,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
       },
     ],
     returns: "Promise<any>",
-    example: "const download = await page.waitForEvent('download')",
+    example: "const popup = await page.waitForEvent('popup')",
   },
   "page.evaluate": {
     signature: "page.evaluate(expression) => Promise<any>",
@@ -422,6 +477,68 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     ],
     returns: "Promise<object>",
     example: "console.log(await page.snapshotRaw())",
+  },
+  "page.storageState": {
+    signature: "page.storageState(options?) => Promise<object>",
+    description:
+      "Capture all cookies in the selected UFO profile plus localStorage for the current page origin, optionally writing JSON to disk.",
+    params: [
+      {
+        name: "options",
+        type: "{ path?: string }",
+        description: "Optional absolute JSON output path.",
+      },
+    ],
+    returns: "Promise<{ cookies: object[], origins: object[] }>",
+    example: "await page.storageState({ path: '/tmp/state.json' })",
+  },
+  "page.setStorageState": {
+    signature:
+      "page.setStorageState(stateOrPath, options?) => Promise<object>",
+    description:
+      "Restore cookies and origin localStorage from a state object or JSON file.",
+    params: [
+      {
+        name: "stateOrPath",
+        type: "object | string",
+        required: true,
+        description: "Storage state object or absolute JSON path.",
+      },
+      {
+        name: "options",
+        type: "{ clear?: boolean }",
+        description: "Clear existing cookies and restored origins before applying state.",
+      },
+    ],
+    returns: "Promise<{ cookies: number, origins: number }>",
+    example: "await page.setStorageState('/tmp/state.json', { clear: true })",
+  },
+  "page.tracing.start": {
+    signature: "page.tracing.start(options?) => Promise<void>",
+    description: "Start a Chromium performance trace for the current page.",
+    params: [
+      {
+        name: "options",
+        type: "object",
+        description: "Supports categories, screenshots, traceConfig, and bufferUsageReportingInterval.",
+      },
+    ],
+    returns: "Promise<void>",
+    example: "await page.tracing.start({ screenshots: true })",
+  },
+  "page.tracing.stop": {
+    signature: "page.tracing.stop(options?) => Promise<string>",
+    description:
+      "Stop the active trace, write Chrome Trace/Perfetto JSON, and return its path.",
+    params: [
+      {
+        name: "options",
+        type: "{ path?: string, timeout?: number }",
+        description: "Optional output path and timeout in milliseconds; 0 disables the timeout.",
+      },
+    ],
+    returns: "Promise<string>",
+    example: "console.log(await page.tracing.stop({ path: '/tmp/trace.json' }))",
   },
   "page.elementCenter": {
     signature: "page.elementCenter(selector) => Promise<{ x, y }>",
@@ -620,7 +737,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   "browser.closeTab": {
     signature: "browser.closeTab(target?) => Promise<string>",
     description:
-      "Refresh the current tab list, validate, and close a tab by target id/object, or close the current tab when omitted.",
+      "Close a tab by target id/object, or close the current tab when omitted.",
     params: [
       {
         name: "target",
@@ -650,6 +767,19 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     ],
     returns: "Promise<object | null>",
     example: "console.log(await browser.iframeTarget('iframe'))",
+  },
+  "browser.storageState": {
+    signature: "browser.storageState(options?) => Promise<object>",
+    description: "Alias for page.storageState(options).",
+    returns: "Promise<{ cookies: object[], origins: object[] }>",
+    example: "await browser.storageState({ path: '/tmp/state.json' })",
+  },
+  "browser.setStorageState": {
+    signature:
+      "browser.setStorageState(stateOrPath, options?) => Promise<object>",
+    description: "Alias for page.setStorageState(stateOrPath, options).",
+    returns: "Promise<{ cookies: number, origins: number }>",
+    example: "await browser.setStorageState('/tmp/state.json')",
   },
   "taskSpaces.list": {
     signature: "taskSpaces.list() => Promise<object[]>",

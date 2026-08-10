@@ -5,6 +5,9 @@
 - [Facades](#facades)
 - [Task Space lifecycle](#task-space-lifecycle)
 - [Host bindings](#host-bindings)
+- [Request routing](#request-routing)
+- [Storage state](#storage-state)
+- [Tracing](#tracing)
 - [Stable errors](#stable-errors)
 
 ## Facades
@@ -17,6 +20,14 @@ Legacy `timeout`, `settle`, and `wait` values are interpreted as seconds.
 
 `page` provides navigation, locators, input, waits, evaluation, screenshots, snapshots, downloads, and page information.
 
+It also provides:
+
+- `frameLocator(selector)` for same-process, nested, and cross-origin iframe actions.
+- `waitForEvent('popup' | 'download')` for new tabs and downloads.
+- `route`, `unroute`, and `unrouteAll` for request interception.
+- `storageState` and `setStorageState` for selected-profile Cookie state and origin storage.
+- `tracing.start` and `tracing.stop` for Chromium performance traces.
+
 `browser` provides tab listing, selection, creation/reuse, closing, iframe target lookup, and real-tab selection.
 
 `taskSpaces` provides `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`.
@@ -26,7 +37,7 @@ Legacy `timeout`, `settle`, and `wait` values are interpreted as seconds.
 The installed flat host aliases also include `createTab`, `getBrowserVersion`,
 `listProfiles`, `markTaskSpaceError`, `sendCDPMessage`,
 `setAgentTaskState`, `animationHighlightMouseToPosition`, and `iframeTarget`.
-They are non-enumerable globals, matching the audited Ego 0.4.5.9 runtime;
+They are non-enumerable globals, matching the audited Ego 0.4.6.12 runtime;
 Node's callable `fetch` keeps its original enumerable property.
 
 `getBrowserVersion()` resolves to
@@ -73,6 +84,53 @@ retain their `frameId`; the bundled resolver attaches that target on demand and
 routes element resolution, handle operations, and trusted input through the
 child session. Public refs remain numeric and collision-safe even when renderer
 processes reuse the same backend DOM node id.
+
+Snapshot refs retain a unique stable locator when one exists. After navigation
+or DOM replacement, ref-based operations refresh the snapshot internally and
+recover through that locator. Recovery rejects missing or ambiguous matches
+rather than selecting a different element. Snapshot text emits `loc=...` only
+when the locator is unique and executable from the root page context.
+
+## Request routing
+
+`page.route(matcher, handler, { times? })` accepts an exact URL/glob string,
+`RegExp`, or synchronous predicate receiving a `URL`. Newer matching handlers
+run first. The handler receives:
+
+```text
+route.continue({ url?, method?, postData?, headers? })
+route.fulfill({ status?, statusText?, headers?, contentType?, body?, json? })
+route.abort(errorCode?)
+route.request()
+
+request.url()              request.method()
+request.headers()          request.postData()
+request.resourceType()     request.isNavigationRequest()
+```
+
+If the handler returns without resolving the route, UFO continues the request.
+`page.unroute(matcher, handler?)` removes matching handlers;
+`page.unrouteAll()` disables routing for the current page session.
+
+## Storage state
+
+`page.storageState({ path? })` returns `{ cookies, origins }`. Cookies cover the
+selected UFO profile's Cookie store; `origins` contains localStorage for the
+current page origin only. Passing `path` also writes the JSON result.
+
+`page.setStorageState(stateOrPath, { clear? })` restores a returned object or
+JSON file. With `clear: true`, it clears existing profile cookies and clears
+each restored origin before applying entries. The JSON is unencrypted and can
+contain active credentials. This API does not read or decrypt a local Chrome
+profile.
+
+## Tracing
+
+`page.tracing.start({ categories?, screenshots?, traceConfig?,
+bufferUsageReportingInterval? })` starts one trace for the active page session.
+`page.tracing.stop({ path?, timeout? })` ends it and returns the output path.
+The output is Chromium JSON readable by Chrome Trace Viewer and Perfetto;
+`timeout` is milliseconds and `0` disables the stop timeout.
 
 ## Stable errors
 

@@ -1,6 +1,6 @@
-# UFO-Browser CLI parity with Ego 0.4.5.9
+# UFO-Browser CLI parity with Ego 0.4.6.12
 
-The reference installed during the current audit is Ego App `0.4.5.9` with
+The reference installed during the current audit is Ego App `0.4.6.12` with
 Ego Skill `1.2.3`. The regression command is:
 
 ```bash
@@ -28,19 +28,26 @@ operation timings in
 | Semantic snapshots | full AX tree, refs, stable locators | Aligned | Cross-site iframe refs route through the owning OOPIF session. |
 | Pointer and keyboard input | selectors, refs, locators, coordinates, trusted input | Aligned | UFO uses Chromium CDP and never moves the macOS pointer. |
 | Screenshots and fetch | page capture, browser fetch, server fetch | Aligned | The same fixture produces equal data and valid PNGs. |
-| Request/response waits | Not injected as flat globals in Ego 0.4.5.9 | `waitForRequest`, `waitForResponse` | Deliberate forward-compatible UFO extension. |
+| Stale refs and strict locators | Latest-snapshot refs and locators | Extended | UFO refreshes stale refs through a unique locator and rejects ambiguous matches. |
+| Frame locators | Iframe target lookup | `page.frameLocator` | Same-process, nested, and OOPIF actions use one locator surface. |
+| Popup waits | Tab helpers | `page.waitForEvent('popup')` | Returns a popup facade while preserving tab isolation. |
+| Request/response waits | Not injected as flat globals in Ego 0.4.6.12 | `waitForRequest`, `waitForResponse` | Deliberate forward-compatible UFO extension. |
+| Request routing | Raw CDP available | `page.route`, `unroute`, `unrouteAll` | Glob/RegExp/predicate matching with continue/fulfill/abort. |
+| Storage state | Profile login state reused implicitly | `page.storageState`, `setStorageState` | Explicit Cookie/current-origin localStorage export and restore; not Chrome profile decryption. |
+| Performance tracing | Raw CDP available | `page.tracing.start`, `stop` | Writes Chrome Trace/Perfetto-compatible JSON. |
 | Flat download/screencast aliases | Not injected in either audited runtime | Structured UFO facades remain available | Not part of the shared installed contract. |
 
 ## Latest measured workflow
 
-On the local parity fixture captured on 2026-08-07:
+On the local parity fixture captured on 2026-08-10 after the current reliability
+and performance upgrade:
 
 | Runtime | In-script total | CLI process elapsed |
 |---|---:|---:|
-| Ego 0.4.5.9 | 1572.0 ms | 1712.7 ms |
-| UFO-Browser 0.1.0 | 859.3 ms | 1495.2 ms |
+| Ego 0.4.6.12 | 2587.2 ms | 3457.1 ms |
+| UFO-Browser 0.1.4 | 499.9 ms | 801.3 ms |
 
-The measured UFO in-script ratio was `0.547×` Ego. The gate also rejects a
+The measured UFO in-script ratio was `0.193×` Ego. The gate also rejects a
 future UFO workflow that exceeds the bounded comparative budget. Timings are
 diagnostic rather than a universal benchmark; correctness, focus isolation,
 GPU parking, and live-preview tests remain separate hard gates.

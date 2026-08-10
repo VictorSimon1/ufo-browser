@@ -26,7 +26,7 @@ EOF
 
 The heredoc body runs as a Node.js script that controls the selected ufo-browser task space. All ufo-browser helpers are preloaded into that script.
 
-The shared flat helper contract matches the installed Ego 0.4.5.9 runtime and Ego Skill 1.2.3. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades plus selected forward-compatible helpers. Read [references/cli-parity.md](references/cli-parity.md) for the measured capability matrix and [references/api.md](references/api.md) for host protocol details.
+The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and Ego Skill 1.2.3. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades plus selected forward-compatible helpers. Read [references/cli-parity.md](references/cli-parity.md) for the measured capability matrix and [references/api.md](references/api.md) for host protocol details.
 
 ## Common helpers
 
@@ -51,6 +51,13 @@ Notes:
 - `await serverFetch(url, options)` — issues a request from Node and returns the response body.
 - `await browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
 - `help(name)` — prints usage for a given helper, e.g. `cliLog(help('click'))`.
+
+For Playwright-style automation, use the structured `page` facade:
+
+- Frames and popups: `page.frameLocator(...)` supports nested same-process and cross-origin iframes; arm `page.waitForEvent('popup')` before the click that opens a new tab.
+- Network interception: `page.route(matcher, handler, { times })`, `page.unroute(...)`, and `page.unrouteAll()` support glob, RegExp, and predicate matchers plus `route.continue()`, `route.fulfill()`, and `route.abort()`.
+- Session state: `page.storageState({ path })` captures all cookies in the selected UFO profile and localStorage for the current page origin. `page.setStorageState(stateOrPath, { clear })` restores them. State files contain live credentials in plaintext; protect them and delete them when no longer needed. This does not unlock or import an encrypted Chrome profile.
+- Performance traces: `page.tracing.start(...)` and `page.tracing.stop({ path })` write Chrome Trace/Perfetto-compatible JSON.
 
 
 ### Task spaces
@@ -197,7 +204,7 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 
 - `wait(...)` and `timeout` values are in **seconds**; only parameters whose names end in `Ms` are milliseconds.
 - `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs only visible content.
-- `@N` refs are only valid for the most recent `snapshotText` call — every call rebuilds the refMap. Ref numbers come from the CDP `backendNodeId`, so the same element keeps the same number across calls; but to use `@N`, N must appear in the latest snapshotText output. An element scrolled out of the viewport, a DOM re-render, or a previous call with `scope:'only_within_viewport'` that didn't cover the element will all cause `Unknown ref`. For elements you need to reference long-term, use the `loc=...` value from snapshotText output as a stable selector, or write a CSS selector directly.
+- `@N` refs come from the latest `snapshotText()` result. UFO-Browser automatically refreshes a stale ref after navigation or DOM replacement when it can recover the element through a unique stable locator. If the element disappeared or the locator became ambiguous, the action still fails instead of guessing. Snapshot output only includes `loc=...` values that are unique and executable from the root page context; prefer them or explicit CSS for long-lived scripts.
 - `js()` returns the evaluated result, not a JSON string — don't wrap it with `JSON.parse(...)`.
 - Inside a `js(...)` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.
 - If the source passed to `js()` contains a top-level `return`, it will be auto-wrapped in an IIFE; `return` inside nested callbacks can also trigger this accidentally. For complex expressions, prefer the explicit `(() => { ... })()` form.
