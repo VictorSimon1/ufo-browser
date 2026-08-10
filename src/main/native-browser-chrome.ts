@@ -26,6 +26,8 @@ type NativeBrowserChromeAddon = {
 export type NativeBrowserChromeInspection = {
   visible: boolean;
   titlebarDraggable: boolean;
+  controlled: boolean;
+  controlledTabDraggable: boolean;
   tabCount: number;
   spacesCount: string;
   addressValue: string;

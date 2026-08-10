@@ -595,6 +595,7 @@ bool safeBool(id value) {
 - (void)focusAddress;
 - (void)alignAddressFieldEditor;
 - (BOOL)handleMouseDownAtPoint:(NSPoint)point;
+- (BOOL)handleWindowDragEvent:(NSEvent *)event atPoint:(NSPoint)point;
 - (BOOL)isWindowDragPoint:(NSPoint)point;
 - (void)activateTab:(NSButton *)sender;
 - (void)closeTab:(NSButton *)sender;
@@ -713,11 +714,14 @@ bool safeBool(id value) {
 - (void)mouseDown:(NSEvent *)event {
   NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
   if ([self handleMouseDownAtPoint:point]) return;
-  if ([self isWindowDragPoint:point] && self.parentWindow) {
-    [self.parentWindow performWindowDragWithEvent:event];
-    return;
-  }
+  if ([self handleWindowDragEvent:event atPoint:point]) return;
   [super mouseDown:event];
+}
+
+- (BOOL)handleWindowDragEvent:(NSEvent *)event atPoint:(NSPoint)point {
+  if (![self isWindowDragPoint:point] || !self.parentWindow) return NO;
+  [self.parentWindow performWindowDragWithEvent:event];
+  return YES;
 }
 
 - (BOOL)isWindowDragPoint:(NSPoint)point {
@@ -738,6 +742,7 @@ bool safeBool(id value) {
     return YES;
   }
   if (NSPointInRect(point, self.addTabButton.frame)) {
+    if (!self.addTabButton.enabled) return NO;
     [self.addTabButton performClick:nil];
     return YES;
   }
@@ -769,6 +774,10 @@ bool safeBool(id value) {
 
   for (UFOChromeTabItem *item in self.tabItems) {
     if (!NSPointInRect(point, item.frame)) continue;
+    // Agent-owned tabs are intentionally non-interactive. Route their first
+    // row through the window drag path instead of letting disabled NSButtons
+    // swallow the mouseDown before the chrome view can see it.
+    if (self.controlled) return NO;
     NSPoint itemPoint = NSMakePoint(
         point.x - NSMinX(item.frame), point.y - NSMinY(item.frame));
     if (!item.closeButton.hidden &&
@@ -939,10 +948,18 @@ bool safeBool(id value) {
       : addressLocalPoint;
   NSView *titleHit = [self hitTest:titlePoint];
   NSView *addressHit = [self hitTest:addressPoint];
+  UFOChromeTabItem *firstTab = self.tabItems.firstObject;
+  NSPoint firstTabPoint = firstTab
+      ? NSMakePoint(NSMidX(firstTab.frame), NSMidY(firstTab.frame))
+      : NSZeroPoint;
   return @{
     @"visible": @(!self.hidden && self.window.isVisible),
     @"titlebarDraggable": @([self isWindowDragPoint:NSMakePoint(
         MAX(112.0, NSWidth(self.bounds) * 0.72), 6.0)]),
+    @"controlled": @(self.controlled),
+    @"controlledTabDraggable": @(
+        self.controlled && firstTab && !firstTab.selectButton.enabled &&
+        [self isWindowDragPoint:firstTabPoint]),
     @"tabCount": @(self.tabItems.count),
     @"spacesCount": [NSString stringWithFormat:@"%ld", (long)self.spaceCount],
     @"addressValue": self.addressField.stringValue ?: @"",
@@ -1234,7 +1251,10 @@ napi_value installChrome(napi_env env, napi_callback_info info) {
           return event;
         }
         NSPoint point = [chrome convertPoint:event.locationInWindow fromView:nil];
-        return [chrome handleMouseDownAtPoint:point] ? nil : event;
+        if ([chrome handleMouseDownAtPoint:point]) return nil;
+        // Run window dragging at the local-monitor level so disabled child
+        // controls cannot intercept Agent-controlled titlebar drags.
+        return [chrome handleWindowDragEvent:event atPoint:point] ? nil : event;
       }];
   return booleanValue(env, true);
 }

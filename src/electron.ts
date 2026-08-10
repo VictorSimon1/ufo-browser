@@ -1587,6 +1587,7 @@ async function runNativeBrowserInteractionAudit(context: {
   const pageUrl =
     "data:text/html,<title>Native%20Chrome%20Audit</title><main>Native%20Chrome%20Audit</main>";
   const space = await manager.createSpace("Native browser interaction audit", "user");
+  let agentSpaceId: number | undefined;
   try {
     const page = await manager.createTab(space.id, pageUrl);
     await presentation.showSpace(space.id);
@@ -1598,6 +1599,7 @@ async function runNativeBrowserInteractionAudit(context: {
       true,
     );
     const initial = nativeChrome.inspect();
+    const initialSpaceCount = manager.listSpaces().length;
     const initialChromePng = nativeChrome.capturePng();
     if (initialChromePng) {
       await writeFile(
@@ -1647,6 +1649,16 @@ async function runNativeBrowserInteractionAudit(context: {
       await writeFile(join(testRoot, "browser-interaction-polish.png"), chromePng);
     }
 
+    const agentSpace = await manager.createSpace(
+      "Native Agent titlebar drag audit",
+      "agent",
+    );
+    agentSpaceId = agentSpace.id;
+    await presentation.showSpace(agentSpace.id);
+    nativeChrome.update(manager.navigationState(agentSpace.id));
+    await wait(80);
+    const agentControlled = nativeChrome.inspect();
+
     await handleNativeBrowserChromeEvent(
       { type: "show-overview" },
       manager,
@@ -1662,7 +1674,7 @@ async function runNativeBrowserInteractionAudit(context: {
       initial?.visible === true &&
       initial.titlebarDraggable === true &&
       initial.tabCount === tabsBeforeNew &&
-      initial.spacesCount === String(manager.listSpaces().length) &&
+      initial.spacesCount === String(initialSpaceCount) &&
       initial.addressFrame.height === 32 &&
       initial.addressFrame.width > 500 &&
       initial.titleHitClass === "UFOChromeHoverButton" &&
@@ -1677,6 +1689,8 @@ async function runNativeBrowserInteractionAudit(context: {
       afterClose?.tabCount === tabsBeforeNew &&
       contextToken === "kept-context" &&
       Boolean(chromePng && chromePng.byteLength > 1_000) &&
+      agentControlled?.controlled === true &&
+      agentControlled.controlledTabDraggable === true &&
       overview.presentation.kind === "overview" &&
       overview.rootChildCount === 1 &&
       overview.chrome?.visible === false;
@@ -1694,6 +1708,7 @@ async function runNativeBrowserInteractionAudit(context: {
           afterClose,
           contextToken,
           chromePngBytes: chromePng?.byteLength ?? 0,
+          agentControlled,
           overview,
         },
         null,
@@ -1702,6 +1717,9 @@ async function runNativeBrowserInteractionAudit(context: {
     );
   } finally {
     await presentation.showOverview().catch(() => undefined);
+    if (agentSpaceId !== undefined) {
+      await manager.closeSpace(agentSpaceId).catch(() => undefined);
+    }
     await manager.closeSpace(space.id).catch(() => undefined);
   }
 }
