@@ -39,6 +39,7 @@ function harness(
     windowFocused?: boolean;
     nativeTransition?: any;
     nativeChrome?: any;
+    presentationFrame?: Promise<boolean>;
   } = {},
 ) {
   const overview = fakeView("overview");
@@ -85,6 +86,11 @@ function harness(
     getActiveTab: () => ({ targetId: "target-1" }),
     activeViewForPresentation: async () => page,
     prepareForPresentation: async () => undefined,
+    waitForPresentationFrame: async () => {
+      events.push("frame:page");
+      return options.presentationFrame ?? true;
+    },
+    finishPresentationPreparation() {},
     cancelPresentationPreparation() {},
     parkAfterPresentation: async () => undefined,
     setPresentedTarget() {},
@@ -140,6 +146,9 @@ test("Overview and Space transitions attach the destination before removing the 
   assert.ok(
     state.events.indexOf("add:page") < state.events.indexOf("remove:overview"),
   );
+  assert.ok(
+    state.events.indexOf("frame:page") < state.events.indexOf("remove:overview"),
+  );
 
   const returnStart = state.events.length;
   await state.coordinator.showOverview();
@@ -152,6 +161,50 @@ test("Overview and Space transitions attach the destination before removing the 
     returnEvents.indexOf("add:overview") < returnEvents.indexOf("remove:browser"),
   );
   assert.ok(state.minimumChildren() >= 1);
+});
+
+test("Overview remains opaque until a long-idle Space produces a compositor frame", async () => {
+  let releaseFrame!: (ready: boolean) => void;
+  const presentationFrame = new Promise<boolean>((resolve) => {
+    releaseFrame = resolve;
+  });
+  const state = harness({ presentationFrame });
+
+  const opening = state.coordinator.showSpace(1);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(state.children.map((view) => view.name), [
+    "browser",
+    "page",
+    "overview",
+  ]);
+  assert.deepEqual(state.coordinator.current(), { kind: "overview" });
+
+  releaseFrame(true);
+  await opening;
+  assert.deepEqual(state.children.map((view) => view.name), ["browser", "page"]);
+  assert.deepEqual(state.coordinator.current(), { kind: "space", spaceId: 1 });
+});
+
+test("a newer Overview request keeps its surface attached while Space priming finishes", async () => {
+  let releaseFrame!: (ready: boolean) => void;
+  const presentationFrame = new Promise<boolean>((resolve) => {
+    releaseFrame = resolve;
+  });
+  const state = harness({ presentationFrame });
+
+  const opening = state.coordinator.showSpace(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  const returning = state.coordinator.showOverview();
+  releaseFrame(true);
+  await Promise.all([opening, returning]);
+
+  assert.equal(
+    state.events.filter((event) => event === "remove:overview").length,
+    0,
+  );
+  assert.deepEqual(state.children.map((view) => view.name), ["overview"]);
+  assert.deepEqual(state.coordinator.current(), { kind: "overview" });
 });
 
 test("returning to Overview starts from the maintained snapshot before refreshing it", async () => {

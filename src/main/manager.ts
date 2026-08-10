@@ -123,6 +123,11 @@ export class TaskSpaceManager {
   >();
   private presentedTargetId: string | null = null;
   private presentationReservedTargetId: string | null = null;
+  private lastPresentedTargetId: string | null = null;
+  private readonly presentationPrimeTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly hiddenSurfaceTargets = new Set<string>();
   private readonly backgroundVisibilityPrimedTargets = new Set<string>();
   private readonly surfaceGenerations = new Map<string, number>();
@@ -558,6 +563,7 @@ export class TaskSpaceManager {
     const previousTargetId = this.presentedTargetId;
     this.presentedTargetId = targetId;
     this.presentationReservedTargetId = targetId;
+    if (targetId) this.lastPresentedTargetId = targetId;
     if (previousTargetId && previousTargetId !== targetId) {
       this.bumpSurfaceGeneration(previousTargetId);
     }
@@ -817,6 +823,7 @@ export class TaskSpaceManager {
       backgroundSurfaceWindowVisible: this.options.captureWindow.isVisible(),
       presentedTargetId: this.presentedTargetId,
       presentationReservedTargetId: this.presentationReservedTargetId,
+      lastPresentedTargetId: this.lastPresentedTargetId,
       pageViewport: { ...this.pageViewport },
       runtimes,
       visibleSpaceIds: [...this.visiblePreviewSpaceIds],
@@ -866,16 +873,89 @@ export class TaskSpaceManager {
 
   async prepareForPresentation(targetId: string) {
     this.presentationReservedTargetId = targetId;
+    this.setPresentationPrime(targetId, true);
     const generation = this.bumpSurfaceGeneration(targetId);
     await this.queueSurface(async () => {
       if (!this.isSurfaceGenerationCurrent(targetId, generation)) return;
       const view = this.getView(targetId);
-      if (!view || !this.hiddenSurfaceTargets.has(targetId)) return;
-      this.detachBackgroundSurfaceNow(targetId, view);
+      if (!view) return;
+      if (this.hiddenSurfaceTargets.has(targetId)) {
+        this.detachBackgroundSurfaceNow(targetId, view);
+      }
+      if (!view.webContents.isDestroyed()) view.webContents.invalidate();
     });
   }
 
+  async waitForPresentationFrame(targetId: string, timeoutMs = 650) {
+    const runtime = this.runtimes.get(targetId);
+    const contents = runtime?.view.webContents;
+    if (!runtime || !contents || contents.isDestroyed()) {
+      this.setPresentationPrime(targetId, false);
+      return false;
+    }
+    try {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        if (!this.frameSubscriptionCaptures.has(targetId)) break;
+        await delay(20);
+      }
+      if (this.frameSubscriptionCaptures.has(targetId)) {
+        contents.invalidate();
+        await delay(80);
+        return false;
+      }
+      this.frameSubscriptionCaptures.add(targetId);
+      return await new Promise<boolean>((resolve) => {
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (ready: boolean) => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          try {
+            contents.endFrameSubscription();
+          } catch {
+            // Navigation or renderer teardown can end it first.
+          }
+          resolve(ready);
+        };
+        timer = setTimeout(() => finish(false), Math.max(80, timeoutMs));
+        try {
+          contents.beginFrameSubscription(false, (frame) => {
+            if (frame.isEmpty()) return;
+            const size = frame.getSize();
+            // A newly re-attached macOS compositor can first publish its
+            // cleared white backing surface. Treating that as "ready" exposes
+            // exactly the intermittent white frame this handoff is meant to
+            // hide. Keep Overview opaque until the page contributes real
+            // visual detail, while the timeout still permits intentionally
+            // blank pages to become visible after a bounded delay.
+            if (
+              bitmapHasVisualDetail(
+                frame.toBitmap(),
+                size.width,
+                size.height,
+              )
+            ) {
+              finish(true);
+            }
+          });
+          contents.invalidate();
+        } catch {
+          finish(false);
+        }
+      });
+    } finally {
+      this.frameSubscriptionCaptures.delete(targetId);
+      this.setPresentationPrime(targetId, false);
+    }
+  }
+
+  finishPresentationPreparation(targetId: string) {
+    this.setPresentationPrime(targetId, false);
+  }
+
   cancelPresentationPreparation(targetId: string) {
+    this.setPresentationPrime(targetId, false);
     if (
       this.presentationReservedTargetId === targetId &&
       this.presentedTargetId !== targetId
@@ -1971,6 +2051,10 @@ export class TaskSpaceManager {
       this.hideCaptureWindowIfIdle();
     }
     this.runtimes.delete(targetId);
+    this.setPresentationPrime(targetId, false);
+    if (this.lastPresentedTargetId === targetId) {
+      this.lastPresentedTargetId = null;
+    }
     this.parkedRestoreTargets.delete(targetId);
     this.foregroundCadenceReasons.delete(targetId);
     this.backgroundVisibilityPrimedTargets.delete(targetId);
@@ -2094,6 +2178,7 @@ export class TaskSpaceManager {
       spaceId: number;
       targetId: string;
       controlled: boolean;
+      recentlyPresented: boolean;
       activityAt: number;
     }> = [];
     for (const spaceId of this.visiblePreviewSpaceIds) {
@@ -2101,13 +2186,13 @@ export class TaskSpaceManager {
       if (!space) continue;
       const controlled =
         space.ownership === "agent" && space.lifecycle === "active";
-      // User-owned Spaces use cached, event-driven thumbnails. Keeping a
-      // hidden real page foregrounded for a decorative live card makes CSS
-      // animations and WebGL consume the same GPU budget as another visible
-      // browser window. Agent-controlled Spaces remain live so active
-      // automation is still observable from Overview.
-      if (!controlled) continue;
       const targetId = space.activeTabId;
+      const recentlyPresented = targetId === this.lastPresentedTargetId;
+      // Keep a hard budget of one live compositor. Agent work stays
+      // observable, while the Space the user just returned from is also
+      // eligible so its card continues from the exact live page instead of
+      // freezing on the exit snapshot.
+      if (!controlled && !recentlyPresented) continue;
       if (!this.runtimes.has(targetId)) continue;
       if (this.coldPreviewCaptures.has(spaceId)) continue;
       if (this.overviewScreencastSuspendedTargets.has(targetId)) continue;
@@ -2116,10 +2201,14 @@ export class TaskSpaceManager {
         spaceId,
         targetId,
         controlled,
+        recentlyPresented,
         activityAt: space.agentTask?.updatedAt ?? space.updatedAt,
       });
     }
     candidates.sort((left, right) => {
+      if (left.recentlyPresented !== right.recentlyPresented) {
+        return left.recentlyPresented ? -1 : 1;
+      }
       if (left.controlled !== right.controlled) return left.controlled ? -1 : 1;
       const leftWarm = this.runtimes.has(left.targetId);
       const rightWarm = this.runtimes.has(right.targetId);
@@ -2543,6 +2632,20 @@ export class TaskSpaceManager {
       () => undefined,
     );
     return next;
+  }
+
+  private setPresentationPrime(targetId: string, active: boolean) {
+    const existing = this.presentationPrimeTimers.get(targetId);
+    if (existing) clearTimeout(existing);
+    this.presentationPrimeTimers.delete(targetId);
+    this.setPageForegroundCadence(targetId, "presentation-prime", active);
+    if (!active) return;
+    const timer = setTimeout(() => {
+      if (this.presentationPrimeTimers.get(targetId) !== timer) return;
+      this.presentationPrimeTimers.delete(targetId);
+      this.setPageForegroundCadence(targetId, "presentation-prime", false);
+    }, 1_500);
+    this.presentationPrimeTimers.set(targetId, timer);
   }
 
   private isPresentationSurface(targetId: string) {

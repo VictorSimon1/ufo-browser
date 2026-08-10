@@ -11,8 +11,23 @@ const root = process.cwd();
 const testNamespace = "warm-space-entry";
 const testRoot = join(root, ".x-browser-test", "runs", testNamespace);
 const userData = join(testRoot, "user-data");
+const roundTripCount = Math.max(
+  1,
+  Number.parseInt(process.env.UFO_WARM_ENTRY_ROUND_TRIPS || "12", 10) || 12,
+);
+const idleEvery = Math.max(
+  1,
+  Number.parseInt(process.env.UFO_WARM_ENTRY_IDLE_EVERY || "3", 10) || 3,
+);
+const idleMs = Math.max(
+  0,
+  Number.parseInt(process.env.UFO_WARM_ENTRY_IDLE_MS || "1500", 10) || 0,
+);
 process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
 process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
+process.env.UFO_WARM_ENTRY_ROUND_TRIPS = String(roundTripCount);
+process.env.UFO_WARM_ENTRY_IDLE_EVERY = String(idleEvery);
+process.env.UFO_WARM_ENTRY_IDLE_MS = String(idleMs);
 const electron = join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
@@ -37,7 +52,8 @@ const server = http.createServer((request, response) => {
     response.end(
       `<!doctype html><meta charset="utf-8"><title>Warm Space ${spaceId}</title>` +
         `<style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(${spaceId * 76} 55% 48%);color:white;font:700 64px system-ui}</style>` +
-        `<main data-load-id="${loadId}">Warm Space ${spaceId}</main>`,
+        `<main data-load-id="${loadId}">Warm Space ${spaceId} <span>0</span></main>` +
+        `<script>let n=0;setInterval(()=>{n++;document.querySelector('span').textContent=String(n);document.body.style.background='hsl('+(${spaceId * 76}+n*11)%360+' 55% 48%)'},120)</script>`,
     );
   }, 700);
 });
@@ -99,7 +115,12 @@ child.stderr.on("data", (chunk) => {
 });
 
 try {
-  const audit = await freshJson("warm-entry-audit.json", 12_000);
+  const expectedIdleRuns = Math.floor(roundTripCount / idleEvery);
+  const auditTimeoutMs = Math.max(
+    30_000,
+    15_000 + roundTripCount * 1_600 + expectedIdleRuns * idleMs,
+  );
+  const audit = await freshJson("warm-entry-audit.json", auditTimeoutMs);
   await new Promise((resolve) => setTimeout(resolve, 250));
   const pageRequests = requests.filter((request) => request.spaceId > 0);
   const requestCounts = Object.fromEntries(
@@ -123,6 +144,10 @@ try {
   assert.equal(audit.beforeRuntimeCount, 3);
   assert.equal(audit.beforeParkedTargets.length, 3);
   assert.equal(audit.afterParkedTargets.length, 2);
+  assert.equal(audit.roundTrips.length, roundTripCount);
+  assert.ok(audit.roundTrips.every((cycle) => cycle.frameVisual));
+  assert.ok(audit.roundTrips.every((cycle) => cycle.liveFrames >= 2));
+  assert.ok(audit.roundTrips.every((cycle) => cycle.sameWebContents));
   process.stdout.write(
     `${JSON.stringify(
       {

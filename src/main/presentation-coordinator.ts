@@ -265,6 +265,9 @@ export class PresentationCoordinator {
       next.kind === "space" &&
       previousPage === nextPage
     ) {
+      if (nextTargetId) {
+        this.manager.finishPresentationPreparation(nextTargetId);
+      }
       this.manager.setPresentedTarget(nextTargetId);
       this.presentation = next;
       this.layout();
@@ -279,13 +282,40 @@ export class PresentationCoordinator {
     // background parking happens only after the new visible state is committed.
     if (this.presentation.kind === "space" && next.kind === "space") {
       const nativeChrome = this.nativeChrome?.isAvailable() === true;
+      const previousPageIndex = previousPage
+        ? root.children.indexOf(previousPage)
+        : -1;
       if (nextPage) this.setPageBounds(nextPage);
       if (previousPage && previousPage !== nextPage) {
         root.removeChildView(previousPage);
       }
       if (nextPage && previousPage !== nextPage) {
-        root.addChildView(nextPage);
+        this.attachAt(
+          nextPage,
+          previousPageIndex >= 0 ? previousPageIndex : root.children.length,
+        );
         nextPage.setVisible(true);
+        if (nextTargetId) {
+          await this.manager.waitForPresentationFrame(nextTargetId);
+        }
+        if (generation !== this.generation) {
+          this.manager.cancelPresentationPreparation(nextTargetId!);
+          this.removeIfAttached(nextPage);
+          nextPage.setVisible(false);
+          if (previousPage && !previousPage.webContents.isDestroyed()) {
+            this.attachAt(
+              previousPage,
+              previousPageIndex >= 0
+                ? previousPageIndex
+                : root.children.length,
+            );
+            previousPage.setVisible(true);
+          }
+          void this.manager.parkAfterPresentation(nextTargetId!).catch(
+            () => undefined,
+          );
+          return;
+        }
       }
       this.attachedPage = nextPage;
       if (nativeChrome) {
@@ -421,19 +451,49 @@ export class PresentationCoordinator {
       const [width, height] = this.window.getContentSize();
       const layout = calculateShellLayout(width, height);
       const nativeChrome = this.nativeChrome?.isAvailable() === true;
+      const enteringFromOverview =
+        this.presentation.kind === "overview" &&
+        root.children.includes(this.views.overview);
+      const overviewIndex = root.children.indexOf(this.views.overview);
       if (nativeChrome) {
         this.removeIfAttached(this.views.browser);
         this.views.browser.setVisible(false);
-        this.nativeChrome?.setVisible(true);
+        this.nativeChrome?.setVisible(!enteringFromOverview);
       } else {
         this.views.browser.setBounds(layout.chrome);
-        this.ensureAttached(this.views.browser);
+        if (enteringFromOverview) {
+          this.attachAt(this.views.browser, overviewIndex);
+        } else {
+          this.ensureAttached(this.views.browser);
+        }
         this.views.browser.setVisible(true);
       }
       if (nextPage) {
         nextPage.setBounds(layout.page);
-        this.ensureAttached(nextPage);
+        if (enteringFromOverview) {
+          this.attachAt(
+            nextPage,
+            overviewIndex + (nativeChrome ? 0 : 1),
+          );
+        } else {
+          this.ensureAttached(nextPage);
+        }
         nextPage.setVisible(true);
+        if (nextTargetId) {
+          await this.manager.waitForPresentationFrame(nextTargetId);
+        }
+        if (generation !== this.generation) {
+          this.manager.cancelPresentationPreparation(nextTargetId!);
+          this.removeIfAttached(nextPage);
+          nextPage.setVisible(false);
+          this.removeIfAttached(this.views.browser);
+          this.views.browser.setVisible(false);
+          this.nativeChrome?.setVisible(false);
+          void this.manager.parkAfterPresentation(nextTargetId!).catch(
+            () => undefined,
+          );
+          return;
+        }
         this.attachedPage = nextPage;
         this.manager.setPresentedTarget(nextTargetId);
       }
@@ -444,6 +504,7 @@ export class PresentationCoordinator {
       this.removeIfAttached(this.views.chat);
       this.views.overview.setVisible(false);
       this.views.chat.setVisible(false);
+      if (nativeChrome) this.nativeChrome?.setVisible(true);
     }
     this.syncControlOverlay();
     this.syncPreviewActivity();
@@ -651,6 +712,9 @@ export class PresentationCoordinator {
     }
     nextPage.setVisible(true);
     this.activeTransitionToken = token;
+    const pageReady = nextTargetId
+      ? this.manager.waitForPresentationFrame(nextTargetId)
+      : Promise.resolve(false);
 
     // The Overview renderer starts the card Hero animation synchronously in
     // the click handler. The real Browser Chrome/page are attached underneath
@@ -665,9 +729,12 @@ export class PresentationCoordinator {
     // scaled browser surfaces and duplicated chrome on every intermediate
     // frame. If the native addon/snapshot is unavailable, commit directly
     // instead of bringing that competing renderer animation back.
-    const transitionFinished = transition.nativeRun
-      ? await this.waitForNativeTransition(token)
-      : true;
+    const [transitionFinished] = await Promise.all([
+      transition.nativeRun
+        ? this.waitForNativeTransition(token)
+        : Promise.resolve(true),
+      pageReady,
+    ]);
     if (!transitionFinished || generation !== this.generation) {
       this.nativeTransition?.cancel(token);
       if (this.activeTransitionToken === token) this.activeTransitionToken = "";

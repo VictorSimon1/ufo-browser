@@ -48,6 +48,7 @@ import {
 } from "./main/chrome-import/keychain.js";
 import { ClaudeSessionManager } from "./main/claude-chat/manager.js";
 import { visibleSpaceIds } from "./main/preview-visibility.js";
+import { bitmapHasVisualDetail } from "./main/preview-quality.js";
 import { BROWSER_CHROME_HEIGHT } from "./main/shell-page-bounds.js";
 import type { Rect } from "./main/types.js";
 import {
@@ -1024,6 +1025,56 @@ async function runWarmEntryAudit(context: {
   const entryElapsedMs = Date.now() - enteredAt;
   const afterView = manager.getView(targetId);
   const after = manager.previewDiagnostics();
+  const roundTrips: Array<{
+    cycle: number;
+    entryElapsedMs: number;
+    frameVisual: boolean;
+    liveFrames: number;
+    sameWebContents: boolean;
+  }> = [];
+  const roundTripCount = Math.max(
+    1,
+    Number.parseInt(process.env.UFO_WARM_ENTRY_ROUND_TRIPS || "12", 10) || 12,
+  );
+  const idleEvery = Math.max(
+    1,
+    Number.parseInt(process.env.UFO_WARM_ENTRY_IDLE_EVERY || "3", 10) || 3,
+  );
+  const idleMs = Math.max(
+    0,
+    Number.parseInt(process.env.UFO_WARM_ENTRY_IDLE_MS || "1500", 10) || 0,
+  );
+  for (let cycle = 0; cycle < roundTripCount; cycle++) {
+    const cycleStartedAt = Date.now();
+    if (cycle > 0) await presentation.showSpace(targetSpace.id);
+    const cycleView = manager.getView(targetId);
+    if (!cycleView) throw new Error("round-trip renderer is missing");
+    const frame = await cycleView.webContents.capturePage();
+    const size = frame.getSize();
+    const frameVisual =
+      !frame.isEmpty() &&
+      bitmapHasVisualDetail(frame.toBitmap(), size.width, size.height);
+    await presentation.showOverview();
+    manager.setVisiblePreviewSpaces([targetSpace.id]);
+    await waitUntil(() => {
+      const state = manager.previewDiagnostics();
+      return (
+        state.screencast?.spaceId === targetSpace.id &&
+        state.screencast.publishedFrames >= 2
+      );
+    }, 4_000);
+    const live = manager.previewDiagnostics().screencast;
+    roundTrips.push({
+      cycle: cycle + 1,
+      entryElapsedMs: Date.now() - cycleStartedAt,
+      frameVisual,
+      liveFrames: live?.spaceId === targetSpace.id ? live.publishedFrames : 0,
+      sameWebContents: manager.getView(targetId)?.webContents.id === webContentsId,
+    });
+    await new Promise((resolve) =>
+      setTimeout(resolve, (cycle + 1) % idleEvery === 0 ? idleMs : 120),
+    );
+  }
   const otherTargets = spaces
     .map((space) => space.activeTabId)
     .filter((candidate) => candidate !== targetId);
@@ -1032,6 +1083,12 @@ async function runWarmEntryAudit(context: {
       afterView?.webContents.id === webContentsId &&
       afterView.webContents.isLoading() === false &&
       entryElapsedMs < 400 &&
+      roundTrips.every(
+        (cycle) =>
+          cycle.frameVisual &&
+          cycle.liveFrames >= 2 &&
+          cycle.sameWebContents,
+      ) &&
       after.presentedTargetId === targetId &&
       after.runtimes.find((runtime) => runtime.targetId === targetId)
         ?.backgroundSurface === false &&
@@ -1048,6 +1105,7 @@ async function runWarmEntryAudit(context: {
     beforeParkedTargets: before.parkedRestoreTargets,
     afterParkedTargets: after.parkedRestoreTargets,
     presentedTargetId: after.presentedTargetId,
+    roundTrips,
   };
   await writeFile(
     join(testRoot, "warm-entry-audit.json"),
