@@ -63,11 +63,11 @@ cliLog(JSON.stringify({ taskId: task.id }))
     launchedAt,
     (state) =>
       state.visibleSpaceIds?.includes(taskId) &&
-      state.screencast?.spaceId === taskId &&
-      state.screencast.publishedFrames >= 1,
+      state.continuousPreviewEnabled === false &&
+      state.screencast == null &&
+      Number(state.publishedRevision?.[String(taskId)] || 0) >= 1,
     12_000,
   );
-  const firstFrames = Number(first.screencast.publishedFrames);
   const firstRevision = Number(first.publishedRevision?.[String(taskId)] || 0);
   const firstRendererState = await freshJson("preview-state.json", launchedAt, 6_000);
   const firstCanvas = firstRendererState.renderer?.canvases?.find(
@@ -86,10 +86,10 @@ cliLog(JSON.stringify({ taskId: task.id }))
   const progressed = await waitForDiagnostics(
     launchedAt,
     (state) =>
-      state.screencast?.spaceId === taskId &&
-      state.screencast.publishedFrames >= firstFrames + 3 &&
-      Number(state.publishedRevision?.[String(taskId)] || 0) > firstRevision,
-    8_000,
+      state.screencast == null &&
+      Number(state.publishedRevision?.[String(taskId)] || 0) >=
+        firstRevision + 2,
+    10_000,
   );
   const finalRendererState = await freshJson(
     "preview-state-settled.json",
@@ -126,10 +126,9 @@ cliLog(JSON.stringify({
   const settledCadence = await waitForDiagnostics(
     launchedAt,
     (state) =>
-      state.screencast?.spaceId === taskId &&
-      state.screencast.unchangedFrames >= 7 &&
-      state.screencast.nextFrameDelayMs === 2_800,
-    12_000,
+      state.screencast == null &&
+      Number(state.unchangedSamples?.[String(taskId)] || 0) >= 2,
+    14_000,
   );
 
   await runCli(`
@@ -153,17 +152,18 @@ cliLog(JSON.stringify(await completeTaskSpace(${taskId}, { keep: false })))
     JSON.stringify(
       {
         taskId,
-        firstFrames,
-        finalFrames: progressed.screencast.publishedFrames,
         firstRevision,
         finalRevision: progressed.publishedRevision[String(taskId)],
+        sampledUpdates:
+          Number(progressed.publishedRevision[String(taskId)]) - firstRevision,
         firstCanvasSignature: firstCanvas.signature,
         finalCanvasSignature: finalCanvas.signature,
         canvasPixelsChanged: firstCanvas.signature !== finalCanvas.signature,
         previewRatio,
         pageValue: page.value,
-        settledUnchangedFrames: settledCadence.screencast.unchangedFrames,
-        settledNextFrameDelayMs: settledCadence.screencast.nextFrameDelayMs,
+        settledUnchangedSamples:
+          settledCadence.unchangedSamples[String(taskId)],
+        continuousPreviewEnabled: settledCadence.continuousPreviewEnabled,
         openedBeforeOverview: Boolean(presentedRuntime?.presented),
         roundTripWebContentsStable:
           Number(presentedRuntime?.webContentsId) > 0 &&

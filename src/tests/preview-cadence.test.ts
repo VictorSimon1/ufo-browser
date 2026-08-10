@@ -3,9 +3,23 @@ import assert from "node:assert/strict";
 import {
   OVERVIEW_PREVIEW_ACTIVE_WINDOW_MS,
   overviewPreviewDelay,
+  overviewSnapshotDelay,
   previewVisualChanged,
   quantizedPreviewSignature,
 } from "../main/preview-cadence.js";
+
+test("Overview snapshot polling stays low-frequency and backs off when unchanged", () => {
+  assert.equal(
+    overviewSnapshotDelay({ visualChanged: true, unchangedSamples: 0 }),
+    1_200,
+  );
+  assert.deepEqual(
+    [0, 1, 2, 5].map((unchangedSamples) =>
+      overviewSnapshotDelay({ visualChanged: false, unchangedSamples }),
+    ),
+    [1_800, 1_800, 2_800, 4_000],
+  );
+});
 
 test("Overview preview remains responsive during recent activity", () => {
   assert.equal(

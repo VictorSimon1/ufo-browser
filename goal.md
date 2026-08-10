@@ -257,14 +257,14 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 
 公共 Agent API 变化必须同步 binding、AgentServer、CLI、harness `helperContext()`/JSDoc/`help()`、`docs/agent-cli.md`、README 与 `skills/ufo-browser/SKILL.md`。
 
-## 6. Overview 实时预览
+## 6. Overview 低频动态预览
 
 ```
 可见卡片 ids
   → TaskSpaceManager 有界调度
   → 浏览器页面区域大小的透明 capture BaseWindow
-  → 一个主要 Space 使用 Page.startScreencast
-  → 其他可见 live Space 使用错峰 JPEG capture
+  → 所有可见 Space 统一使用错峰 JPEG capture
+  → 画面变化才发布；静态卡片逐级退避
   → binary IPC
   → 每张卡片的持久 Canvas 增量绘制
 ```
@@ -274,7 +274,8 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 - Overview 主窗口中的 Page View 恒为 0。
 - `IntersectionObserver` 只负责触发；发布时重新按卡片 DOM rect 计算真正可见项，最多 8 个。
 - capture surface 与真实浏览器页面区域同尺寸、同屏幕位置，`opacity:0`、不可聚焦、忽略鼠标、Mission Control 隐藏；没有 child View 时立即隐藏。
-- 只保留一个主要 live screencast；其他可见卡片以约 1.8 秒错峰捕获，业务 capture 有界并发。
+- Overview 连续 screencast 当前必须保持关闭；所有可见卡片统一走低频截图队列，动态页面约 1.2 秒采样，连续无变化时逐级退避到 4 秒。
+- 导航、加载、Agent 进度与 Agent 操作结束是变化提示，可唤醒一次有界截图；不能绕过 capture 并发直接开启连续订阅。
 - 图片约 480px、JPEG quality 70；这些是可测量调参，不是产品契约。
 - 帧只在内存中，通过二进制 IPC 进入持久 Canvas；新帧解码完成前保留旧帧，只保留一个最新 pending frame。
 - 启动只 hydrate 当前可见缺图卡片；不可见 Space 不被总览批量唤醒，preview-only renderer 捕获后释放。
@@ -282,7 +283,7 @@ Tab、Space、lease、连接或执行上下文失效时必须清理映射。`Tar
 - 重复上报相同可见集合不能取消或不断推迟已排队的首次截图；持续缺图的可见卡片进行低频恢复。
 - 初始 viewport 尚未收敛时使用真实 native bounds，不能生成 `1×1` 缩略图；近乎纯色首帧做有限重试。
 - Overview 隐藏、App 最小化、卡片离屏、Space 结束或 Agent 自己录屏时停流并释放挂载。
-- Agent screencast 与 Manager 预览互斥，Broker 负责 suspend/resume，Manager 帧不能泄漏给 Agent。
+- Agent screencast 与 Manager 截图互斥，Broker 负责 suspend/resume，Manager 帧不能泄漏给 Agent；恢复后立即补一次低频截图。
 
 核心入口：`src/main/manager.ts`、`preview-visibility.ts`、`src/renderer/overview/`。
 
@@ -712,7 +713,7 @@ npm run package:mac
 - Chrome-running UI 现在有隔离硬门禁：success/restart fixture 启动时以指向测试 runner 的 `SingletonLock` 模拟活跃 Chrome，确认页必须显示“Google Chrome 正在运行”、禁用导入，并且只有用户点击“退出 Chrome 并继续”后才由测试专用 source adapter 删除该隔离锁、重新发现并允许提交。自动验证不会调用 AppleScript、不会请求退出或读取真实 Chrome。
 - Chrome 导入 success 审计直接测量真实 App 路径的 Profile 列表出现耗时并要求小于 500ms；从提交导入到结果页期间，Electron 主进程运行 5ms heartbeat，扣除 interval 后任一事件循环停顿达到 50ms 即失败。当前隔离实测 discovery 约 43ms、最大主线程停顿约 1ms，不再只用 Worker 单测间接推断窗口响应性。
 - Ego-compatible Skill/helper、Agent Space ownership、JanitorAI Turnstile 与 fingerprint/OOPIF 回归已经建立独立验证路径。
-- Overview 卡片使用真实页面缩略图与一个有界主 screencast；Space 打开后再返回 Overview 时复用同一 WebContents，动态页面继续更新，不以重载或替换 renderer 伪造连续性。
+- Overview 卡片使用真实页面缩略图并复用同一 WebContents，不以重载或替换 renderer 伪造连续性。2026-08-11 起按产品决定暂时关闭有界主 screencast；所有可见 Space 统一走 1.2–4 秒自适应低频截图，画面未变化时不发布，导航、加载和 Agent 操作结束会唤醒一次截图；Agent 自己录屏期间仍暂停 Manager capture，恢复后立即补帧。此条覆盖后文历史记录中关于“一个主实时卡片”的描述。
 - Space 卡片右上角使用 macOS 风格省略号菜单，支持鼠标、右键、Shift+F10、F2、Escape 与内联重命名；关闭动作收敛到同一菜单，避免悬浮关闭按钮误触。
 - 所有 E2E 继续使用兼容目录 `.x-browser-test/runs/<suite>` 隔离 userData、PID 与 Unix socket。常驻临时 App 使用 `.x-browser-test` 根目录；测试清理只能终止自己 marker 中的 PID，不能再通过 `pgrep` 关闭用户正在看的预览窗口。
 - 对应回归命令新增 `npm run verify:space-ui`；`verify:preview-startup` 与 `verify:live-preview` 也在隔离实例中运行，后者要求打开/返回前后的 `webContentsId` 保持一致。

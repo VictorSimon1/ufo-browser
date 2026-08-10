@@ -146,7 +146,12 @@ try {
   assert.equal(audit.afterParkedTargets.length, 2);
   assert.equal(audit.roundTrips.length, roundTripCount);
   assert.ok(audit.roundTrips.every((cycle) => cycle.frameVisual));
-  assert.ok(audit.roundTrips.every((cycle) => cycle.liveFrames >= 2));
+  assert.ok(
+    audit.roundTrips.every((cycle) => cycle.lowFrequencyUpdated === true),
+  );
+  assert.ok(
+    audit.roundTrips.every((cycle) => cycle.continuousPreview === false),
+  );
   assert.ok(audit.roundTrips.every((cycle) => cycle.sameWebContents));
   process.stdout.write(
     `${JSON.stringify(

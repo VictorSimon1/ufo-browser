@@ -633,10 +633,10 @@ async function start() {
             manager.setVisiblePreviewSpaces([requestedOverviewSpaceId]);
           }, 180);
         });
-      // The live-preview audit targets a card that can be far below the first
+      // The dynamic-preview audit targets a card that can be far below the first
       // viewport. DOM scrolling is still exercised above, while the explicit
       // visibility publication removes timer/layout nondeterminism from the
-      // native screencast lifecycle assertion.
+      // bounded snapshot lifecycle assertion.
     }, 1200);
   }
 
@@ -1029,7 +1029,8 @@ async function runWarmEntryAudit(context: {
     cycle: number;
     entryElapsedMs: number;
     frameVisual: boolean;
-    liveFrames: number;
+    lowFrequencyUpdated: boolean;
+    continuousPreview: boolean;
     sameWebContents: boolean;
   }> = [];
   const roundTripCount = Math.max(
@@ -1056,19 +1057,26 @@ async function runWarmEntryAudit(context: {
       bitmapHasVisualDetail(frame.toBitmap(), size.width, size.height);
     await presentation.showOverview();
     manager.setVisiblePreviewSpaces([targetSpace.id]);
+    const revisionBefore = Number(
+      manager.previewDiagnostics().publishedRevision[targetSpace.id] ?? 0,
+    );
     await waitUntil(() => {
       const state = manager.previewDiagnostics();
       return (
-        state.screencast?.spaceId === targetSpace.id &&
-        state.screencast.publishedFrames >= 2
+        state.screencast == null &&
+        Number(state.publishedRevision[targetSpace.id] ?? 0) > revisionBefore
       );
     }, 4_000);
-    const live = manager.previewDiagnostics().screencast;
+    const preview = manager.previewDiagnostics();
+    const revisionAfter = Number(
+      preview.publishedRevision[targetSpace.id] ?? 0,
+    );
     roundTrips.push({
       cycle: cycle + 1,
       entryElapsedMs: Date.now() - cycleStartedAt,
       frameVisual,
-      liveFrames: live?.spaceId === targetSpace.id ? live.publishedFrames : 0,
+      lowFrequencyUpdated: revisionAfter > revisionBefore,
+      continuousPreview: preview.screencast !== null,
       sameWebContents: manager.getView(targetId)?.webContents.id === webContentsId,
     });
     await new Promise((resolve) =>
@@ -1086,7 +1094,8 @@ async function runWarmEntryAudit(context: {
       roundTrips.every(
         (cycle) =>
           cycle.frameVisual &&
-          cycle.liveFrames >= 2 &&
+          cycle.lowFrequencyUpdated &&
+          !cycle.continuousPreview &&
           cycle.sameWebContents,
       ) &&
       after.presentedTargetId === targetId &&
@@ -1912,7 +1921,7 @@ async function runBrowserInteractionAudit(context: {
 
     await presentation.showOverview();
     const overviewRootChildCount = window.contentView.children.length;
-    // Give the Overview enough time to begin a live preview so returning to
+    // Give Overview enough time to begin a bounded snapshot so returning to
     // the Space exercises the real capture-surface race, not only a quiet
     // detach/attach path.
     await wait(260);

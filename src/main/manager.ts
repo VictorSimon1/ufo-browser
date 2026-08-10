@@ -37,6 +37,7 @@ import { selectPreviewCaptureIds } from "./preview-visibility.js";
 import { bitmapHasVisualDetail } from "./preview-quality.js";
 import {
   overviewPreviewDelay,
+  overviewSnapshotDelay,
   previewVisualChanged,
   quantizedPreviewSignature,
 } from "./preview-cadence.js";
@@ -66,6 +67,12 @@ type PreviewFrame = {
 const MAX_PREVIEW_CACHE_ENTRIES = 24;
 const MAX_PREVIEW_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_PREVIEW_RECOVERY_ATTEMPTS = 4;
+// Product policy: Overview currently has no continuous high-rate preview
+// owner. Every visible Space is sampled through the same bounded screenshot
+// queue and frames are published only when the cached image changes. Keep the
+// old screencast implementation compiled behind this explicit switch so a
+// future experiment is deliberate, benchmarked, and easy to revert.
+const ENABLE_OVERVIEW_CONTINUOUS_PREVIEW = false;
 // Ego restores real Space tabs on launch and keeps their renderer state alive
 // while Overview shows thumbnails. Match that lifecycle for the bounded set of
 // visible cards: detached WebContents keep DOM/navigation state but own no live
@@ -136,6 +143,7 @@ export class TaskSpaceManager {
   private readonly publishedPreviewRevision = new Map<number, number>();
   private readonly visiblePreviewSpaceIds = new Set<number>();
   private readonly previewDueAt = new Map<number, number>();
+  private readonly previewUnchangedSamples = new Map<number, number>();
   private readonly previewCaptures = new Set<number>();
   private readonly coldPreviewCaptures = new Set<number>();
   private readonly previewWarmupTargets = new Set<string>();
@@ -310,6 +318,7 @@ export class TaskSpaceManager {
       for (const tab of space.tabs) this.destroyRuntime(tab.targetId);
       this.visiblePreviewSpaceIds.delete(spaceId);
       this.previewDueAt.delete(spaceId);
+      this.previewUnchangedSamples.delete(spaceId);
       this.previewQualityAttempts.delete(spaceId);
       this.previewQualityRetryTargets.delete(spaceId);
       this.publishedPreviewRevision.delete(spaceId);
@@ -643,6 +652,7 @@ export class TaskSpaceManager {
     for (const id of this.visiblePreviewSpaceIds) {
       if (next.has(id)) continue;
       this.previewDueAt.delete(id);
+      this.previewUnchangedSamples.delete(id);
       this.previewQualityAttempts.delete(id);
       const retryTarget = this.previewQualityRetryTargets.get(id);
       this.previewQualityRetryTargets.delete(id);
@@ -755,6 +765,16 @@ export class TaskSpaceManager {
   resumeOverviewScreencast(targetId: string) {
     if (!this.overviewScreencastSuspendedTargets.delete(targetId)) return;
     this.requestOverviewScreencastReconcile();
+    const space = this.findSpaceByTargetId(targetId);
+    if (
+      space &&
+      this.previewActive &&
+      this.visiblePreviewSpaceIds.has(space.id)
+    ) {
+      this.previewUnchangedSamples.delete(space.id);
+      this.previewDueAt.set(space.id, 0);
+      this.schedulePreviewPump(0);
+    }
   }
 
   previewDiagnostics() {
@@ -835,6 +855,8 @@ export class TaskSpaceManager {
       phases: Object.fromEntries(this.previewPhases),
       errors: Object.fromEntries(this.previewErrors),
       dueAt: Object.fromEntries(this.previewDueAt),
+      unchangedSamples: Object.fromEntries(this.previewUnchangedSamples),
+      continuousPreviewEnabled: ENABLE_OVERVIEW_CONTINUOUS_PREVIEW,
       cache: [...this.previewCache.entries()].map(([targetId, entry]) => ({
         targetId,
         bytes: entry.data?.byteLength ?? 0,
@@ -1255,6 +1277,22 @@ export class TaskSpaceManager {
   }
 
   noteOverviewActivity(targetId: string) {
+    if (!ENABLE_OVERVIEW_CONTINUOUS_PREVIEW) {
+      const space = this.findSpaceByTargetId(targetId);
+      if (
+        space &&
+        this.previewActive &&
+        this.visiblePreviewSpaceIds.has(space.id)
+      ) {
+        // Agent progress and pointer events are meaningful change hints. They
+        // wake the low-frequency queue, but still go through its bounded
+        // capture slots rather than opening a continuous frame subscription.
+        this.previewUnchangedSamples.delete(space.id);
+        this.previewDueAt.set(space.id, Date.now() + 160);
+        this.schedulePreviewPump(160);
+      }
+      return;
+    }
     const state = this.overviewScreencast;
     if (!state || state.targetId !== targetId) return;
     state.lastActivityAt = Date.now();
@@ -1632,6 +1670,13 @@ export class TaskSpaceManager {
       const nextAt = Math.min(
         ...[...this.visiblePreviewSpaceIds]
           .filter((id) => !this.previewCaptures.has(id))
+          .filter((id) => {
+            const targetId = this.getSpace(id)?.activeTabId;
+            return Boolean(
+              targetId &&
+                !this.overviewScreencastSuspendedTargets.has(targetId),
+            );
+          })
           .map((id) => this.previewDueAt.get(id) ?? now + 500),
       );
       if (Number.isFinite(nextAt)) this.schedulePreviewPump(Math.max(40, nextAt - now));
@@ -1689,11 +1734,16 @@ export class TaskSpaceManager {
       this.previewQualityRetryTargets.delete(spaceId);
       captureSucceeded = true;
       const cached = this.cachedPreviewForSpace(spaceId);
+      const previousPublishedRevision =
+        this.publishedPreviewRevision.get(spaceId) ?? -1;
+      const visualChanged = Boolean(
+        cached?.data && cached.revision > previousPublishedRevision,
+      );
       if (
+        visualChanged &&
         cached?.data &&
         this.previewActive &&
-        this.visiblePreviewSpaceIds.has(spaceId) &&
-        cached.revision > (this.publishedPreviewRevision.get(spaceId) ?? -1)
+        this.visiblePreviewSpaceIds.has(spaceId)
       ) {
         this.options.publishPreviewFrame({
           spaceId,
@@ -1702,17 +1752,21 @@ export class TaskSpaceManager {
         });
         this.publishedPreviewRevision.set(spaceId, cached.revision);
       }
-      const space = this.getSpace(spaceId);
-      const controlled =
-        space?.ownership === "agent" && space.lifecycle === "active";
+      const unchangedSamples = visualChanged
+        ? 0
+        : Math.min(
+            1_000,
+            (this.previewUnchangedSamples.get(spaceId) ?? 0) + 1,
+          );
       this.previewDueAt.set(
         spaceId,
-        coldSequence
-          ? Number.POSITIVE_INFINITY
-          : controlled
-            ? Date.now() + 850
-            : Number.POSITIVE_INFINITY,
+        Date.now() +
+          overviewSnapshotDelay({
+            visualChanged,
+            unchangedSamples,
+          }),
       );
+      this.previewUnchangedSamples.set(spaceId, unchangedSamples);
     } catch (error) {
       this.previewErrors.set(spaceId, String(error));
       const retryRuntime = initialTargetId
@@ -1859,6 +1913,7 @@ export class TaskSpaceManager {
     };
     const invalidatePreview = () => {
       this.previewCache.delete(targetId);
+      this.previewUnchangedSamples.delete(spaceId);
       if (this.visiblePreviewSpaceIds.has(spaceId)) {
         this.previewDueAt.set(spaceId, 0);
         this.schedulePreviewPump(0);
@@ -2172,6 +2227,7 @@ export class TaskSpaceManager {
   }
 
   private desiredOverviewScreencast() {
+    if (!ENABLE_OVERVIEW_CONTINUOUS_PREVIEW) return undefined;
     if (!this.previewActive) return undefined;
     const now = Date.now();
     const candidates: Array<{
