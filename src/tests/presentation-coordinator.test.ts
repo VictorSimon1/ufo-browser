@@ -51,6 +51,7 @@ function harness(
   const windowEvents = new Map<string, Array<() => void>>();
   let agentControlled = options.agentControlled ?? false;
   let windowFocused = options.windowFocused ?? true;
+  let windowDestroyed = false;
   let minimumChildren = Number.POSITIVE_INFINITY;
   const children: FakeView[] = options.overviewAttached === false ? [] : [overview];
   const contentView = {
@@ -71,7 +72,10 @@ function harness(
     },
   };
   const window = {
-    contentView,
+    get contentView() {
+      if (windowDestroyed) throw new Error("Object has been destroyed");
+      return contentView;
+    },
     on(event: string, listener: () => void) {
       const listeners = windowEvents.get(event) ?? [];
       listeners.push(listener);
@@ -81,6 +85,7 @@ function harness(
     isMinimized: () => false,
     isVisible: () => true,
     isFocused: () => windowFocused,
+    isDestroyed: () => windowDestroyed,
   };
   const manager = {
     getActiveTab: () => ({ targetId: "target-1" }),
@@ -128,6 +133,9 @@ function harness(
     },
     setWindowFocused(value: boolean) {
       windowFocused = value;
+    },
+    destroyWindow() {
+      windowDestroyed = true;
     },
     emitWindow(event: string) {
       for (const listener of windowEvents.get(event) ?? []) listener();
@@ -401,4 +409,27 @@ test("overlay removal skips focus after the presented page is destroyed", async 
 
   assert.doesNotThrow(() => state.coordinator.refreshControlOverlay());
   assert.equal(state.views.page.webContents.focused, false);
+});
+
+test("late overlay refresh ignores a BaseWindow already destroyed during quit", async () => {
+  const state = harness({ agentControlled: true });
+  await state.coordinator.showSpace(1);
+
+  state.destroyWindow();
+  state.setAgentControlled(false);
+
+  assert.doesNotThrow(() => state.coordinator.refreshControlOverlay());
+  assert.doesNotThrow(() => state.coordinator.syncWindowState());
+});
+
+test("disposing presentation blocks manager callbacks throughout native teardown", async () => {
+  const state = harness({ agentControlled: true });
+  await state.coordinator.showSpace(1);
+
+  state.coordinator.dispose();
+  state.destroyWindow();
+  state.setAgentControlled(false);
+
+  assert.doesNotThrow(() => state.coordinator.refreshControlOverlay());
+  await assert.doesNotReject(() => state.coordinator.showOverview());
 });

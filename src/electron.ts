@@ -488,6 +488,7 @@ async function start() {
     nativeChrome,
   );
   nativeChrome.install((event) => {
+    if (appIsQuitting) return;
     void handleNativeBrowserChromeEvent(
       event,
       manager,
@@ -495,20 +496,26 @@ async function start() {
       nativeChrome,
     ).catch(() => undefined);
   });
-  manager.onActiveTabChanged((spaceId) => {
-    const current = presentation.current();
-    if (current.kind !== "space" || current.spaceId !== spaceId) return;
-    return presentation.refreshSpace(spaceId).catch(() => undefined);
-  });
-  manager.onAgentPointer((spaceId, pointer) =>
-    presentation.showAgentPointer(spaceId, pointer),
+  const presentationSubscriptions = [
+    manager.onActiveTabChanged((spaceId) => {
+      const current = presentation.current();
+      if (current.kind !== "space" || current.spaceId !== spaceId) return;
+      return presentation.refreshSpace(spaceId).catch(() => undefined);
+    }),
+  ];
+  presentationSubscriptions.push(
+    manager.onAgentPointer((spaceId, pointer) =>
+      presentation.showAgentPointer(spaceId, pointer),
+    ),
   );
-  manager.onBeforeSpaceClose(async (spaceId) => {
-    const current = presentation.current();
-    if (current.kind === "space" && current.spaceId === spaceId) {
-      await presentation.showOverview({ parkPrevious: false });
-    }
-  });
+  presentationSubscriptions.push(
+    manager.onBeforeSpaceClose(async (spaceId) => {
+      const current = presentation.current();
+      if (current.kind === "space" && current.spaceId === spaceId) {
+        await presentation.showOverview({ parkPrevious: false });
+      }
+    }),
+  );
 
   const shellIds = new Set([
     chatView.webContents.id,
@@ -534,11 +541,19 @@ async function start() {
     profileAvatars,
   });
   traceStart("ipc-registered");
-  claude.onEvent((event) =>
-    chatView.webContents.send("x-browser:chat-event", event),
-  );
+  const unsubscribeClaude = claude.onEvent((event) => {
+    if (appIsQuitting || chatView.webContents.isDestroyed()) return;
+    chatView.webContents.send("x-browser:chat-event", event);
+  });
 
   const publish = () => {
+    if (
+      appIsQuitting ||
+      window.isDestroyed() ||
+      overviewView.webContents.isDestroyed()
+    ) {
+      return;
+    }
     const spaces = manager.listSpaces();
     overviewView.webContents.send("x-browser:spaces-changed", spaces);
     const current = presentation.current();
@@ -558,8 +573,8 @@ async function start() {
     }
     presentation.refreshControlOverlay();
   };
-  manager.onChanged(publish);
-  manager.onControlChanged(publish);
+  presentationSubscriptions.push(manager.onChanged(publish));
+  presentationSubscriptions.push(manager.onControlChanged(publish));
 
   await Promise.all([
     chatView.webContents.loadFile(renderer("chat.html")),
@@ -718,7 +733,7 @@ async function start() {
 
   if (isTestApp && process.env.X_BROWSER_TEST_APP_QUIT_AUDIT === "1") {
     setTimeout(() => {
-      void runAppQuitAudit({ testRoot, manager, presentation }).catch(
+      void runAppQuitAudit({ testRoot, manager, presentation, overlayView }).catch(
         async (error) => {
           await writeFile(
             join(testRoot, "app-quit-audit.json"),
@@ -953,9 +968,24 @@ async function start() {
   };
   app.on("second-instance", revealWindow);
   app.on("activate", revealWindow);
+  let presentationDetached = false;
+  const detachPresentation = () => {
+    if (presentationDetached) return;
+    presentationDetached = true;
+    presentation.dispose();
+    for (const unsubscribe of presentationSubscriptions) unsubscribe();
+    unsubscribeClaude();
+    app.removeListener("second-instance", revealWindow);
+    app.removeListener("activate", revealWindow);
+  };
   let shutdownPromise: Promise<void> | undefined;
   beginAppShutdown = () => {
     if (shutdownPromise) return shutdownPromise;
+    // Stop every state-to-view callback before the second app.quit() is allowed
+    // to destroy BaseWindow. WebContents emit final lifecycle events during
+    // native teardown; those events may still update TaskSpaceManager, but may
+    // no longer touch AppKit views or their destroyed contentView root.
+    detachPresentation();
     manager.setOverviewPreviewActive(false);
     claude.stop();
     shutdownPromise = server
@@ -979,6 +1009,7 @@ async function start() {
     manager.setOverviewPreviewActive(false);
   });
   window.on("closed", () => {
+    detachPresentation();
     if (testDiagnosticsTimer) clearInterval(testDiagnosticsTimer);
   });
 }
@@ -1126,15 +1157,21 @@ async function runAppQuitAudit(context: {
   testRoot: string;
   manager: TaskSpaceManager;
   presentation: PresentationCoordinator;
+  overlayView: WebContentsView;
 }) {
-  const { testRoot, manager, presentation } = context;
-  const space = manager.listSpaces()[0];
-  if (!space) throw new Error("quit audit requires a Space");
+  const { testRoot, manager, presentation, overlayView } = context;
+  // Keep the control overlay attached while quitting. This reproduces the
+  // teardown race where a late manager notification previously attempted to
+  // remove the overlay from an already-destroyed BaseWindow contentView.
+  const space = await manager.createSpace("Quit Agent Space", "agent");
   const tab = await manager.createTab(
     space.id,
     "data:text/html,<title>Quit%20Guard</title><main>quit%20guard</main>",
   );
   await presentation.showSpace(space.id);
+  if (!overlayView.getVisible()) {
+    throw new Error("quit audit Agent overlay was not attached");
+  }
   const view = manager.getView(tab.targetId);
   if (!view) throw new Error("quit audit page was not created");
   await view.webContents.executeJavaScript(
@@ -1150,6 +1187,7 @@ async function runAppQuitAudit(context: {
       {
         ok: true,
         armed: true,
+        overlayVisible: overlayView.getVisible(),
         spaceId: space.id,
         webContentsId: view.webContents.id,
       },

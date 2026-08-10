@@ -37,6 +37,7 @@ export class PresentationCoordinator {
   private readonly overviewTargets = new Map<number, Rect>();
   private snapshotRefreshTimer?: ReturnType<typeof setTimeout>;
   private snapshotRefreshGeneration = 0;
+  private disposed = false;
 
   constructor(
     private readonly window: BaseWindow,
@@ -70,7 +71,23 @@ export class PresentationCoordinator {
     return this.presentation;
   }
 
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.generation += 1;
+    this.cancelSnapshotRefresh();
+    if (this.activeTransitionToken) {
+      this.nativeTransition?.cancel(this.activeTransitionToken);
+    }
+    this.activeTransitionToken = "";
+    this.expectedTransitionTokens.clear();
+    this.overviewTargets.clear();
+    this.overlaySpaceId = null;
+    this.attachedPage = null;
+  }
+
   syncWindowState() {
+    if (this.isUnavailable()) return;
     this.layout();
     this.nativeChrome?.setVisible(this.presentation.kind === "space");
     this.syncControlOverlay();
@@ -88,7 +105,7 @@ export class PresentationCoordinator {
   }
 
   scheduleSnapshotRefresh(spaceId: number, delayMs = 160) {
-    if (!this.nativeTransition) return;
+    if (this.disposed || !this.nativeTransition) return;
     const current = this.presentation;
     if (current.kind !== "space" || current.spaceId !== spaceId) return;
     const generation = ++this.snapshotRefreshGeneration;
@@ -101,6 +118,7 @@ export class PresentationCoordinator {
   }
 
   setOverviewTargets(targets: Array<{ id: number; rect: Rect }>) {
+    if (this.disposed) return;
     const next = new Map<number, Rect>();
     for (const target of targets) {
       if (!Number.isSafeInteger(target.id) || target.id <= 0) continue;
@@ -112,6 +130,7 @@ export class PresentationCoordinator {
   }
 
   showSpace(spaceId: number, transition?: SpaceTransitionRequest) {
+    if (this.isUnavailable()) return Promise.resolve();
     const token = transition?.token;
     if (token) this.expectedTransitionTokens.add(token);
     const preparedTransition = transition ? { ...transition } : undefined;
@@ -160,8 +179,15 @@ export class PresentationCoordinator {
     spaceId: number,
     pointer: { x: number; y: number; label: string },
   ) {
-    if (this.overlaySpaceId !== spaceId || !this.views.overlay.webContents) return;
-    this.views.overlay.webContents.send(
+    const overlayContents = this.views.overlay.webContents;
+    if (
+      this.disposed ||
+      this.overlaySpaceId !== spaceId ||
+      overlayContents.isDestroyed()
+    ) {
+      return;
+    }
+    overlayContents.send(
       "x-browser:agent-overlay-pointer",
       pointer,
     );
@@ -172,9 +198,10 @@ export class PresentationCoordinator {
     transition?: SpaceTransitionRequest,
     options: PresentationRequestOptions = {},
   ) {
+    if (this.disposed) return Promise.resolve();
     const generation = ++this.generation;
     this.commitQueue = this.commitQueue.then(async () => {
-      if (generation !== this.generation) return;
+      if (this.disposed || generation !== this.generation) return;
       await this.commit(next, generation, transition, options);
     });
     return this.commitQueue;
@@ -186,6 +213,7 @@ export class PresentationCoordinator {
     transition?: SpaceTransitionRequest,
     options: PresentationRequestOptions = {},
   ) {
+    if (this.isUnavailable() || generation !== this.generation) return;
     let nextPage: WebContentsView | null = null;
     let nextTargetId: string | null = null;
     if (next.kind === "space") {
@@ -200,13 +228,14 @@ export class PresentationCoordinator {
       // Overview's last frame visible until loadURL fully resolves.
       nextPage = await this.manager.activeViewForPresentation(next.spaceId);
       await this.manager.prepareForPresentation(nextTargetId);
-      if (generation !== this.generation) {
+      if (this.disposed || generation !== this.generation) {
         this.manager.cancelPresentationPreparation(nextTargetId);
         void this.manager.parkAfterPresentation(nextTargetId).catch(() => undefined);
         return;
       }
     }
 
+    if (this.isUnavailable()) return;
     const root = this.window.contentView;
     const previousPage = this.attachedPage;
     const previousTarget = previousPage ? this.findTargetId(previousPage) : undefined;
@@ -227,7 +256,7 @@ export class PresentationCoordinator {
       }).catch(() => false);
       if (transitioned) return;
       if (transition.token) this.nativeTransition?.cancel(transition.token);
-      if (generation !== this.generation) {
+      if (this.disposed || generation !== this.generation) {
         this.manager.cancelPresentationPreparation(nextTargetId!);
         this.removeIfAttached(nextPage);
         this.removeIfAttached(this.views.browser);
@@ -298,7 +327,7 @@ export class PresentationCoordinator {
         if (nextTargetId) {
           await this.manager.waitForPresentationFrame(nextTargetId);
         }
-        if (generation !== this.generation) {
+        if (this.disposed || generation !== this.generation) {
           this.manager.cancelPresentationPreparation(nextTargetId!);
           this.removeIfAttached(nextPage);
           nextPage.setVisible(false);
@@ -403,6 +432,8 @@ export class PresentationCoordinator {
         }
       }
 
+      if (this.disposed || generation !== this.generation) return;
+
       // Recent native macOS browsers keep a stable, full-resolution page
       // snapshot and hand it to Core Animation during the next switch. Capture
       // while Browser Chrome/page are still attached but already hidden below
@@ -428,6 +459,8 @@ export class PresentationCoordinator {
           )
           .catch(() => false);
       }
+
+      if (this.disposed || generation !== this.generation) return;
 
       if (previousPage) {
         this.removeIfAttached(previousPage);
@@ -482,7 +515,7 @@ export class PresentationCoordinator {
         if (nextTargetId) {
           await this.manager.waitForPresentationFrame(nextTargetId);
         }
-        if (generation !== this.generation) {
+        if (this.disposed || generation !== this.generation) {
           this.manager.cancelPresentationPreparation(nextTargetId!);
           this.removeIfAttached(nextPage);
           nextPage.setVisible(false);
@@ -520,6 +553,7 @@ export class PresentationCoordinator {
   }
 
   layout() {
+    if (this.isUnavailable()) return;
     if (this.window.isMinimized()) return;
     const [width, height] = this.window.getContentSize();
     const layout = calculateShellLayout(width, height);
@@ -537,13 +571,16 @@ export class PresentationCoordinator {
   }
 
   private publishState() {
+    if (this.disposed) return;
     const state = this.presentation;
-    this.views.chat.webContents.send("x-browser:presentation", state);
-    this.views.overview.webContents.send("x-browser:presentation", state);
-    this.views.browser.webContents.send("x-browser:presentation", state);
+    for (const view of [this.views.chat, this.views.overview, this.views.browser]) {
+      if (view.webContents.isDestroyed()) continue;
+      view.webContents.send("x-browser:presentation", state);
+    }
   }
 
   private syncPreviewActivity() {
+    if (this.isUnavailable()) return;
     this.manager.setOverviewPreviewActive(
       this.presentation.kind === "overview" &&
         this.window.isVisible() &&
@@ -552,7 +589,7 @@ export class PresentationCoordinator {
   }
 
   private syncControlOverlay() {
-    if (this.activeTransitionToken) return;
+    if (this.isUnavailable() || this.activeTransitionToken) return;
     const current = this.presentation;
     const space =
       current.kind === "space" ? this.manager.getSpace(current.spaceId) : undefined;
@@ -561,7 +598,9 @@ export class PresentationCoordinator {
     if (!space || !controlled) {
       const wasVisible = this.overlaySpaceId !== null;
       this.removeIfAttached(this.views.overlay);
-      this.views.overlay.setVisible(false);
+      if (!this.views.overlay.webContents.isDestroyed()) {
+        this.views.overlay.setVisible(false);
+      }
       this.overlaySpaceId = null;
       if (
         wasVisible &&
@@ -612,6 +651,7 @@ export class PresentationCoordinator {
     const current = this.presentation;
     const page = this.attachedPage;
     if (
+      this.isUnavailable() ||
       !this.nativeTransition ||
       this.activeTransitionToken ||
       current.kind !== "space" ||
@@ -647,17 +687,23 @@ export class PresentationCoordinator {
   }
 
   private removeIfAttached(view: WebContentsView) {
-    if (!this.window.contentView.children.includes(view)) return;
     try {
-      this.window.contentView.removeChildView(view);
+      if (this.isUnavailable()) return;
+      const root = this.window.contentView;
+      if (!root.children.includes(view)) return;
+      root.removeChildView(view);
     } catch {
-      // Removing a detached view is harmless.
+      // Native view teardown can race the last WebContents lifecycle event.
+      // At that point both an already-detached view and a destroyed root are
+      // harmless: macOS owns the remaining shutdown sequence.
     }
   }
 
   private ensureAttached(view: WebContentsView) {
-    if (this.window.contentView.children.includes(view)) return;
-    this.window.contentView.addChildView(view);
+    if (this.isUnavailable()) return;
+    const root = this.window.contentView;
+    if (root.children.includes(view)) return;
+    root.addChildView(view);
   }
 
   private setPageBounds(view: WebContentsView) {
@@ -682,6 +728,7 @@ export class PresentationCoordinator {
     nextTargetId: string | null;
     transition: SpaceTransitionRequest;
   }) {
+    if (this.isUnavailable()) return false;
     const { next, generation, nextPage, nextTargetId, transition } = input;
     const token = transition.token;
     if (!token || !this.expectedTransitionTokens.has(token)) return false;
@@ -735,7 +782,11 @@ export class PresentationCoordinator {
         : Promise.resolve(true),
       pageReady,
     ]);
-    if (!transitionFinished || generation !== this.generation) {
+    if (
+      !transitionFinished ||
+      this.disposed ||
+      generation !== this.generation
+    ) {
       this.nativeTransition?.cancel(token);
       if (this.activeTransitionToken === token) this.activeTransitionToken = "";
       return false;
@@ -796,9 +847,19 @@ export class PresentationCoordinator {
   }
 
   private attachAt(view: WebContentsView, index: number) {
+    if (this.isUnavailable()) return;
     const root = this.window.contentView;
     if (root.children.includes(view)) root.removeChildView(view);
     root.addChildView(view, Math.max(0, Math.min(index, root.children.length)));
+  }
+
+  private isUnavailable() {
+    if (this.disposed) return true;
+    try {
+      return this.window.isDestroyed();
+    } catch {
+      return true;
+    }
   }
 
 }
