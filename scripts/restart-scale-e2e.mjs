@@ -42,7 +42,17 @@ child.stderr.on("data", (chunk) => {
 });
 
 try {
-  const startup = await freshJson("preview-state.json", 9_000);
+  const startup = await waitForRendererState((state) => {
+    const ready =
+      state.renderer?.canvases?.filter((canvas) => canvas.ready).length ?? 0;
+    const visible = state.main?.visibleSpaceIds?.length ?? 0;
+    return (
+      ready >= Math.min(4, visible) &&
+      visible >= 1 &&
+      visible <= 8 &&
+      !state.renderer?.previewError
+    );
+  }, 9_000);
   const startupReady =
     startup.renderer?.canvases?.filter((canvas) => canvas.ready).length ?? 0;
   const startupVisible = startup.main?.visibleSpaceIds?.length ?? 0;
@@ -186,5 +196,22 @@ async function waitForDiagnostics(predicate, timeoutMs) {
   }
   throw new Error(
     `timed out waiting for bounded scale recovery: ${JSON.stringify(latest?.cacheBudget)}`,
+  );
+}
+
+async function waitForRendererState(predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let latest;
+  while (Date.now() < deadline) {
+    try {
+      latest = await freshJson("preview-state.json", 600);
+      if (predicate(latest)) return latest;
+    } catch {
+      // The combined renderer/main snapshot may not exist yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  throw new Error(
+    `timed out waiting for useful startup viewport: ${JSON.stringify(latest?.renderer?.canvases)}`,
   );
 }

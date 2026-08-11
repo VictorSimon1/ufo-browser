@@ -13,7 +13,7 @@ export function overviewSnapshotDelay(options: {
   // compositor subscription. Dynamic cards are sampled often enough to show
   // progress, while settled cards back off so several visible Spaces do not
   // behave like several foreground browser windows.
-  if (options.visualChanged) return 1_200;
+  if (options.visualChanged) return 1_400;
   if (unchangedSamples < 2) return 1_800;
   if (unchangedSamples < 5) return 2_800;
   return 4_000;

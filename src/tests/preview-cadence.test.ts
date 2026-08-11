@@ -11,7 +11,7 @@ import {
 test("Overview snapshot polling stays low-frequency and backs off when unchanged", () => {
   assert.equal(
     overviewSnapshotDelay({ visualChanged: true, unchangedSamples: 0 }),
-    1_200,
+    1_400,
   );
   assert.deepEqual(
     [0, 1, 2, 5].map((unchangedSamples) =>
