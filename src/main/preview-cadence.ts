@@ -1,4 +1,22 @@
 export const OVERVIEW_PREVIEW_ACTIVE_WINDOW_MS = 4_000;
+export const OVERVIEW_SNAPSHOT_MIN_INTERVAL_MS = 4_000;
+
+export function overviewSnapshotDueAt(options: {
+  requestedAt: number;
+  lastCaptureAt?: number;
+  hasPublishedFrame: boolean;
+}) {
+  const requestedAt = Math.max(0, Math.floor(options.requestedAt));
+  const lastCaptureAt = Math.max(
+    0,
+    Math.floor(options.lastCaptureAt ?? 0),
+  );
+  if (!options.hasPublishedFrame || lastCaptureAt === 0) return requestedAt;
+  return Math.max(
+    requestedAt,
+    lastCaptureAt + OVERVIEW_SNAPSHOT_MIN_INTERVAL_MS,
+  );
+}
 
 export function overviewSnapshotDelay(options: {
   visualChanged: boolean;
@@ -13,8 +31,8 @@ export function overviewSnapshotDelay(options: {
   // compositor subscription. Even continuously changing cards are sampled at
   // most once every four seconds; settled cards only get slower so several
   // visible Spaces do not behave like several foreground browser windows.
-  if (options.visualChanged) return 4_000;
-  if (unchangedSamples < 2) return 4_000;
+  if (options.visualChanged) return OVERVIEW_SNAPSHOT_MIN_INTERVAL_MS;
+  if (unchangedSamples < 2) return OVERVIEW_SNAPSHOT_MIN_INTERVAL_MS;
   if (unchangedSamples < 5) return 6_000;
   return 8_000;
 }

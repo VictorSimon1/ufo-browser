@@ -2,11 +2,41 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   OVERVIEW_PREVIEW_ACTIVE_WINDOW_MS,
+  OVERVIEW_SNAPSHOT_MIN_INTERVAL_MS,
   overviewPreviewDelay,
+  overviewSnapshotDueAt,
   overviewSnapshotDelay,
   previewVisualChanged,
   quantizedPreviewSignature,
 } from "../main/preview-cadence.js";
+
+test("Overview uses one global capture floor after the first published frame", () => {
+  assert.equal(OVERVIEW_SNAPSHOT_MIN_INTERVAL_MS, 4_000);
+  assert.equal(
+    overviewSnapshotDueAt({
+      requestedAt: 5_100,
+      lastCaptureAt: 5_000,
+      hasPublishedFrame: true,
+    }),
+    9_000,
+  );
+  assert.equal(
+    overviewSnapshotDueAt({
+      requestedAt: 12_000,
+      lastCaptureAt: 5_000,
+      hasPublishedFrame: true,
+    }),
+    12_000,
+  );
+  assert.equal(
+    overviewSnapshotDueAt({
+      requestedAt: 0,
+      lastCaptureAt: 5_000,
+      hasPublishedFrame: false,
+    }),
+    0,
+  );
+});
 
 test("Overview snapshot polling stays low-frequency and backs off when unchanged", () => {
   assert.equal(

@@ -118,7 +118,7 @@ try {
   const expectedIdleRuns = Math.floor(roundTripCount / idleEvery);
   const auditTimeoutMs = Math.max(
     30_000,
-    15_000 + roundTripCount * 1_600 + expectedIdleRuns * idleMs,
+    15_000 + roundTripCount * 5_500 + expectedIdleRuns * idleMs,
   );
   const audit = await freshJson("warm-entry-audit.json", auditTimeoutMs);
   await new Promise((resolve) => setTimeout(resolve, 250));

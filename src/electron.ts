@@ -1091,13 +1091,20 @@ async function runWarmEntryAudit(context: {
     const revisionBefore = Number(
       manager.previewDiagnostics().publishedRevision[targetSpace.id] ?? 0,
     );
+    const effectiveDueAt = Number(
+      manager.previewDiagnostics().effectiveDueAt[targetSpace.id] ?? Date.now(),
+    );
+    const refreshTimeoutMs = Math.max(
+      5_500,
+      effectiveDueAt - Date.now() + 2_000,
+    );
     await waitUntil(() => {
       const state = manager.previewDiagnostics();
       return (
         state.screencast == null &&
         Number(state.publishedRevision[targetSpace.id] ?? 0) > revisionBefore
       );
-    }, 4_000);
+    }, refreshTimeoutMs);
     const preview = manager.previewDiagnostics();
     const revisionAfter = Number(
       preview.publishedRevision[targetSpace.id] ?? 0,

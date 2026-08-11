@@ -37,6 +37,7 @@ import { selectPreviewCaptureIds } from "./preview-visibility.js";
 import { bitmapHasVisualDetail } from "./preview-quality.js";
 import {
   overviewPreviewDelay,
+  overviewSnapshotDueAt,
   overviewSnapshotDelay,
   previewVisualChanged,
   quantizedPreviewSignature,
@@ -143,6 +144,7 @@ export class TaskSpaceManager {
   private readonly publishedPreviewRevision = new Map<number, number>();
   private readonly visiblePreviewSpaceIds = new Set<number>();
   private readonly previewDueAt = new Map<number, number>();
+  private readonly previewLastCaptureAt = new Map<number, number>();
   private readonly previewUnchangedSamples = new Map<number, number>();
   private readonly previewCaptures = new Set<number>();
   private readonly coldPreviewCaptures = new Set<number>();
@@ -158,6 +160,7 @@ export class TaskSpaceManager {
   private readonly foregroundCadenceReasons = new Map<string, Set<string>>();
   private previewActive = false;
   private previewTimer?: ReturnType<typeof setTimeout>;
+  private previewTimerDueAt = 0;
   private previewRevision = 0;
   private previewCacheEvictions = 0;
   private overviewScreencast?: OverviewScreencastState;
@@ -318,6 +321,7 @@ export class TaskSpaceManager {
       for (const tab of space.tabs) this.destroyRuntime(tab.targetId);
       this.visiblePreviewSpaceIds.delete(spaceId);
       this.previewDueAt.delete(spaceId);
+      this.previewLastCaptureAt.delete(spaceId);
       this.previewUnchangedSamples.delete(spaceId);
       this.previewQualityAttempts.delete(spaceId);
       this.previewQualityRetryTargets.delete(spaceId);
@@ -614,6 +618,7 @@ export class TaskSpaceManager {
     if (!active) {
       if (this.previewTimer) clearTimeout(this.previewTimer);
       this.previewTimer = undefined;
+      this.previewTimerDueAt = 0;
       // End the compositor subscription immediately. Reconciliation still
       // performs the asynchronous surface cleanup, but it must not keep
       // invalidating a page after that page becomes the visible browser tab.
@@ -855,6 +860,13 @@ export class TaskSpaceManager {
       phases: Object.fromEntries(this.previewPhases),
       errors: Object.fromEntries(this.previewErrors),
       dueAt: Object.fromEntries(this.previewDueAt),
+      effectiveDueAt: Object.fromEntries(
+        [...this.visiblePreviewSpaceIds].map((spaceId) => [
+          spaceId,
+          this.previewEffectiveDueAt(spaceId),
+        ]),
+      ),
+      lastCaptureAt: Object.fromEntries(this.previewLastCaptureAt),
       unchangedSamples: Object.fromEntries(this.previewUnchangedSamples),
       continuousPreviewEnabled: ENABLE_OVERVIEW_CONTINUOUS_PREVIEW,
       cache: [...this.previewCache.entries()].map(([targetId, entry]) => ({
@@ -1619,11 +1631,37 @@ export class TaskSpaceManager {
 
   private schedulePreviewPump(delayMs: number) {
     if (!this.previewActive || this.visiblePreviewSpaceIds.size === 0) return;
+    const now = Date.now();
+    const fallback = now + Math.max(0, delayMs);
+    const earliestEffectiveAt = Math.min(
+      ...[...this.visiblePreviewSpaceIds]
+        .filter((spaceId) => !this.previewCaptures.has(spaceId))
+        .map((spaceId) => this.previewEffectiveDueAt(spaceId, fallback)),
+    );
+    if (!Number.isFinite(earliestEffectiveAt)) return;
+    // Respect both clocks: the caller's queue-yield delay and the earliest
+    // globally permitted capture. This avoids a zero-delay polling loop while
+    // all capture slots are occupied without allowing dirty hints to jump the
+    // per-Space floor.
+    const nextAt = Math.max(fallback, earliestEffectiveAt);
+    // Repeated dirty hints should not keep replacing an equivalent timer.
+    // Only move the pump earlier when another Space genuinely becomes due.
+    if (this.previewTimer && this.previewTimerDueAt <= nextAt) return;
     if (this.previewTimer) clearTimeout(this.previewTimer);
+    this.previewTimerDueAt = nextAt;
     this.previewTimer = setTimeout(() => {
       this.previewTimer = undefined;
+      this.previewTimerDueAt = 0;
       void this.pumpVisiblePreviews().catch(() => undefined);
-    }, Math.max(0, delayMs));
+    }, Math.max(0, nextAt - now));
+  }
+
+  private previewEffectiveDueAt(spaceId: number, fallback = 0) {
+    return overviewSnapshotDueAt({
+      requestedAt: this.previewDueAt.get(spaceId) ?? fallback,
+      lastCaptureAt: this.previewLastCaptureAt.get(spaceId),
+      hasPublishedFrame: this.publishedPreviewRevision.has(spaceId),
+    });
   }
 
   private async pumpVisiblePreviews() {
@@ -1647,7 +1685,10 @@ export class TaskSpaceManager {
         );
       })
       .filter((id) => !this.previewCaptures.has(id))
-      .filter((id) => (this.previewDueAt.get(id) ?? 0) <= now)
+      // Every trigger shares one per-Space capture clock. Navigation, Agent
+      // hints and iframe churn may mark a card dirty, but once a frame exists
+      // none of them can pull the next screenshot inside the global floor.
+      .filter((id) => this.previewEffectiveDueAt(id) <= now)
       .map((id) => {
         const targetId = this.getSpace(id)!.activeTabId;
         const warm = this.runtimes.get(targetId)?.loaded === true;
@@ -1677,7 +1718,7 @@ export class TaskSpaceManager {
                 !this.overviewScreencastSuspendedTargets.has(targetId),
             );
           })
-          .map((id) => this.previewDueAt.get(id) ?? now + 500),
+          .map((id) => this.previewEffectiveDueAt(id, now + 500)),
       );
       if (Number.isFinite(nextAt)) this.schedulePreviewPump(Math.max(40, nextAt - now));
       return;
@@ -1708,6 +1749,7 @@ export class TaskSpaceManager {
         width: 520,
         height: 330,
       });
+      this.previewLastCaptureAt.set(spaceId, Date.now());
       const retryView = initialTargetId ? this.getView(initialTargetId) : undefined;
       const needsQualityRetry = Boolean(
         coldSequence &&
@@ -1927,13 +1969,16 @@ export class TaskSpaceManager {
       invalidatePreview();
       updateSafely();
     });
-    contents.on("did-navigate-in-page", () => {
+    contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
+      if (!isMainFrame) return;
       invalidatePreview();
       updateSafely();
     });
     contents.on("page-title-updated", updateSafely);
     contents.on("did-start-loading", () => {
-      invalidatePreview();
+      // This spinner-level event also reflects subframe, advertising and
+      // analytics activity on complex sites. Main-frame commits are handled
+      // by did-navigate, so loading noise must not schedule screenshots.
       this.notify();
     });
     contents.on("dom-ready", () => {
@@ -1944,7 +1989,6 @@ export class TaskSpaceManager {
     });
     contents.on("did-stop-loading", () => {
       runtime.loaded = true;
-      invalidatePreview();
       this.notify();
     });
     contents.once("destroyed", () => {

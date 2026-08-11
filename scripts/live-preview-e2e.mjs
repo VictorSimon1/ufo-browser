@@ -28,7 +28,7 @@ try {
   const created = JSON.parse(
     await runCli(`
 const task = await useOrCreateTaskSpace('ufo-browser live preview e2e ' + Date.now())
-const html = \`<!doctype html><meta charset="utf-8"><title>Live Preview E2E</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(205 72% 90%);transition:background .1s linear}.value{font:800 96px/1 -apple-system;color:#173a32}</style><div class="value">0</div><script>let n=0;globalThis.previewTimer=setInterval(()=>{n++;document.querySelector('.value').textContent=String(n);document.body.style.background='hsl('+((205+n*13)%360)+' 72% 90%)'},180)</script>\`
+const html = \`<!doctype html><meta charset="utf-8"><title>Live Preview E2E</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(205 72% 90%);transition:background .1s linear}.value{font:800 96px/1 -apple-system;color:#173a32}iframe{display:none}</style><div class="value">0</div><iframe id="churn" src="about:blank"></iframe><script>let n=0;globalThis.previewTimer=setInterval(()=>{n++;document.querySelector('.value').textContent=String(n);document.body.style.background='hsl('+((205+n*13)%360)+' 72% 90%)'},180);let f=0;globalThis.frameTimer=setInterval(()=>{document.querySelector('#churn').contentWindow.location.replace('about:blank#'+(++f))},140)</script>\`
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 })
 cliLog(JSON.stringify({ taskId: task.id }))
 `),
@@ -83,14 +83,21 @@ cliLog(JSON.stringify({ taskId: task.id }))
   ) {
     throw new Error("live preview did not preserve the opened Space runtime");
   }
+  const samplingStartedAt = Date.now();
   const progressed = await waitForDiagnostics(
     launchedAt,
     (state) =>
       state.screencast == null &&
       Number(state.publishedRevision?.[String(taskId)] || 0) >=
         firstRevision + 2,
-    10_000,
+    12_000,
   );
+  const samplingElapsedMs = Date.now() - samplingStartedAt;
+  if (samplingElapsedMs < 5_500) {
+    throw new Error(
+      `iframe churn bypassed the global preview floor: ${samplingElapsedMs}ms`,
+    );
+  }
   const finalRendererState = await freshJson(
     "preview-state-settled.json",
     launchedAt,
@@ -117,7 +124,7 @@ cliLog(JSON.stringify({ taskId: task.id }))
 const task = await useOrCreateTaskSpace(${taskId})
 cliLog(JSON.stringify({
   value: Number(await js("document.querySelector('.value').textContent")),
-  stopped: await js("clearInterval(globalThis.previewTimer); true"),
+  stopped: await js("clearInterval(globalThis.previewTimer); clearInterval(globalThis.frameTimer); true"),
   page: await pageInfo(),
 }))
 `),
@@ -156,6 +163,7 @@ cliLog(JSON.stringify(await completeTaskSpace(${taskId}, { keep: false })))
         finalRevision: progressed.publishedRevision[String(taskId)],
         sampledUpdates:
           Number(progressed.publishedRevision[String(taskId)]) - firstRevision,
+        samplingElapsedMs,
         firstCanvasSignature: firstCanvas.signature,
         finalCanvasSignature: finalCanvas.signature,
         canvasPixelsChanged: firstCanvas.signature !== finalCanvas.signature,
