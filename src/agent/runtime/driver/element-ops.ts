@@ -16,6 +16,7 @@ import {
 } from "../browser-runtime.js";
 import { state } from "../state.js";
 import { queryAllExpression } from "../locator-query.js";
+import { ActionabilityError } from "../errors.js";
 
 const CLICK_ACTIONABILITY_SOURCE = `async function(){
   if (!this || this.nodeType !== 1) return { ok: false, reason: "not-an-element" };
@@ -52,7 +53,16 @@ const CLICK_ACTIONABILITY_SOURCE = `async function(){
   let hit = this.ownerDocument.elementFromPoint(x, y);
   while (hit?.shadowRoot) hit = hit.shadowRoot.elementFromPoint(x, y) || hit;
   if (!hit || !(hit === this || this.contains(hit))) {
-    return { ok: false, reason: "intercepted", x, y };
+    const describe = (element) => {
+      if (!element) return "unknown";
+      if (element.id) return "#" + (view.CSS?.escape ? view.CSS.escape(element.id) : element.id);
+      const role = element.getAttribute?.("role");
+      const label = element.getAttribute?.("aria-label");
+      if (role && label) return '[role="' + role + '"][aria-label="' + label + '"]';
+      const classes = Array.from(element.classList || []).slice(0, 3);
+      return element.tagName.toLowerCase() + classes.map((name) => "." + name).join("");
+    };
+    return { ok: false, reason: "intercepted", interceptedBy: describe(hit), x, y };
   }
   return { ok: true, x, y };
 }`;
@@ -325,7 +335,11 @@ export async function waitForActionableHandle(
         : null;
   if (!source) throw new Error(`unsupported actionability state: ${action}`);
   let lastReason = "not-ready";
+  let interceptedBy;
+  let attempts = 0;
+  const callLog = ["等待元素解析、显示、启用并稳定"];
   do {
+    attempts += 1;
     let handle;
     try {
       handle = await resolveHandle(selectorOrRef);
@@ -348,6 +362,12 @@ export async function waitForActionableHandle(
         };
       }
       lastReason = value.reason || lastReason;
+      interceptedBy = value.interceptedBy || interceptedBy;
+      const detail =
+        value.reason === "intercepted" && value.interceptedBy
+          ? `第 ${attempts} 次：被 ${value.interceptedBy} 遮挡`
+          : `第 ${attempts} 次：${lastReason}`;
+      if (callLog.length < 14) callLog.push(detail);
       if (value.reason === "detached" && parseRef(selectorOrRef)) {
         await refreshStaleRef(selectorOrRef);
       }
@@ -360,15 +380,64 @@ export async function waitForActionableHandle(
         throw error;
       }
       lastReason = error.message;
+      if (callLog.length < 14) {
+        callLog.push(`第 ${attempts} 次：${lastReason}`);
+      }
     }
     if (handle) await releaseHandle(handle.objectId, handle.sessionId);
     const remaining = deadline - state.now();
     if (remaining <= 0) break;
     await state.sleep(Math.min(16, remaining));
   } while (state.now() <= deadline);
-  throw new Error(
-    `${operation}: element is not actionable (${lastReason}): ${JSON.stringify(selectorOrRef)}`,
-  );
+  callLog.push(`超时：${timeout} ms，最终原因 ${lastReason}`);
+  throw new ActionabilityError({
+    operation,
+    locator: selectorOrRef,
+    timeout,
+    reason: lastReason,
+    interceptedBy,
+    attempts,
+    callLog,
+  });
+}
+
+export async function resolveForcedClickHandle(selectorOrRef) {
+  const handle = await resolveHandle(selectorOrRef);
+  try {
+    const source = `function(){
+      if (!this || !this.isConnected) return { ok: false, reason: "detached" };
+      if (typeof this.scrollIntoViewIfNeeded === "function") this.scrollIntoViewIfNeeded(true);
+      else this.scrollIntoView({ block: "center", inline: "center" });
+      const rect = this.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return { ok: false, reason: "no-box" };
+      return { ok: true, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    }`;
+    const response = await cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration: source,
+        objectId: handle.objectId,
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      handle.sessionId,
+    );
+    const value = runtimeValue(response, source) || {};
+    if (!value.ok) {
+      throw new ElementResolutionError(
+        `forced click target is not ready (${value.reason || "unknown"})`,
+        "transient",
+      );
+    }
+    return {
+      ...handle,
+      x: Number(value.x || 0) + Number(handle.offsetX || 0),
+      y: Number(value.y || 0) + Number(handle.offsetY || 0),
+    };
+  } catch (error) {
+    await releaseHandle(handle.objectId, handle.sessionId);
+    throw error;
+  }
 }
 
 /**

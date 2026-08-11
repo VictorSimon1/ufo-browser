@@ -5,6 +5,8 @@
 - [Facades](#facades)
 - [Task Space lifecycle](#task-space-lifecycle)
 - [Host bindings](#host-bindings)
+- [Assertions and events](#assertions-and-events)
+- [Actionability and timeout errors](#actionability-and-timeout-errors)
 - [Request routing](#request-routing)
 - [Storage state](#storage-state)
 - [Tracing](#tracing)
@@ -23,7 +25,7 @@ Legacy `timeout`, `settle`, and `wait` values are interpreted as seconds.
 It also provides:
 
 - `frameLocator(selector)` for same-process, nested, and cross-origin iframe actions.
-- `waitForEvent('popup' | 'download')` for new tabs and downloads.
+- `on`, `off`, `once`, and `waitForEvent` for console, page exceptions, network requests, failures, new tabs, and downloads.
 - `route`, `unroute`, and `unrouteAll` for request interception.
 - `storageState` and `setStorageState` for selected-profile Cookie state and origin storage.
 - `tracing.start` and `tracing.stop` for Chromium performance traces.
@@ -33,6 +35,8 @@ It also provides:
 `taskSpaces` provides `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`.
 
 `site` provides optional learned site tools. `fetch.server` issues Node-side requests; `fetch.browser` issues requests from the active browser page. `cdp` sends a raw protocol command.
+
+The global `expect(target)` helper provides auto-retrying locator/page assertions.
 
 The installed flat host aliases also include `createTab`, `getBrowserVersion`,
 `listProfiles`, `markTaskSpaceError`, `sendCDPMessage`,
@@ -63,9 +67,10 @@ The UFO-Browser-owned runtime talks to these App host methods over newline-delim
 ```text
 createTab                   listTabs
 listTaskSpaces              listProfiles
-snapshot                    createTaskSpace
-claimTaskSpace              closeTaskSpace
-useTaskSpace                animationHighlightMouseToPosition
+snapshot                    resolveRef
+createTaskSpace             claimTaskSpace
+closeTaskSpace              useTaskSpace
+animationHighlightMouseToPosition
 handOffTaskSpace            takeOverTaskSpace
 completeTaskSpace           markTaskSpaceError
 setAgentTaskState           getBrowserVersion
@@ -90,6 +95,60 @@ or DOM replacement, ref-based operations refresh the snapshot internally and
 recover through that locator. Recovery rejects missing or ambiguous matches
 rather than selecting a different element. Snapshot text emits `loc=...` only
 when the locator is unique and executable from the root page context.
+
+The App also retains a bounded in-memory ref history per live tab. A fresh CLI
+process can therefore reuse an old `@N` from a previous heredoc. Recovery first
+uses the saved stable locator, then falls back to an exact role/name match, and
+only succeeds for one current element. The history does not survive an App or
+tab restart.
+
+## Assertions and events
+
+Assertions retry until they pass or the timeout expires:
+
+```js
+await expect(page.locator('#status')).toHaveText('Success', { timeout: 3000 })
+await expect(page.getByRole('button', { name: 'Next' })).toBeEnabled()
+await expect(page.getByRole('dialog')).toBeVisible()
+await expect(page.locator('tbody tr')).toHaveCount(10)
+await expect(page).toHaveURL(/dashboard/)
+await expect(page.locator('#email')).toHaveValue('agent@example.com')
+await expect(page.locator('.error')).not.toBeVisible()
+```
+
+`page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`,
+`request`, and `requestfailed`. Listeners live only for the current CLI process.
+
+```js
+page.on('console', message => cliLog(message.type() + ' ' + message.text()))
+page.on('pageerror', error => cliLog(error.message))
+
+const failed = await page.waitForEvent(
+  'requestfailed',
+  request => request.url().includes('/api/orders'),
+  { timeout: 3000 },
+)
+cliLog(failed.failure())
+```
+
+Console messages expose `type()`, `text()`, `args()`, and `location()`.
+Requests expose `url()`, `method()`, `headers()`, `postData()`,
+`resourceType()`, and `failure()`.
+
+## Actionability and timeout errors
+
+Normal locator clicks wait for the target to exist, be visible, enabled,
+stable, and able to receive pointer events. A failed click throws
+`ActionabilityError` with `locator`, `reason`, `interceptedBy`, `attempts`,
+`callLog`, and, when capture succeeds, `screenshot`.
+
+`locator.click({ trial: true })` performs the checks without clicking.
+`locator.click({ force: true })` intentionally bypasses normal hit-testing and
+should be reserved for pages where that behavior is explicitly required.
+
+`page.waitForSelector` throws `TimeoutError` by default. Use
+`{ returnFalseOnTimeout: true }` only when timeout-as-false is deliberate. The
+flat Ego-compatible `waitForElement` helper retains its boolean timeout result.
 
 ## Request routing
 
@@ -143,6 +202,7 @@ EGO_INVALID_RESULT_PAYLOAD
 EGO_OPERATION_FAILED
 EGO_RESULT_CONVERSION_FAILED
 EGO_SNAPSHOT_FAILED
+EGO_STALE_REF_AMBIGUOUS
 EGO_TASK_HOST_DISCONNECTED
 EGO_TASK_SPACE_INACTIVE
 EGO_TASK_SPACE_NOT_FOUND

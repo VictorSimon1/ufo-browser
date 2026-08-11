@@ -15,6 +15,22 @@ type FunctionDoc = {
 };
 
 const FUNCTION_DOCS: Record<string, FunctionDoc> = {
+  expect: {
+    signature: "expect(target) => Matchers",
+    description:
+      "Create an auto-retrying assertion for a locator or page. Supports .not plus toHaveText, toBeEnabled, toBeVisible, toHaveCount, toHaveURL, and toHaveValue.",
+    params: [
+      {
+        name: "target",
+        type: "Locator | Page",
+        required: true,
+        description: "Locator for element assertions, or page for toHaveURL.",
+      },
+    ],
+    returns: "Matchers",
+    example:
+      "await expect(page.locator('#status')).toHaveText('Success', { timeout: 3000 })",
+  },
   "page.setDefaultTimeout": {
     signature: "page.setDefaultTimeout(timeoutMs) => void",
     description:
@@ -264,8 +280,9 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: "await page.waitForLoadState('networkidle', { timeout: 10000 })",
   },
   "page.waitForSelector": {
-    signature: "page.waitForSelector(selector, options?) => Promise<any>",
-    description: "Wait for a selector or locator to reach a desired state.",
+    signature: "page.waitForSelector(selector, options?) => Promise<boolean>",
+    description:
+      "Wait for a selector or locator to reach a desired state. Throws TimeoutError by default; set returnFalseOnTimeout only when absence is an expected branch.",
     params: [
       {
         name: "selector",
@@ -275,11 +292,11 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
       },
       {
         name: "options",
-        type: "{ state?: string, timeout?: number }",
-        description: "State and timeout options.",
+        type: "{ state?: 'attached' | 'visible', timeout?: number, returnFalseOnTimeout?: boolean }",
+        description: "State, timeout in milliseconds, and explicit false-on-timeout behavior.",
       },
     ],
-    returns: "Promise<any>",
+    returns: "Promise<boolean>",
     example:
       "await page.waitForSelector('button.submit', { state: 'visible' })",
   },
@@ -411,24 +428,66 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<void>",
     example: "await page.unrouteAll()",
   },
+  "page.on": {
+    signature: "page.on(eventName, listener) => Page",
+    description:
+      "Subscribe for the current CLI process to console, pageerror, request, or requestfailed events.",
+    params: [
+      {
+        name: "eventName",
+        type: "'console' | 'pageerror' | 'request' | 'requestfailed'",
+        required: true,
+        description: "Page event to observe.",
+      },
+      {
+        name: "listener",
+        type: "Function",
+        required: true,
+        description: "Synchronous event listener.",
+      },
+    ],
+    returns: "Page",
+    example: "page.on('console', message => cliLog(message.text()))",
+  },
+  "page.off": {
+    signature: "page.off(eventName, listener) => Page",
+    description: "Remove a page event listener registered with page.on().",
+    returns: "Page",
+    example: "page.off('console', listener)",
+  },
+  "page.once": {
+    signature: "page.once(eventName, listener) => Page",
+    description: "Run a page event listener once, then remove it.",
+    returns: "Page",
+    example: "page.once('pageerror', error => cliLog(error.message))",
+  },
   "page.waitForEvent": {
-    signature: "page.waitForEvent(eventName, options?) => Promise<any>",
-    description: "Wait for a download or popup page event.",
+    signature:
+      "page.waitForEvent(eventName, predicate?, options?) => Promise<any>",
+    description:
+      "Wait for popup, download, console, pageerror, request, or requestfailed. Console and network events accept a synchronous predicate.",
     params: [
       {
         name: "eventName",
         type: "string",
         required: true,
-        description: "Event name: download or popup.",
+        description:
+          "Event name: popup, download, console, pageerror, request, or requestfailed.",
+      },
+      {
+        name: "predicate",
+        type: "Function",
+        description: "Optional synchronous predicate for supported page events.",
       },
       {
         name: "options",
         type: "{ timeout?: number }",
-        description: "Timeout in milliseconds.",
+        description: "Timeout in milliseconds. May be passed as the second argument when no predicate is needed.",
       },
     ],
     returns: "Promise<any>",
-    example: "const popup = await page.waitForEvent('popup')",
+    example:
+      "const failed = await page.waitForEvent('requestfailed', request => request.url().includes('/api'))",
   },
   "page.evaluate": {
     signature: "page.evaluate(expression) => Promise<any>",

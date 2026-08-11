@@ -1,14 +1,16 @@
 // @ts-nocheck
 import { cdp, evaluate } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
-import { elementCenter } from "./observe.js";
+import { elementCenter, screenshot } from "./observe.js";
 import {
   releaseHandle,
   resolveAndCall,
+  resolveForcedClickHandle,
   waitForActionableHandle,
 } from "./element-ops.js";
 import { waitForSelector } from "./waits.js";
 import { state } from "../state.js";
+import { ActionabilityError } from "../errors.js";
 
 type MouseButton = "left" | "middle" | "right";
 type Point = {
@@ -26,6 +28,8 @@ type ClickOptions = {
   clickCount?: number;
   label?: string;
   timeout?: number;
+  trial?: boolean;
+  force?: boolean;
 };
 type DragOptions = {
   button?: MouseButton;
@@ -105,15 +109,56 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
 }
 
 async function clickSelector(selector: string, options: ClickOptions) {
+  if (options.trial && options.force) {
+    throw new Error("locator.click options.trial and options.force cannot be combined");
+  }
   const timeout = options.timeout ?? state.defaultTimeout;
   const deadline = state.now() + Math.max(0, timeout);
   let lastFailure = "trusted click was not observed";
   do {
     const remaining = Math.max(0, deadline - state.now());
-    const handle = await waitForActionableHandle(selector, "click", {
-      timeout: remaining,
-      operation: "click",
-    });
+    let handle;
+    try {
+      if (options.force) {
+        await waitForSelector(selector, {
+          timeout: remaining,
+          state: "attached",
+        });
+        handle = await resolveForcedClickHandle(selector);
+      } else {
+        handle = await waitForActionableHandle(selector, "click", {
+          timeout: remaining,
+          operation: options.trial ? "click (trial)" : "click",
+        });
+      }
+    } catch (error) {
+      if (error instanceof ActionabilityError) {
+        const path = await screenshot().catch(() => undefined);
+        if (path) error.attachScreenshot(path);
+      }
+      throw error;
+    }
+    if (options.trial) {
+      await releaseHandle(handle.objectId, handle.sessionId);
+      return;
+    }
+    if (options.force) {
+      try {
+        await cdp(
+          "Runtime.callFunctionOn",
+          {
+            functionDeclaration: "function(){this.click();return true}",
+            objectId: handle.objectId,
+            returnByValue: true,
+            awaitPromise: false,
+          },
+          handle.sessionId,
+        );
+      } finally {
+        await releaseHandle(handle.objectId, handle.sessionId);
+      }
+      return;
+    }
     const point = {
       x: handle.x,
       y: handle.y,

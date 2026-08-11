@@ -19,6 +19,9 @@ import * as routing from "./driver/routing.js";
 import * as storage from "./driver/storage-state.js";
 import * as tracing from "./driver/tracing.js";
 import * as screencast from "./driver/screencast.js";
+import * as events from "./driver/events.js";
+import { expectTarget } from "./driver/expect.js";
+export { TimeoutError, ActionabilityError } from "./errors.js";
 import {
   frameLocatorSelector,
   parseFrameLocatorSelector,
@@ -110,6 +113,7 @@ export { storageState, setStorageState } from "./driver/storage-state.js";
 export { startTracing, stopTracing } from "./driver/tracing.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
 export { browserFetch, serverFetch } from "./http.js";
+export const expect = expectTarget;
 
 /**
  * List all task spaces.
@@ -774,7 +778,7 @@ function roleNameMatcher(value) {
 }
 
 function createPageFacade() {
-  return {
+  const facade: any = {
     setDefaultTimeout: (timeout) => {
       const value = Number(timeout);
       if (!Number.isFinite(value) || value < 0) {
@@ -825,7 +829,32 @@ function createPageFacade() {
     unrouteAll: routing.unrouteAll,
     storageState: storage.storageState,
     setStorageState: storage.setStorageState,
-    waitForEvent: downloads.waitForEvent,
+    on: (eventName, listener) => {
+      events.onPageEvent(eventName, listener);
+      return facade;
+    },
+    off: (eventName, listener) => {
+      events.offPageEvent(eventName, listener);
+      return facade;
+    },
+    once: (eventName, listener) => {
+      events.oncePageEvent(eventName, listener);
+      return facade;
+    },
+    waitForEvent: (eventName, predicateOrOptions = {}, maybeOptions = {}) => {
+      if (events.supportsPageEvent(eventName)) {
+        return events.waitForPageEvent(
+          eventName,
+          predicateOrOptions,
+          maybeOptions,
+        );
+      }
+      const options =
+        typeof predicateOrOptions === "function"
+          ? maybeOptions
+          : predicateOrOptions;
+      return downloads.waitForEvent(eventName, options);
+    },
     evaluate,
     screenshot: observe.screenshot,
     snapshot: observe.snapshot,
@@ -863,6 +892,7 @@ function createPageFacade() {
       drag: pointer.drag,
     },
   };
+  return facade;
 }
 
 function mousePointArgs(x, y, options) {
@@ -911,9 +941,9 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.waitForEvent("download" | "popup"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.on/off/once("console" | "pageerror" | "request" | "requestfailed"), page.waitForEvent("download" | "popup" | "console" | "pageerror" | "request" | "requestfailed"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). Use expect(locator/page) for auto-retrying assertions. waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
-    "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), inputValue(), isVisible(), isEnabled(), isEditable(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Actions retry while elements become visible, enabled, stable, and able to receive events. Snapshot refs automatically recover after navigation or DOM replacement when a unique stable locator is available. Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
+    "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click({ trial?, force? }), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), inputValue(), isVisible(), isEnabled(), isEditable(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Actions retry while elements become visible, enabled, stable, and able to receive events. Failed actions throw ActionabilityError with a call log, interceptor, retry count, and final screenshot when available. Snapshot refs automatically recover after navigation, DOM replacement, and a new heredoc within the same App run when a unique stable locator is available. Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
   browser:
     "browser: tab and storage facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), browser.closeTab(target), browser.storageState(options), and browser.setStorageState(stateOrPath, options). Treat targetId as short-lived: obtain and validate it in the current script before acting.",
   taskSpaces:
@@ -933,6 +963,7 @@ export function helperContext(extra: any = {}) {
       server: serverFetch,
       browser: browserFetch,
     },
+    expect: expectTarget,
     cdp,
     ...extra,
   };

@@ -12,7 +12,11 @@ export function registerSnapshotForRefRefresh(fn: () => Promise<unknown>) {
 
 export async function ensureRefMapForRef(selectorOrRef: unknown) {
   if (typeof selectorOrRef !== "string") return;
-  if (!parseRef(selectorOrRef)) return;
+  const refId = parseRef(selectorOrRef);
+  if (!refId) return;
+  if (browserRefMap.get(refId)) return;
+  const historical = await restoreHistoricalRef(refId);
+  if (historical) return;
   if (browserRefMap.map.size > 0) return;
   await refreshSnapshot();
 }
@@ -45,6 +49,26 @@ async function refreshSnapshot() {
     });
   }
   await refreshInflight;
+}
+
+async function restoreHistoricalRef(refId: string) {
+  const resolveRef = (globalThis as any).ego?.resolveRef;
+  if (typeof resolveRef !== "function") return false;
+  const entry = await resolveRef(Number(refId));
+  if (!entry || typeof entry !== "object") return false;
+  if (entry.backendNodeId === undefined || entry.backendNodeId === null) {
+    return false;
+  }
+  browserRefMap.addWithFrame(
+    refId,
+    entry.backendNodeId,
+    entry.role,
+    entry.name,
+    entry.nth,
+    entry.frameId,
+    entry.loc,
+  );
+  return true;
 }
 
 function sameStableTarget(left, right) {

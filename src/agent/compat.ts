@@ -302,6 +302,7 @@ export function createEgoCompatibilityContext(
       call(harness.waitForSelector ?? page.waitForSelector, selector, {
         ...options,
         timeout: secondsToMilliseconds(options.timeout, 20_000),
+        returnFalseOnTimeout: true,
       }),
     waitForNetworkIdle: (options: Record<string, any> = {}) =>
       call(harness.waitForLoadState ?? page.waitForLoadState, "networkidle", {

@@ -54,6 +54,10 @@ try {
 
   assert.equal(audit.covered.permanentSilentSuccesses, 0, JSON.stringify(audit.covered));
   assert.equal(audit.covered.retrySuccesses, 5, JSON.stringify(audit.covered));
+  assert.match(audit.covered.attempts[0].permanent.message, /#cover/);
+  assert.equal(audit.covered.attempts[0].permanent.name, "ActionabilityError");
+  assert.equal(audit.covered.attempts[0].permanent.interceptedBy, "#cover");
+  assert.ok(audit.covered.attempts[0].permanent.attempts > 1);
   assert.equal(audit.readonly.successes, 5, JSON.stringify(audit.readonly));
   assert.equal(audit.disabled.successes, 5, JSON.stringify(audit.disabled));
   assert.equal(audit.responseBody.successes, 5, JSON.stringify(audit.responseBody));
@@ -89,6 +93,17 @@ try {
   assert.equal(audit.stableRef.count, 1, JSON.stringify(audit.stableRef));
   assert.equal(audit.popup.path, "/popup", JSON.stringify(audit.popup));
   assert.equal(audit.delayed.clicked, 1, JSON.stringify(audit.delayed));
+  assert.deepEqual(audit.actionOptions, {
+    trialClicks: 0,
+    forcedClicks: 1,
+  });
+  assert.equal(audit.expectation.text, "Success", JSON.stringify(audit.expectation));
+  assert.equal(audit.events.consoleWait, "ufo-console-error");
+  assert.match(audit.events.pageError, /ufo-page-error/);
+  assert.equal(audit.events.requestMethod, "GET");
+  assert.match(audit.events.requestFailure, /ERR_|Failed|Aborted|blocked/i);
+  assert.ok(audit.events.consoleObserved >= 1);
+  assert.ok(audit.events.pageErrorsObserved >= 1);
   assert.ok(audit.delayed.elapsedMs < 300, JSON.stringify(audit.delayed));
   assert.ok(audit.performance.typeTextP50Ms < 10, JSON.stringify(audit.performance));
   assert.ok(audit.performance.snapshotP50Ms < 2, JSON.stringify(audit.performance));
@@ -103,7 +118,56 @@ try {
   assert.equal(audit.performance.clickSuccesses, 5, JSON.stringify(audit.performance));
   assert.ok(audit.performance.clickP50Ms < 150, JSON.stringify(audit.performance));
 
-  process.stdout.write(`${JSON.stringify({ ok: true, ...audit }, null, 2)}\n`);
+  const crossSnapshot = markedJson(
+    await runCli(`
+await switchTaskSpace(${Number(taskId)})
+await page.goto(${JSON.stringify(fixtureUrl + "?cross-heredoc=1")}, { timeout: 20000 })
+const raw = await page.snapshotRaw()
+const ref = raw.refs.find(entry => entry.role === 'button' && entry.name === 'Stale action')?.refId
+if (!ref) throw new Error('cross-heredoc snapshot ref missing')
+cliLog('__UFO_CROSS_REF__' + JSON.stringify({ ref }))
+`),
+    "__UFO_CROSS_REF__",
+  );
+  const crossHeredoc = { successes: 0, attempts: [] };
+  for (let index = 0; index < 5; index += 1) {
+    await runCli(`
+await switchTaskSpace(${Number(taskId)})
+await page.goto(${JSON.stringify(fixtureUrl)} + '?cross-heredoc=' + ${Number(index)}, { waitUntil: 'load', timeout: 20000 })
+`);
+    const attempt = markedJson(
+      await runCli(`
+await switchTaskSpace(${Number(taskId)})
+await page.locator('@${Number(crossSnapshot.ref)}').click({ timeout: 1000 })
+cliLog('__UFO_CROSS_RESULT__' + JSON.stringify({ count: await page.evaluate(() => window.fixture.state.stale) }))
+`),
+      "__UFO_CROSS_RESULT__",
+    );
+    crossHeredoc.attempts.push(attempt);
+    if (attempt.count === 1) crossHeredoc.successes += 1;
+  }
+  assert.equal(crossHeredoc.successes, 5, JSON.stringify(crossHeredoc));
+
+  await runCli(`
+await switchTaskSpace(${Number(taskId)})
+await page.goto(${JSON.stringify(fixtureUrl + "?duplicate-stale=1")}, { waitUntil: 'load', timeout: 20000 })
+`);
+  const ambiguousRef = markedJson(
+    await runCli(`
+await switchTaskSpace(${Number(taskId)})
+let error
+try { await page.locator('@${Number(crossSnapshot.ref)}').click({ timeout: 500 }) }
+catch (caught) { error = { name: caught?.name, message: caught?.message || String(caught) } }
+cliLog('__UFO_AMBIGUOUS_REF__' + JSON.stringify({ error, count: await page.evaluate(() => window.fixture.state.stale) }))
+`),
+    "__UFO_AMBIGUOUS_REF__",
+  );
+  assert.match(ambiguousRef.error?.message || "", /EGO_STALE_REF_AMBIGUOUS/);
+  assert.equal(ambiguousRef.count, 0, JSON.stringify(ambiguousRef));
+
+  process.stdout.write(
+    `${JSON.stringify({ ok: true, ...audit, crossHeredoc, ambiguousRef }, null, 2)}\n`,
+  );
 } finally {
   if (taskId) {
     await runCli(`
@@ -126,7 +190,16 @@ page.setDefaultTimeout(1000)
 const resultOf = async operation => {
   const started = performance.now()
   try { return { ok: true, value: await operation(), ms: performance.now() - started } }
-  catch (error) { return { ok: false, message: error?.message || String(error), ms: performance.now() - started } }
+  catch (error) { return {
+    ok: false,
+    name: error?.name,
+    message: error?.message || String(error),
+    reason: error?.reason,
+    interceptedBy: error?.interceptedBy,
+    attempts: error?.attempts,
+    screenshot: error?.screenshot,
+    ms: performance.now() - started,
+  } }
 }
 const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]
 const p95 = values => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.ceil(values.length * .95) - 1)]
@@ -181,6 +254,38 @@ const aborted = await page.evaluate(() => fetch('/route-abort').then(() => false
 await page.unrouteAll()
 const unrouted = await page.evaluate(() => fetch('/route-fulfill').then(response => response.json()))
 const routing = { fulfilled, continued, aborted, unrouted }
+
+const consoleEvents = []
+const pageErrors = []
+const requestEvents = []
+const failedRequests = []
+page.on('console', message => consoleEvents.push(message.type() + ':' + message.text()))
+page.on('pageerror', error => pageErrors.push(error.message))
+page.on('request', request => requestEvents.push(request.method() + ' ' + request.url()))
+page.on('requestfailed', request => failedRequests.push(request.failure()?.errorText || ''))
+const consolePromise = page.waitForEvent('console', message => message.text().includes('ufo-console-error'), { timeout: 1000 })
+await page.evaluate(() => console.error('ufo-console-error'))
+const consoleMessage = await consolePromise
+const pageErrorPromise = page.waitForEvent('pageerror', error => error.message.includes('ufo-page-error'), { timeout: 1000 })
+await page.evaluate(() => setTimeout(() => { throw new Error('ufo-page-error') }, 0))
+const pageError = await pageErrorPromise
+const requestPromise = page.waitForEvent('request', request => request.url().includes('/event-request'), { timeout: 1000 })
+const eventRequestFetch = page.evaluate(() => fetch('/event-request').then(response => response.text()))
+const requestEvent = await requestPromise
+await eventRequestFetch
+const requestFailurePromise = page.waitForEvent('requestfailed', request => request.url().includes('/event-fail'), { timeout: 3000 })
+await page.evaluate(() => fetch('/event-fail').catch(() => 'failed'))
+const requestFailure = await requestFailurePromise
+const events = {
+  consoleWait: consoleMessage.text(),
+  pageError: pageError.message,
+  requestMethod: requestEvent.method(),
+  requestFailure: requestFailure.failure()?.errorText || '',
+  consoleObserved: consoleEvents.length,
+  pageErrorsObserved: pageErrors.length,
+  requestsObserved: requestEvents.length,
+  failuresObserved: failedRequests.length,
+}
 
 await page.evaluate(() => {
   localStorage.setItem('ufo-state', 'alpha')
@@ -269,6 +374,22 @@ const delayed = {
   elapsedMs: performance.now() - delayedStarted,
   clicked: await js('window.fixture.state.delayed'),
 }
+
+await page.evaluate(() => {
+  const status = document.querySelector('#expect-status')
+  status.textContent = 'Working'
+  setTimeout(() => { status.textContent = 'Success' }, 120)
+})
+await expect(page.locator('#expect-status')).toHaveText('Success', { timeout: 800 })
+const expectation = { text: await page.locator('#expect-status').innerText() }
+
+await page.evaluate(() => { window.fixture.state.fast = 0 })
+await page.locator('#fast').click({ trial: true, timeout: 500 })
+const trialClicks = await page.evaluate(() => window.fixture.state.fast)
+await page.evaluate(() => window.fixture.resetCovered(-1))
+await page.locator('#covered').click({ force: true, timeout: 500 })
+const forcedClicks = await page.evaluate(() => window.fixture.state.covered)
+const actionOptions = { trialClicks, forcedClicks }
 
 const typeTextSamples = []
 const snapshotSamples = []
@@ -391,6 +512,9 @@ cliLog('__UFO_LOCATOR_RELIABILITY__' + JSON.stringify({
   stableRef,
   popup,
   delayed,
+  actionOptions,
+  expectation,
+  events,
   performance: {
     typeTextSamples,
     typeTextP50Ms: median(typeTextSamples),
@@ -440,6 +564,10 @@ function createFixtureServer() {
       response.end("should not reach the network");
       return;
     }
+    if (url.pathname === "/event-fail") {
+      response.socket?.destroy();
+      return;
+    }
     response.setHeader("content-type", "text/html; charset=utf-8");
     if (url.pathname === "/frame") {
       response.end(`<!doctype html><meta charset="utf-8"><button id="frame-action">Frame action</button><input id="frame-input"><iframe id="nested-frame" src="/nested-frame"></iframe><script>window.fixtureClicks=0;document.querySelector('#frame-action').onclick=()=>window.fixtureClicks++<\/script>`);
@@ -478,6 +606,8 @@ function createFixtureServer() {
       <input id="upload" type="file">
       <button id="fast">Fast action</button>
       <button id="stale">Stale action</button>
+      ${url.searchParams.has("duplicate-stale") ? '<button id="stale-duplicate">Stale action</button>' : ""}
+      <div id="expect-status">Idle</div>
       <a id="stable-link" href="#stable-target">Stable link</a>
       <button>Duplicate action</button><button>Duplicate action</button>
       <script>
@@ -589,6 +719,12 @@ function connectOnce(socketPath) {
 
 function runCli(source = "") {
   return runProcess(join(root, "dist/bin/ufo-browser"), ["nodejs"], source);
+}
+
+function markedJson(output, marker) {
+  const line = output.split(/\r?\n/).find((value) => value.startsWith(marker));
+  if (!line) throw new Error(`missing ${marker} in CLI output: ${output}`);
+  return JSON.parse(line.slice(marker.length));
 }
 
 function runProcess(command, args, stdin = "") {

@@ -42,6 +42,9 @@ export const state = {
   defaultTimeout: 10000,
   // Last observed Network domain state on the default session (tracked in cdp()).
   networkDomainEnabled: false,
+  // Persistent page event listeners keep Network enabled while temporary
+  // request/response waiters come and go.
+  networkDomainRetainers: 0,
 };
 
 export async function send(req) {

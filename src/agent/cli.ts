@@ -46,6 +46,7 @@ class AgentHost {
   };
   listTabs = () => this.rpc("listTabs");
   snapshot = (options?: unknown) => this.rpc("snapshot", options);
+  resolveRef = (refId: number) => this.rpc("resolveRef", refId);
   handOffTaskSpace = () => this.rpc("handOffTaskSpace");
   takeOverTaskSpace = () => this.rpc("takeOverTaskSpace");
   completeTaskSpace = () => this.rpc("completeTaskSpace");

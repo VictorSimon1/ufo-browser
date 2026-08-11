@@ -61,6 +61,14 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
   };
   const snapshot = {
     snapshot: async () => ({ content: "ok", refs: [] }),
+    resolveHistoricalRef: async (spaceId: number, refId: number) => ({
+      refId,
+      backendNodeId: 81,
+      role: "button",
+      name: "Submit",
+      loc: "role:button[name=\"Submit\"]",
+      spaceId,
+    }),
   };
   const server = new AgentServer(
     socketPath,
@@ -89,6 +97,16 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
 
     const resumed = await rpc(socket, 4, "snapshot", []);
     assert.deepEqual(resumed.result, { content: "ok", refs: [] });
+
+    const restoredRef = await rpc(socket, 41, "resolveRef", [21]);
+    assert.deepEqual(restoredRef.result, {
+      refId: 21,
+      backendNodeId: 81,
+      role: "button",
+      name: "Submit",
+      loc: "role:button[name=\"Submit\"]",
+      spaceId: 7,
+    });
 
     const invalidTab = await rpc(socket, 5, "createTab", []);
     assert.equal(invalidTab.type, "rpc-error");

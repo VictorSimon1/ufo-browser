@@ -87,6 +87,10 @@ const SNAPSHOT_VERSION_SOURCE = `(() => {
 export class SnapshotService {
   private readonly accessibilityEnabled = new WeakSet<WebContents>();
   private readonly cache = new WeakMap<WebContents, CachedSnapshot>();
+  private readonly refHistory = new WeakMap<
+    WebContents,
+    Map<number, SnapshotRef>
+  >();
 
   constructor(private readonly manager: TaskSpaceManager) {}
 
@@ -110,7 +114,9 @@ export class SnapshotService {
       cached?.optionsKey === optionsKey &&
       sameSnapshotVersion(cached.version, version)
     ) {
-      return snapshotResult(cached.content, cached.refs, options);
+      const result = snapshotResult(cached.content, cached.refs, options);
+      this.rememberRefs(view.webContents, result.refs);
+      return result;
     }
 
     let captured = await this.capture(view, options);
@@ -139,7 +145,49 @@ export class SnapshotService {
     } else {
       this.cache.delete(view.webContents);
     }
-    return snapshotResult(captured.content, captured.refs, options);
+    const result = snapshotResult(captured.content, captured.refs, options);
+    this.rememberRefs(view.webContents, result.refs);
+    return result;
+  }
+
+  async resolveHistoricalRef(spaceId: number, refId: number) {
+    if (!Number.isSafeInteger(refId) || refId <= 0) {
+      throw new Error(`EGO_INVALID_ARGUMENT: invalid ref ${refId}`);
+    }
+    const tab = this.manager.getActiveTab(spaceId);
+    const view = await this.manager.ensureTabRuntime(spaceId, tab.targetId);
+    const stale = this.refHistory.get(view.webContents)?.get(refId);
+    if (!stale) return null;
+
+    const current = await this.snapshot(spaceId, {
+      includeActionMarks: true,
+      includeStableLocator: true,
+    });
+    let candidates = stale.loc
+      ? current.refs.filter(
+          (candidate) =>
+            candidate.loc === stale.loc &&
+            Boolean(candidate.frameId) === Boolean(stale.frameId),
+        )
+      : [];
+    if (candidates.length === 0) {
+      candidates = current.refs.filter(
+        (candidate) =>
+          candidate.role === stale.role &&
+          candidate.name === stale.name &&
+          Boolean(candidate.frameId) === Boolean(stale.frameId),
+      );
+    }
+    if (candidates.length > 1) {
+      throw new Error(
+        `EGO_STALE_REF_AMBIGUOUS: stale ref @${refId} (${stale.role} ${JSON.stringify(stale.name)}) matched ${candidates.length} elements after refresh`,
+      );
+    }
+    const candidate = candidates[0];
+    if (!candidate) return null;
+    const recovered = { ...candidate, refId };
+    this.rememberRefs(view.webContents, [recovered]);
+    return recovered;
   }
 
   private async capture(view: WebContentsView, options: SnapshotOptions) {
@@ -221,6 +269,25 @@ export class SnapshotService {
       refs,
       hasChildTargets: childTargets.length > 0,
     };
+  }
+
+  private rememberRefs(webContents: WebContents, refs: SnapshotRef[]) {
+    let history = this.refHistory.get(webContents);
+    if (!history) {
+      history = new Map();
+      this.refHistory.set(webContents, history);
+    }
+    for (const ref of refs) {
+      const refId = ref.refId ?? ref.backendNodeId;
+      if (!Number.isSafeInteger(refId) || refId <= 0) continue;
+      history.delete(refId);
+      history.set(refId, { ...ref, refId });
+    }
+    while (history.size > 4096) {
+      const oldest = history.keys().next().value;
+      if (oldest === undefined) break;
+      history.delete(oldest);
+    }
   }
 }
 

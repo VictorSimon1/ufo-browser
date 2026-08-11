@@ -58,6 +58,9 @@ For Playwright-style automation, use the structured `page` facade:
 - Network interception: `page.route(matcher, handler, { times })`, `page.unroute(...)`, and `page.unrouteAll()` support glob, RegExp, and predicate matchers plus `route.continue()`, `route.fulfill()`, and `route.abort()`.
 - Session state: `page.storageState({ path })` captures all cookies in the selected UFO profile and localStorage for the current page origin. `page.setStorageState(stateOrPath, { clear })` restores them. State files contain live credentials in plaintext; protect them and delete them when no longer needed. This does not unlock or import an encrypted Chrome profile.
 - Performance traces: `page.tracing.start(...)` and `page.tracing.stop({ path })` write Chrome Trace/Perfetto-compatible JSON.
+- Assertions: `await expect(locator).toHaveText(...)`, `toBeVisible`, `toBeEnabled`, `toHaveCount`, `toHaveValue`, and `await expect(page).toHaveURL(...)` retry until success or throw `TimeoutError`. Add `.not` for negated assertions.
+- Events: `page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`, `request`, and `requestfailed`; popup/download waits remain supported.
+- Actionability: locator clicks wait for visibility, enabled state, stability, and an unobstructed hit target. `click({ trial: true })` checks without clicking. Use `force: true` only when intentionally bypassing normal page hit-testing.
 
 
 ### Task spaces
@@ -133,6 +136,8 @@ await scroll({ dy: 900 })
 
 Element-target helpers such as `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `uploadFile`, and `waitForElement` accept the same selector/ref surface: raw CSS, `xpath=...`, `@N` / `ref=N`, and `loc=...` values from `snapshotText()` (`loc=css:...`, `loc=role:...`, `loc=href:...`). `@N` refs are for ufo-browser helpers only; they are not valid selectors inside `document.querySelector(...)`.
 
+Refs can survive separate heredoc invocations while the same UFO-Browser App and tab remain alive. If a local ref map is empty, UFO asks the App for the prior ref's stable locator or role/name and restores it only when the current page has exactly one match. Ambiguous recovery throws instead of guessing; App restarts clear this in-memory history.
+
 `click`, `doubleClick`, `hover`, and `dragMouse` share these target formats. Coordinates are in CSS pixels:
 
 - `string` — CSS selector, `xpath=...`, `@N` / `ref=N`, or `loc=...`; clicks the element's center.
@@ -205,6 +210,7 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 - `wait(...)` and `timeout` values are in **seconds**; only parameters whose names end in `Ms` are milliseconds.
 - `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs only visible content.
 - `@N` refs come from the latest `snapshotText()` result. UFO-Browser automatically refreshes a stale ref after navigation or DOM replacement when it can recover the element through a unique stable locator. If the element disappeared or the locator became ambiguous, the action still fails instead of guessing. Snapshot output only includes `loc=...` values that are unique and executable from the root page context; prefer them or explicit CSS for long-lived scripts.
+- `page.waitForSelector(...)` throws `TimeoutError` by default. Pass `{ returnFalseOnTimeout: true }` only when a missing element is an expected branch. The legacy flat `waitForElement(...)` helper keeps its boolean timeout behavior for Ego compatibility.
 - `js()` returns the evaluated result, not a JSON string — don't wrap it with `JSON.parse(...)`.
 - Inside a `js(...)` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.
 - If the source passed to `js()` contains a top-level `return`, it will be auto-wrapped in an IIFE; `return` inside nested callbacks can also trigger this accidentally. For complex expressions, prefer the explicit `(() => { ... })()` form.

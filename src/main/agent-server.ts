@@ -203,6 +203,13 @@ export class AgentServer {
         const { spaceId } = this.assertAgentControl(connection);
         return this.snapshotService.snapshot(spaceId, args[0]);
       }
+      case "resolveRef": {
+        const { spaceId } = this.assertAgentControl(connection);
+        return this.snapshotService.resolveHistoricalRef(
+          spaceId,
+          Number(args[0]),
+        );
+      }
       case "handOffTaskSpace": {
         const { spaceId } = this.assertAgentControl(connection);
         await this.manager.setOwnership(spaceId, "agentDelegatedToUser", "active");

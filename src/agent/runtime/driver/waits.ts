@@ -6,10 +6,12 @@ import { ElementResolutionError } from "../element-resolver.js";
 import { waitForDocumentLoad } from "./load.js";
 import { drainEvents } from "./observe.js";
 import { waitForBrowserEvent } from "../browser-runtime.js";
+import { TimeoutError } from "../errors.js";
 
 type WaitForSelectorOptions = {
   timeout?: number;
   state?: "visible" | "attached";
+  returnFalseOnTimeout?: boolean;
 };
 
 type WaitForFunctionOptions = {
@@ -483,6 +485,7 @@ function acquireNetworkEvents() {
       }
       if (networkEventsOwnDomain) {
         networkEventsOwnDomain = false;
+        if (state.networkDomainRetainers > 0) return;
         await cdp("Network.disable").catch(() => {
           // Best-effort cleanup; the next wait can enable the domain again.
         });
@@ -494,8 +497,8 @@ function acquireNetworkEvents() {
 /**
  * Wait until an element exists, optionally requiring visibility.
  * @param {string} selector CSS selector / @ref / loc= / xpath= to poll.
- * @param {{timeout?: number, state?: "visible"|"attached"}} [options] timeout in milliseconds; state defaults to "attached".
- * @returns {Promise<boolean>} True when found before timeout.
+ * @param {{timeout?: number, state?: "visible"|"attached", returnFalseOnTimeout?: boolean}} [options] timeout in milliseconds; state defaults to "attached".
+ * @returns {Promise<boolean>} True when found. Throws TimeoutError unless returnFalseOnTimeout is true.
  */
 export async function waitForSelector(
   selector: string,
@@ -541,7 +544,35 @@ export async function waitForSelector(
       Math.min(SELECTOR_POLL_INTERVAL_MS, Math.max(0, deadline - state.now())),
     );
   }
-  return false;
+  if (options.returnFalseOnTimeout) return false;
+  const [url, matchCount] = await Promise.all([
+    currentUrl().catch(() => ""),
+    selectorMatchCount(selector).catch(() => 0),
+  ]);
+  throw new TimeoutError(
+    `page.waitForSelector timed out after ${timeout}ms: ${selector}\nLast page: ${url || "unknown"}\nMatch count: ${matchCount}`,
+    { timeout, locator: selector, url, matchCount },
+  );
+}
+
+async function currentUrl() {
+  const response = await cdp("Runtime.evaluate", {
+    expression: "location.href",
+    returnByValue: true,
+    awaitPromise: false,
+  });
+  return String(response.result?.value || "");
+}
+
+async function selectorMatchCount(selector) {
+  try {
+    const handle = await resolveHandle(selector);
+    await releaseHandle(handle.objectId, handle.sessionId);
+    return 1;
+  } catch (error) {
+    const matched = /matched (\d+) elements/.exec(error?.message || "");
+    return matched ? Number(matched[1]) : 0;
+  }
 }
 
 /**
