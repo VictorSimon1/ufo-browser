@@ -55,6 +55,12 @@ import {
   chromiumAcceptLanguages,
   reducedChromiumUserAgent,
 } from "./main/chromium-identity.js";
+import {
+  isTemporaryProfileId,
+  TEMPORARY_PROFILE_ID,
+  temporaryPublicProfile,
+  temporarySessionPartition,
+} from "./main/temporary-profile.js";
 
 const isTestApp =
   process.env.UFO_BROWSER_TEST_APP === "1" ||
@@ -745,6 +751,38 @@ async function start() {
     }, 350);
   }
 
+  if (isTestApp && process.env.X_BROWSER_TEST_TEMPORARY_PROFILE_AUDIT === "1") {
+    setTimeout(() => {
+      void runTemporaryProfileAudit({
+        testRoot,
+        userDataPath,
+        manager,
+        profiles,
+      }).catch(async (error) => {
+        await writeFile(
+          join(testRoot, "temporary-profile-audit.json"),
+          `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+        ).catch(() => undefined);
+      });
+    }, 500);
+  }
+
+  if (
+    isTestApp &&
+    process.env.X_BROWSER_TEST_TEMPORARY_PROFILE_RESTORE_AUDIT === "1"
+  ) {
+    setTimeout(() => {
+      void runTemporaryProfileRestoreAudit({ testRoot, manager }).catch(
+        async (error) => {
+          await writeFile(
+            join(testRoot, "temporary-profile-restore-audit.json"),
+            `${JSON.stringify({ ok: false, error: String(error) }, null, 2)}\n`,
+          ).catch(() => undefined);
+        },
+      );
+    }, 350);
+  }
+
   if (isTestApp && process.env.X_BROWSER_TEST_WARM_ENTRY_AUDIT === "1") {
     setTimeout(() => {
       void runWarmEntryAudit({ testRoot, manager, presentation }).catch(
@@ -1012,6 +1050,262 @@ async function start() {
     detachPresentation();
     if (testDiagnosticsTimer) clearInterval(testDiagnosticsTimer);
   });
+}
+
+async function runTemporaryProfileAudit(context: {
+  testRoot: string;
+  userDataPath: string;
+  manager: TaskSpaceManager;
+  profiles: BrowserProfileRegistry;
+}) {
+  const { testRoot, userDataPath, manager, profiles } = context;
+  const origin = String(process.env.X_BROWSER_TEST_STORAGE_ORIGIN || "");
+  if (!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(origin)) {
+    throw new Error("temporary Profile audit requires a trusted local origin");
+  }
+
+  const human = await manager.createSpace(
+    "Human Temporary",
+    "user",
+    "temporary",
+  );
+  const agentA = await manager.createSpace(
+    "Agent Temporary A",
+    "agent",
+    "Temporary",
+  );
+  const agentB = await manager.createSpace(
+    "Agent Temporary B",
+    "agent",
+    "temporary",
+  );
+  const defaultProfile = profiles.getDefault();
+  const persistentA = await manager.createSpace(
+    "Persistent Shared A",
+    "user",
+    defaultProfile.id,
+  );
+  const persistentB = await manager.createSpace(
+    "Persistent Shared B",
+    "agent",
+    defaultProfile.id,
+  );
+
+  const views = new Map<number, WebContentsView>();
+  for (const space of [human, agentA, agentB, persistentA, persistentB]) {
+    const view = await manager.activeViewForPresentation(space.id);
+    await view.webContents.loadURL(origin);
+    views.set(space.id, view);
+  }
+
+  const humanView = views.get(human.id)!;
+  const agentAView = views.get(agentA.id)!;
+  const agentBView = views.get(agentB.id)!;
+  const persistentAView = views.get(persistentA.id)!;
+  const persistentBView = views.get(persistentB.id)!;
+  await writeIsolationStorage(humanView, "human");
+  const agentBeforeWrite = await readIsolationStorage(agentAView);
+  await writeIsolationStorage(agentAView, "agent-a");
+  const secondAgentBeforeWrite = await readIsolationStorage(agentBView);
+  const humanAfterAgentWrite = await readIsolationStorage(humanView);
+  await writeIsolationStorage(persistentAView, "persistent-shared");
+  const persistentShared = await readIsolationStorage(persistentBView);
+
+  const temporarySpaces = [human, agentA, agentB];
+  const temporaryPartitions = temporarySpaces.map((space) =>
+    temporarySessionPartition(String(space.sessionScopeId || "")),
+  );
+  const partitionEvidence = temporarySpaces.map((space, index) => {
+    const view = views.get(space.id)!;
+    const chromiumSession = session.fromPartition(temporaryPartitions[index]);
+    return {
+      id: space.id,
+      profileMode: space.profileMode,
+      profileId: space.profileId,
+      scopePresent: Boolean(space.sessionScopeId),
+      partition: temporaryPartitions[index],
+      isPersistent: chromiumSession.isPersistent(),
+      ownsViewSession: view.webContents.session === chromiumSession,
+    };
+  });
+  const persistentPartition = `persist:${defaultProfile.partitionId}`;
+  const persistentSession = session.fromPartition(persistentPartition);
+  const persistentEvidence = {
+    partition: persistentPartition,
+    isPersistent: persistentSession.isPersistent(),
+    firstOwnsSession:
+      persistentAView.webContents.session === persistentSession,
+    secondOwnsSession:
+      persistentBView.webContents.session === persistentSession,
+  };
+
+  const agentAPartition = temporaryPartitions[1];
+  await manager.closeSpace(agentA.id);
+  const probe = new WebContentsView({
+    webPreferences: {
+      partition: agentAPartition,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  await probe.webContents.loadURL(origin);
+  const closedSessionStorage = await readIsolationStorage(probe);
+  probe.webContents.close();
+
+  await manager.flushState();
+  const browserState = JSON.parse(
+    await readFile(join(userDataPath, "browser-state.json"), "utf8"),
+  );
+  const profileState = JSON.parse(
+    await readFile(join(userDataPath, "profiles.json"), "utf8"),
+  );
+  const persistedIds = new Set<number>(
+    browserState.spaces.map((space: { id: number }) => Number(space.id)),
+  );
+  const registryProfileIds = profileState.profiles.map(
+    (profile: { id: string }) => profile.id,
+  );
+  const liveTemporaryIds = [human.id, agentB.id];
+  const ok =
+    agentBeforeWrite.cookie === "" &&
+    agentBeforeWrite.localStorage === null &&
+    agentBeforeWrite.indexedDb === null &&
+    secondAgentBeforeWrite.cookie === "" &&
+    secondAgentBeforeWrite.localStorage === null &&
+    secondAgentBeforeWrite.indexedDb === null &&
+    humanAfterAgentWrite.cookie.includes("ufo_isolation=human") &&
+    humanAfterAgentWrite.localStorage === "human" &&
+    humanAfterAgentWrite.indexedDb === "human" &&
+    persistentShared.cookie.includes("ufo_isolation=persistent-shared") &&
+    persistentShared.localStorage === "persistent-shared" &&
+    persistentShared.indexedDb === "persistent-shared" &&
+    new Set(temporaryPartitions).size === temporaryPartitions.length &&
+    partitionEvidence.every(
+      (entry) =>
+        entry.profileMode === "temporary" &&
+        entry.profileId === "temporary" &&
+        entry.scopePresent &&
+        entry.isPersistent === false &&
+        entry.ownsViewSession,
+    ) &&
+    persistentEvidence.isPersistent === true &&
+    persistentEvidence.firstOwnsSession &&
+    persistentEvidence.secondOwnsSession &&
+    closedSessionStorage.cookie === "" &&
+    closedSessionStorage.localStorage === null &&
+    closedSessionStorage.indexedDb === null &&
+    liveTemporaryIds.every((id) => !persistedIds.has(id)) &&
+    persistedIds.has(persistentA.id) &&
+    persistedIds.has(persistentB.id) &&
+    !registryProfileIds.includes("temporary");
+
+  await writeFile(
+    join(testRoot, "temporary-profile-audit.json"),
+    `${JSON.stringify(
+      {
+        ok,
+        spaces: {
+          human: { id: human.id, profileMode: human.profileMode },
+          agentA: { id: agentA.id, profileMode: agentA.profileMode },
+          agentB: { id: agentB.id, profileMode: agentB.profileMode },
+          persistentA: { id: persistentA.id, profileMode: persistentA.profileMode },
+          persistentB: { id: persistentB.id, profileMode: persistentB.profileMode },
+        },
+        isolatedReads: {
+          agentBeforeWrite,
+          secondAgentBeforeWrite,
+          humanAfterAgentWrite,
+        },
+        persistentShared,
+        closedSessionStorage,
+        partitionEvidence,
+        persistentEvidence,
+        persistedSpaceIds: [...persistedIds],
+        registryProfileIds,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function runTemporaryProfileRestoreAudit(context: {
+  testRoot: string;
+  manager: TaskSpaceManager;
+}) {
+  const spaces = context.manager.listSpaces();
+  const names = spaces.map((space) => space.name);
+  const ok =
+    names.includes("Persistent Shared A") &&
+    names.includes("Persistent Shared B") &&
+    !names.includes("Human Temporary") &&
+    !names.includes("Agent Temporary A") &&
+    !names.includes("Agent Temporary B") &&
+    !names.includes("CLI Temporary") &&
+    spaces.every((space) => space.profileMode === "persistent");
+  await writeFile(
+    join(context.testRoot, "temporary-profile-restore-audit.json"),
+    `${JSON.stringify(
+      {
+        ok,
+        spaces: spaces.map((space) => ({
+          id: space.id,
+          name: space.name,
+          profileId: space.profileId,
+          profileMode: space.profileMode,
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function writeIsolationStorage(view: WebContentsView, value: string) {
+  await view.webContents.executeJavaScript(
+    `(() => new Promise((resolve, reject) => {
+      document.cookie = ${JSON.stringify(`ufo_isolation=${value}; Path=/; SameSite=Lax`)};
+      localStorage.setItem('ufo-isolation', ${JSON.stringify(value)});
+      const request = indexedDB.open('ufo-isolation', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('values');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const database = request.result;
+        const transaction = database.transaction('values', 'readwrite');
+        transaction.objectStore('values').put(${JSON.stringify(value)}, 'current');
+        transaction.oncomplete = () => { database.close(); resolve(true); };
+        transaction.onerror = () => reject(transaction.error);
+      };
+    }))()`,
+    true,
+  );
+}
+
+async function readIsolationStorage(view: WebContentsView) {
+  return view.webContents.executeJavaScript(
+    `(() => new Promise((resolve, reject) => {
+      const request = indexedDB.open('ufo-isolation', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('values');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const database = request.result;
+        const transaction = database.transaction('values', 'readonly');
+        const read = transaction.objectStore('values').get('current');
+        read.onsuccess = () => {
+          const result = {
+            cookie: document.cookie,
+            localStorage: localStorage.getItem('ufo-isolation'),
+            indexedDb: read.result ?? null,
+          };
+          database.close();
+          resolve(result);
+        };
+        read.onerror = () => reject(read.error);
+      };
+    }))()`,
+    true,
+  );
 }
 
 async function runWarmEntryAudit(context: {
@@ -1330,17 +1624,21 @@ function registerIpc(context: IpcContext) {
     name: app.getName(),
     version: app.getVersion(),
   }));
-  shell("x-browser:profiles:list", async () =>
-    Promise.all(
+  shell("x-browser:profiles:list", async () => {
+    const persistentProfiles = await Promise.all(
       profiles.listPublic().map(async (profile) => ({
         ...profile,
         avatarDataUrl: await profileAvatars.dataUrl(profile.id),
         syncStatus: profileSync.status(profile.id),
       })),
-    ),
-  );
+    );
+    return [temporaryPublicProfile(), ...persistentProfiles];
+  });
   shell("x-browser:profiles:set-default", async (_event, profileId: string) => {
     const id = String(profileId);
+    if (isTemporaryProfileId(id)) {
+      throw new Error("temporary-profile-cannot-be-default");
+    }
     await profiles.setDefault(id);
     profileSync.notifyProfileActive(id);
   });
@@ -1413,7 +1711,9 @@ function registerIpc(context: IpcContext) {
       selectedProfileId,
     );
     await presentation.showSpace(space.id);
-    profileSync.notifyProfileActive(space.profileId);
+    if (!isTemporaryProfileId(space.profileId)) {
+      profileSync.notifyProfileActive(space.profileId);
+    }
     browserView.webContents.send("x-browser:browser-state", manager.navigationState(space.id));
     nativeChrome.update(manager.navigationState(space.id));
     return space;
@@ -1438,7 +1738,9 @@ function registerIpc(context: IpcContext) {
       Math.min(2_000, Math.round(finiteNumber(transition.durationMs))),
     );
     const space = manager.getSpace(id);
-    if (space) profileSync.notifyProfileActive(space.profileId);
+    if (space && !isTemporaryProfileId(space.profileId)) {
+      profileSync.notifyProfileActive(space.profileId);
+    }
     browserView.webContents.send(
       "x-browser:browser-state",
       manager.navigationState(id),
@@ -2761,6 +3063,11 @@ async function runSpaceUiAudit(context: {
     () => manager.listSpaces().length === initialSpaceCount + 1,
     3_000,
   );
+  await waitForRenderer(
+    overviewView,
+    `document.querySelector('.create-space-card')?.getAttribute('data-busy') === '0'`,
+    5_000,
+  );
   const defaultCreated = manager.listSpaces().at(-1)!;
   const defaultCreationDom = await overviewView.webContents.executeJavaScript(
     `(() => ({
@@ -2787,7 +3094,77 @@ async function runSpaceUiAudit(context: {
     () => manager.listSpaces().length === initialSpaceCount + 2,
     3_000,
   );
+  await waitForRenderer(
+    overviewView,
+    `document.querySelector('.create-space-card')?.getAttribute('data-busy') === '0'`,
+    5_000,
+  );
   const alternateCreated = manager.listSpaces().at(-1)!;
+  await presentation.showOverview();
+  await wait(140);
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.create-space-profile-trigger')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `!document.querySelector('.create-profile-popover')?.hidden`,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.create-profile-option[data-profile-id="${TEMPORARY_PROFILE_ID}"]')?.click()`,
+    true,
+  );
+  await waitUntil(
+    () => manager.listSpaces().length === initialSpaceCount + 3,
+    3_000,
+  );
+  await waitForRenderer(
+    overviewView,
+    `document.querySelector('.create-space-card')?.getAttribute('data-busy') === '0'`,
+    5_000,
+  );
+  const temporaryCreated = manager.listSpaces().at(-1)!;
+  await presentation.showOverview();
+  await wait(180);
+  const temporaryCard = await overviewView.webContents.executeJavaScript(
+    `(() => {
+      const card = document.querySelector('[data-space-id="${temporaryCreated.id}"]');
+      return {
+        present: Boolean(card),
+        temporary: card?.getAttribute('data-temporary') || '',
+        profile: card?.querySelector('.space-profile')?.textContent || '',
+        profileTitle: card?.querySelector('.space-profile')?.getAttribute('title') || '',
+      };
+    })()`,
+    true,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('#profile-button')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `Boolean(document.querySelector('.profile-row[data-profile-id="${TEMPORARY_PROFILE_ID}"]'))`,
+  );
+  const temporaryProfileUi = await overviewView.webContents.executeJavaScript(
+    `(() => {
+      const row = document.querySelector('.profile-row[data-profile-id="${TEMPORARY_PROFILE_ID}"]');
+      return {
+        present: Boolean(row),
+        temporaryClass: row?.classList.contains('temporary') || false,
+        name: row?.querySelector('.profile-row-copy strong')?.textContent || '',
+        detail: row?.querySelector('.profile-row-copy small')?.textContent || '',
+        badge: row?.querySelector('.profile-row-temporary-badge')?.textContent || '',
+        selectDisabled: row?.querySelector('.profile-row-select')?.disabled || false,
+        clonePresent: Boolean(row?.querySelector('.profile-row-clone')),
+      };
+    })()`,
+    true,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('#profile-dialog-close')?.click()`,
+    true,
+  );
   const ok =
     menu.card === true &&
     menu.expanded === "true" &&
@@ -2828,6 +3205,8 @@ async function runSpaceUiAudit(context: {
     createMenu.heading === "使用其他个人资料创建 Space" &&
     createMenu.profileIds.includes(defaultProfileId) &&
     createMenu.profileIds.includes(alternateProfileId) &&
+    createMenu.profileIds.includes(TEMPORARY_PROFILE_ID) &&
+    createMenu.names.includes("临时 Profile") &&
     createMenu.names.includes("工作 Profile") &&
     createMenu.modalPresent === false &&
     defaultCreated.profileId === defaultProfileId &&
@@ -2835,11 +3214,26 @@ async function runSpaceUiAudit(context: {
     defaultCreationDom.menuHidden === true &&
     defaultCreationDom.modalPresent === false &&
     alternateCreated.profileId === alternateProfileId &&
-    alternateCreated.tabs[0]?.url === "https://www.google.com/";
+    alternateCreated.tabs[0]?.url === "https://www.google.com/" &&
+    temporaryCreated.profileId === TEMPORARY_PROFILE_ID &&
+    temporaryCreated.profileMode === "temporary" &&
+    Boolean(temporaryCreated.sessionScopeId) &&
+    temporaryCreated.tabs[0]?.url === "https://www.google.com/" &&
+    temporaryCard.present === true &&
+    temporaryCard.temporary === "1" &&
+    temporaryCard.profile === "一次性 Space" &&
+    temporaryProfileUi.present === true &&
+    temporaryProfileUi.temporaryClass === true &&
+    temporaryProfileUi.name === "临时 Profile" &&
+    temporaryProfileUi.detail.includes("登录状态完全独立") &&
+    temporaryProfileUi.badge === "一次性" &&
+    temporaryProfileUi.selectDisabled === true &&
+    temporaryProfileUi.clonePresent === false;
   await manager.renameSpace(initial.id, initial.name);
   await presentation.showOverview();
   await manager.closeSpace(defaultCreated.id);
   await manager.closeSpace(alternateCreated.id);
+  await manager.closeSpace(temporaryCreated.id);
   await writeFile(
     join(testRoot, "space-ui-audit.json"),
     `${JSON.stringify(
@@ -2865,6 +3259,14 @@ async function runSpaceUiAudit(context: {
         alternateCreation: {
           profileId: alternateCreated.profileId,
           url: alternateCreated.tabs[0]?.url,
+        },
+        temporaryCreation: {
+          profileId: temporaryCreated.profileId,
+          profileMode: temporaryCreated.profileMode,
+          sessionScopePresent: Boolean(temporaryCreated.sessionScopeId),
+          url: temporaryCreated.tabs[0]?.url,
+          card: temporaryCard,
+          profileUi: temporaryProfileUi,
         },
       },
       null,
@@ -3027,6 +3429,7 @@ async function runChromeImportUiAudit(context: {
   const importedCookies = await session
     .fromPartition(`persist:${imported.partitionId}`)
     .cookies.get({});
+  const verifiedImportedCookies = chromeFixtureCookies(importedCookies);
   const originStorage = await readImportedOriginStorage(imported.partitionId);
   const copiedStorageMarkers = await readImportedStorageMarkers(
     userDataPath,
@@ -3098,7 +3501,7 @@ async function runChromeImportUiAudit(context: {
   );
   const ok =
     profileHome.dialogVisible === true &&
-    profileHome.profileRows === 1 &&
+    profileHome.profileRows === 2 &&
     profileHome.importLabel === "从 Chrome 导入登录状态" &&
     profileHome.syncNote.includes("仅在来源真正变化时更新差异") &&
     runningSource.warning === true &&
@@ -3136,7 +3539,7 @@ async function runChromeImportUiAudit(context: {
     snapshotProgress.some(
       (progress: any) => progress.detailCode === "compatibility",
     ) &&
-    importedCookies.length === 2 &&
+    verifiedImportedCookies.length === 2 &&
     Object.values(originStorageVerified).every(Boolean) &&
     Object.values(copiedStorageVerified).every(Boolean) &&
     profiles.getDefault().id === imported.id &&
@@ -3160,7 +3563,7 @@ async function runChromeImportUiAudit(context: {
         importedProfile: {
           id: imported.id,
           isDefault: profiles.getDefault().id === imported.id,
-          cookieCount: importedCookies.length,
+          cookieCount: verifiedImportedCookies.length,
           originStorageVerified,
           copiedStorageVerified,
           syncEnabled,
@@ -3198,7 +3601,7 @@ async function runProfileSyncAudit(context: {
   );
   await waitForRenderer(
     overviewView,
-    `document.querySelectorAll('.profile-row').length === 2`,
+    `document.querySelectorAll('.profile-row').length === 3`,
   );
 
   const intervalMs = 5;
@@ -3476,6 +3879,7 @@ async function runChromeImportRestartAudit(context: {
   const cookies = await session
     .fromPartition(`persist:${imported.partitionId}`)
     .cookies.get({});
+  const verifiedImportedCookies = chromeFixtureCookies(cookies);
   const originStorage = await readImportedOriginStorage(imported.partitionId);
   const copiedStorageMarkers = await readImportedStorageMarkers(
     userDataPath,
@@ -3498,7 +3902,7 @@ async function runChromeImportRestartAudit(context: {
   );
   await waitForRenderer(
     overviewView,
-    `document.querySelectorAll('.profile-row').length === 2`,
+    `document.querySelectorAll('.profile-row').length === 3`,
   );
   await writeFile(
     join(testRoot, "chrome-import-restart.png"),
@@ -3518,12 +3922,12 @@ async function runChromeImportRestartAudit(context: {
     .listSpaces()
     .filter((space) => space.profileId === imported.id);
   const ok =
-    cookies.length === 2 &&
+    verifiedImportedCookies.length === 2 &&
     Object.values(originStorageVerified).every(Boolean) &&
     Object.values(copiedStorageVerified).every(Boolean) &&
     profiles.getDefault().id === imported.id &&
     importedSpaces.length === 1 &&
-    dom.profiles.length === 2 &&
+    dom.profiles.length === 3 &&
     dom.headerProfile === imported.name;
   await writeFile(
     join(testRoot, "chrome-import-restart-audit.json"),
@@ -3533,7 +3937,7 @@ async function runChromeImportRestartAudit(context: {
         importedProfile: {
           id: imported.id,
           name: imported.name,
-          cookieCount: cookies.length,
+          cookieCount: verifiedImportedCookies.length,
           originStorageVerified,
           copiedStorageVerified,
         },
@@ -3702,6 +4106,16 @@ async function runChromeImportRollbackRecoveryAudit(context: {
       2,
     )}\n`,
   );
+}
+
+function chromeFixtureCookies(cookies: Array<{ name?: string; domain?: string }>) {
+  return cookies.filter((cookie) => {
+    const domain = String(cookie.domain || "").replace(/^\./, "");
+    return (
+      (cookie.name === "regular" && domain === "fixture.example") ||
+      (cookie.name === "partitioned" && domain === "chips.fixture.example")
+    );
+  });
 }
 
 async function waitForRenderer(

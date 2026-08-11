@@ -36,3 +36,69 @@ test("completing an already removed task space is idempotent", async () => {
     (globalThis as any).ego = previousEgo;
   }
 });
+
+test("Agent task-space helpers forward an explicit temporary Profile", async () => {
+  const previousEgo = (globalThis as any).ego;
+  const calls: unknown[][] = [];
+  const created = {
+    id: 8,
+    taskId: "isolated signup",
+    name: "isolated signup",
+    createdBy: "agent",
+    ownership: "agent",
+  };
+  (globalThis as any).ego = {
+    listTaskSpaces: async () => ({ taskSpaces: [] }),
+    createTaskSpace: async (...args: unknown[]) => {
+      calls.push(args);
+      return created;
+    },
+    useTaskSpace: async () => 8,
+  };
+  try {
+    assert.deepEqual(
+      await runtime.newTaskSpace("isolated signup", {
+        profileId: "Temporary",
+      }),
+      created,
+    );
+    assert.deepEqual(calls, [["isolated signup", "Temporary"]]);
+
+    calls.length = 0;
+    await runtime.useOrCreateTaskSpace("another isolated task", "Temporary");
+    assert.deepEqual(calls, [["another isolated task", "Temporary"]]);
+  } finally {
+    (globalThis as any).ego = previousEgo;
+  }
+});
+
+test("Profile options do not replace an existing task Space", async () => {
+  const previousEgo = (globalThis as any).ego;
+  let creations = 0;
+  (globalThis as any).ego = {
+    listTaskSpaces: async () => ({
+      taskSpaces: [
+        {
+          id: 9,
+          taskId: "existing",
+          name: "existing",
+          ownership: "agent",
+        },
+      ],
+    }),
+    createTaskSpace: async () => {
+      creations += 1;
+      throw new Error("must not create");
+    },
+    useTaskSpace: async () => 9,
+  };
+  try {
+    const selected = await runtime.useOrCreateTaskSpace("existing", {
+      profileId: "Temporary",
+    });
+    assert.equal(selected.id, 9);
+    assert.equal(creations, 0);
+  } finally {
+    (globalThis as any).ego = previousEgo;
+  }
+});

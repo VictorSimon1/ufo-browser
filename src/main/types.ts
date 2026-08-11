@@ -1,5 +1,6 @@
 export type SpaceOwnership = "agent" | "agentDelegatedToUser" | "user";
 export type SpaceLifecycle = "active" | "completed" | "error";
+export type SpaceProfileMode = "persistent" | "temporary";
 
 export type AgentTaskState = {
   title: string;
@@ -24,6 +25,8 @@ export type SpaceRecord = {
   ownership: SpaceOwnership;
   lifecycle: SpaceLifecycle;
   profileId: string;
+  profileMode: SpaceProfileMode;
+  sessionScopeId?: string;
   tabs: TabRecord[];
   activeTabId: string;
   agentTask?: AgentTaskState;

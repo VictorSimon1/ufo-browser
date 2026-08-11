@@ -16,6 +16,7 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **Real Chromium input** — clicks, typing, wheel events, drag operations, screenshots, and OOPIF interaction flow through Chromium's DevTools Protocol.
 - **Human/Agent control isolation** — an App-level control layer blocks human input while an Agent is active without being injected into the website DOM or appearing in page screenshots.
 - **Reusable login state** — Agents can work with the browser's existing authenticated session while remaining separated from the user's current page flow.
+- **One-time Spaces** — the built-in Temporary Profile creates a fresh memory-backed Chromium Session for every human or Agent Space; Cookie, LocalStorage, IndexedDB, Service Worker, cache, and permission state are never shared, closing clears the Session, and App restart never restores it.
 - **One-click Chrome login import and opt-in sync** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile, then incrementally follow that Profile without modifying Chrome or reviving a UFO logout.
 - **No visible automation cursor** — Agent input never moves the macOS pointer and does not rely on OS-level keyboard or mouse automation.
 - **Bounded background rendering** — hidden Agent pages use a shared compositor surface only when required, then park again to reduce GPU usage.
@@ -68,6 +69,25 @@ await openOrReuseTab('https://example.com', {
 cliLog(await snapshotText())
 EOF
 ```
+
+For a fresh one-time browser identity instead of the current persistent login
+Profile, select the built-in Temporary Profile. Existing calls remain
+backward-compatible and continue to use the current default Profile:
+
+```bash
+ufo-browser nodejs <<'EOF'
+const profiles = await listProfiles()
+const task = await taskSpaces.new('isolated signup', {
+  profileId: 'Temporary',
+})
+cliLog({ profiles, task })
+EOF
+```
+
+Each Temporary Space owns a unique non-`persist:` Chromium partition. The
+template itself is visible in Profile management and the new-Space menu, but
+is not written to `profiles.json` and cannot replace the user's persistent
+default Profile.
 
 Common helpers include:
 
@@ -164,6 +184,7 @@ See [docs/macos-build.md](docs/macos-build.md) for target directories, ownership
 - Agent transport is a current-user-only Unix socket with restrictive filesystem permissions.
 - Every mutating Agent command is scoped to one selected Space and generation lease.
 - Browser targets and cross-site iframe sessions are filtered so one Space cannot inspect another.
+- Temporary human and Agent Spaces use unique non-persistent Sessions, are filtered from restart state at the Store boundary, and clear all browsing data when closed.
 - Renderer access is exposed through context-isolated preload allowlists.
 - UFO-Browser does not enable Electron remote debugging or expose a general-purpose browser endpoint.
 - User takeover is a hard stop: Agent commands cannot silently reclaim a user-controlled Space.

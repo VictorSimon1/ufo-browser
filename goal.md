@@ -159,13 +159,13 @@ Space：Chat + Browser Chrome + 当前页面；Page View = 1
 
 ## 4. Task Space、Profile、ownership 与 lease
 
-Space 持久记录包括 id/name、createdBy、ownership、lifecycle、profileId、Agent 状态、Tab 元数据和活动 Tab。
+Space 运行时记录包括 id/name、createdBy、ownership、lifecycle、profileId、`profileMode`、可选 `sessionScopeId`、Agent 状态、Tab 元数据和活动 Tab。
 
-持久化：Space、Tab URL/标题、Profile、ownership、lifecycle。
+持久化：仅持久 Profile Space 的 Space、Tab URL/标题、Profile、ownership、lifecycle。临时 Profile Space 在 Store 边界统一过滤，App 重启不恢复。
 
 不持久化：`WebContentsView`、debugger、CDP session、socket、lease、预览任务和 Renderer 对象。
 
-同一 Profile 的 Space 共享 Cookie 与站点存储；标签组、活动 Tab、任务状态和控制权彼此隔离。
+同一持久 Profile 的 Space 共享 Cookie 与站点存储；标签组、活动 Tab、任务状态和控制权彼此隔离。内置 `temporary` Profile 是虚拟模板，不写入 `profiles.json`，也不能替换持久默认 Profile；每次由人或 Agent 选择它都会生成唯一 UUID scope 和不带 `persist:` 的内存 Session，Cookie、LocalStorage、IndexedDB、Service Worker、缓存、权限与认证状态均不共享。关闭 Space 后清理整个 Session。
 
 新 Space/Tab 的默认 URL 由 `src/main/internal-pages.ts` 的 `X_BROWSER_DEFAULT_NEW_TAB_URL` 统一定义，当前直接指向真实 `https://www.google.com/`。UFO-Browser 不再打包或加载本地仿制 `newtab.html`；Google 的地区重定向仍被识别为初始页，Agent 首次导航可以复用同一 target。旧状态中的 `x-browser://newtab/` 或物理 `newtab.html` URL 只作为迁移输入，加载时直接转到真实 Google。用户输入普通文本和网址时仍按 Google 搜索/HTTPS 地址导航。不要在调用点散落 `about:blank`、构建目录的 `file://` 地址或另一份首页常量。
 
@@ -489,9 +489,9 @@ flowchart TD
 └── Chromium profile data
 ```
 
-`browser-state.json` 使用临时文件加原子 rename，权限为 `0600`。它只保存可恢复的元数据：Space、URL、标题、Profile、活动标签、生命周期和控制权；Electron 运行时对象不会写入 JSON。
+`browser-state.json` 使用临时文件加原子 rename，权限为 `0600`。它只保存可恢复的持久 Profile 元数据：Space、URL、标题、Profile、活动标签、生命周期和控制权；临时 Profile Space 与 Electron 运行时对象不会写入 JSON。
 
-每个 Browser Profile 对应一个 `persist:*` Electron session。同一 Profile 下的 Task Space 共享 Cookie 和站点存储，但标签组、当前标签、生命周期与控制权保持隔离。
+每个持久 Browser Profile 对应一个 `persist:*` Electron session。同一持久 Profile 下的 Task Space 共享 Cookie 和站点存储，但标签组、当前标签、生命周期与控制权保持隔离。内置 Temporary Profile 不对应 Registry 记录；每个 Space 使用 `ufo-temporary-space-<uuid>` 非持久 Session，关闭后 `closeAllConnections + clearData`，失败时回退清理 storage/cache/auth，且 partition 永不复用。
 
 ## 4. Agent CLI 与 SDK 注入
 
@@ -706,10 +706,11 @@ npm run package:mac
 
 当前包用于本地和内部测试，`identity: null` 表示尚未配置 Developer ID 签名与 notarization。完整命令、目标路径、安全规则、临时包与正式包差异见 `docs/macos-build.md`。
 
-## 13. 当前开发里程碑（2026-08-08）
+## 13. 当前开发里程碑（2026-08-12）
 
 - 当前阶段保持纯浏览器 Presentation，左侧聊天 View 继续保留在运行时但不 attach。Chrome Stable 登录态一键导入的 Profile Registry、发现、快照、Keychain helper、Worker 解密、普通 Cookie/CHIPS 写入、站点存储复制、UI、回滚与冷启动恢复已经实现；真实 Chrome/Keychain 手工验收等待用户可输入密码或 Touch ID 时执行。
 - Profile 持续同步已经覆盖 Chrome 导入与 UFO-to-UFO clone：首次开启/重新开启只保存 SHA-256 三方基线；冷启动在目标 Session 创建前扫描并原子替换变化的数据集，Cookie 在启动、五分钟周期和 Profile 活跃时走 source revision 门禁。源未变时 UFO 登出不会恢复，双方变化时保留 UFO，来源删除只在 UFO 未分歧时传播，重复内容零写入。站点存储 revision 与 10,000 文件扫描在独立 Worker；QuotaManager 使用语义 SQLite revision，排除运行计数、访问时间、全零默认 bucket 和 journal/WAL 噪声，hot journal 只在私有临时副本恢复。Overview 顶部显示 3px 低成本进度条；隔离 `verify:profile-sync` 已连续验证重启后 Cookie/WebStorage 差量更新、主线程最大 stall 小于 50ms、UI 开关与进度事件。Profile clone 同时复制头像并保留直接来源绑定。
+- Profile 列表新增内置虚拟 `temporary` 模板，Overview 新建菜单、Profile 管理弹窗和 Agent `listProfiles()` 均可发现；手动选择 `temporary`，或 Agent 使用 `taskSpaces.new(name, { profileId: 'Temporary' })` / `useOrCreateTaskSpace(name, { profileId: 'Temporary' })`，都会为该 Space 生成独立非持久 Session。旧式单参数 Agent 调用继续使用当前持久默认 Profile。`npm run verify:temporary-profile` 已在真实 Electron 中证明人工临时 Space、两个 Agent 临时 Space 的 Cookie/LocalStorage/IndexedDB 互不可见，普通持久 Profile 仍共享同一登录态，关闭后的临时 Session 数据为空，真实 CLI 可创建临时 Space，App 重启只恢复持久 Space；`verify:space-ui` 同时验证 Profile 行、一次性 badge、卡片标识和手动创建路径。
 - Chrome-running UI 现在有隔离硬门禁：success/restart fixture 启动时以指向测试 runner 的 `SingletonLock` 模拟活跃 Chrome，确认页必须显示“Google Chrome 正在运行”、禁用导入，并且只有用户点击“退出 Chrome 并继续”后才由测试专用 source adapter 删除该隔离锁、重新发现并允许提交。自动验证不会调用 AppleScript、不会请求退出或读取真实 Chrome。
 - Chrome 导入 success 审计直接测量真实 App 路径的 Profile 列表出现耗时并要求小于 500ms；从提交导入到结果页期间，Electron 主进程运行 5ms heartbeat，扣除 interval 后任一事件循环停顿达到 50ms 即失败。当前隔离实测 discovery 约 43ms、最大主线程停顿约 1ms，不再只用 Worker 单测间接推断窗口响应性。
 - Ego-compatible Skill/helper、Agent Space ownership、JanitorAI Turnstile 与 fingerprint/OOPIF 回归已经建立独立验证路径。
@@ -718,7 +719,7 @@ npm run package:mac
 - 所有 E2E 继续使用兼容目录 `.x-browser-test/runs/<suite>` 隔离 userData、PID 与 Unix socket。常驻临时 App 使用 `.x-browser-test` 根目录；测试清理只能终止自己 marker 中的 PID，不能再通过 `pgrep` 关闭用户正在看的预览窗口。
 - 对应回归命令新增 `npm run verify:space-ui`；`verify:preview-startup` 与 `verify:live-preview` 也在隔离实例中运行，后者要求打开/返回前后的 `webContentsId` 保持一致。
 - 旧版里程碑曾使用本地 `x-browser://newtab/` 保证离线首帧；2026-08-08 按产品要求改为直接加载真实 Google，不再构建本地仿制页。冷启动预览因此按普通远程页面预算处理，网络失败时保留 Chromium 原生错误页，不再用本地页面覆盖。
-- 当前回归为 119/119 单元测试通过；Chrome 导入 success/restart/rollback/profile-sync 使用隔离 fixture 与 Mock Keychain，验证 2 条 Cookie（含 1 条 CHIPS）、Local Storage、IndexedDB、OPFS、WebStorage/File System 标记、最后使用时间、默认关闭且必须主动勾选的 partial 同意、现代 `Network/Cookies` 优先级、可选 Service Worker 复制失败的 partial warning、默认 Profile、新 Space 选择、自动同步差量和失败无泄漏，成功结果页也明确展示“默认 Profile：是/否”。所有 Cookie、origin storage 与文件标记比较仅在内存完成，审计 JSON/命令输出只保留布尔结果；E2E 会主动拒绝包含 fixture Cookie、Local Storage、IndexedDB、OPFS、域名或 Mock Keychain 值的产物。origin storage 现在有两层兼容性 preflight：目标 Session 创建前在独立 Worker 中检查 LevelDB `CURRENT`/`MANIFEST` 与有界 QuotaManager SQLite 完整性，16 MiB LevelDB 回归证明主事件循环持续推进；较大的 quota 数据库不在主线程深扫，而是交给 Chromium runtime 判定。发现静态 partial 且用户未同意时不会请求 Keychain；Cookie 解密后再由新 partition 的隐藏 Chromium target 在总计 8 秒、最多 32 个 origin 的边界内真实打开 Local Storage、IndexedDB、quota/OPFS 与 Service Worker 后端。所有 probe 导航均由 CDP 在请求阶段用内存空页满足、绕过源 Service Worker，不访问真实网站；失败的数据集通过 Session 清除并以稳定 warning 进入 partial，值、origin、数据库名和底层诊断不落日志或 job manifest。预检 Worker 或预检自身出现非预期异常时只返回稳定错误并安全回滚，不能被用户的 partial 同意降级成带未清理数据的 Profile。服务层只允许一个导入 job 运行，重复提交会在 discovery、快照和 Keychain 授权前拒绝，成功或失败后均释放互斥。Profile 发现的大小估算现在为所有候选共享 350ms 与 20,000 条目上限，目录使用流式读取，优先统计实际导入的 `Network/Cookies` 并包含 quota 元数据；极大 Profile 宁可保守少算，也不让选择 UI 长时间等待。导入会在发现前、快照前和快照后复查 Chrome 锁；若 Chrome 在复制 LevelDB/IndexedDB 期间重新启动，本次快照会在 partition 激活前丢弃。Keychain secret 仅在遇到支持的加密 Cookie 时延迟请求一次；用户取消或拒绝系统授权会立即终止事务，不再按 Cookie 重复弹窗，也不会被降级成可发布的 partial Profile。macOS helper 固定只查询 `Chrome Safe Storage` 且不接收命令行参数，主进程成功或失败都会清零 stdout 中间分片。发现、正常退出、导入 preflight 与回滚异常统一通过稳定错误码进入 UI，原始文件路径、SQLite/AppleScript/helper 诊断不会进入 renderer。确认页明确说明数据仅在当前 Mac 复制、不导入密码/信用卡/历史/Google Sync，并提示 Passkey、设备绑定或客户端证书网站可能重新登录，不承诺 100% 登录连续性。快照阶段按固定 allowlist 数据集连续发布安全进度，UI 会依次显示 Cookie、Local Storage、IndexedDB、OPFS、quota 与兼容 Service Worker，并新增“正在验证 Chromium 存储格式兼容性”；事件不含路径、域名或存储值，监听器失败也不会中止事务。Cookie Worker 使用 SQLite iterator 逐行转换，10,000 条回归不再同时物化完整原始行数组；写入端继续约束并发，并通过复合身份索引完成线性验证，避免大 Profile 在发布前出现内存翻倍或平方级扫描。Profile Registry 使用串行 next-state 原子写入，失败不会污染内存或毒化后续重试；目标 partition 冲突时只删除本次 staging job，绝不把预先存在的目录当成本事务产物清理；注册表已经发布后，即使最终 job journal 写入失败也保持成功，由冷启动恢复清理残留。打包后的 App 也已完成同一隔离导入成功审计，ASAR 同时强制包含 Cookie Worker、storage preflight Worker、Cookie diff Worker 与 storage revision Worker；Space 菜单、冷启动、实时预览往返、fingerprint/OOPIF 和 JanitorAI Turnstile 继续保留独立门禁。
+- 当前回归为 149/149 单元测试通过；Chrome 导入 success/restart/rollback/profile-sync 使用隔离 fixture 与 Mock Keychain，验证 2 条 Cookie（含 1 条 CHIPS）、Local Storage、IndexedDB、OPFS、WebStorage/File System 标记、最后使用时间、默认关闭且必须主动勾选的 partial 同意、现代 `Network/Cookies` 优先级、可选 Service Worker 复制失败的 partial warning、默认 Profile、新 Space 选择、自动同步差量和失败无泄漏，成功结果页也明确展示“默认 Profile：是/否”。重启审计只在内存按身份核对导入的两条 fixture Cookie，不再把恢复 Space 访问 Google 后产生的普通 Cookie 误计为导入数据。所有 Cookie、origin storage 与文件标记比较仅在内存完成，审计 JSON/命令输出只保留布尔结果；E2E 会主动拒绝包含 fixture Cookie、Local Storage、IndexedDB、OPFS、域名或 Mock Keychain 值的产物。origin storage 现在有两层兼容性 preflight：目标 Session 创建前在独立 Worker 中检查 LevelDB `CURRENT`/`MANIFEST` 与有界 QuotaManager SQLite 完整性，16 MiB LevelDB 回归证明主事件循环持续推进；较大的 quota 数据库不在主线程深扫，而是交给 Chromium runtime 判定。发现静态 partial 且用户未同意时不会请求 Keychain；Cookie 解密后再由新 partition 的隐藏 Chromium target 在总计 8 秒、最多 32 个 origin 的边界内真实打开 Local Storage、IndexedDB、quota/OPFS 与 Service Worker 后端。所有 probe 导航均由 CDP 在请求阶段用内存空页满足、绕过源 Service Worker，不访问真实网站；失败的数据集通过 Session 清除并以稳定 warning 进入 partial，值、origin、数据库名和底层诊断不落日志或 job manifest。预检 Worker 或预检自身出现非预期异常时只返回稳定错误并安全回滚，不能被用户的 partial 同意降级成带未清理数据的 Profile。服务层只允许一个导入 job 运行，重复提交会在 discovery、快照和 Keychain 授权前拒绝，成功或失败后均释放互斥。Profile 发现的大小估算现在为所有候选共享 350ms 与 20,000 条目上限，目录使用流式读取，优先统计实际导入的 `Network/Cookies` 并包含 quota 元数据；极大 Profile 宁可保守少算，也不让选择 UI 长时间等待。导入会在发现前、快照前和快照后复查 Chrome 锁；若 Chrome 在复制 LevelDB/IndexedDB 期间重新启动，本次快照会在 partition 激活前丢弃。Keychain secret 仅在遇到支持的加密 Cookie 时延迟请求一次；用户取消或拒绝系统授权会立即终止事务，不再按 Cookie 重复弹窗，也不会被降级成可发布的 partial Profile。macOS helper 固定只查询 `Chrome Safe Storage` 且不接收命令行参数，主进程成功或失败都会清零 stdout 中间分片。发现、正常退出、导入 preflight 与回滚异常统一通过稳定错误码进入 UI，原始文件路径、SQLite/AppleScript/helper 诊断不会进入 renderer。确认页明确说明数据仅在当前 Mac 复制、不导入密码/信用卡/历史/Google Sync，并提示 Passkey、设备绑定或客户端证书网站可能重新登录，不承诺 100% 登录连续性。快照阶段按固定 allowlist 数据集连续发布安全进度，UI 会依次显示 Cookie、Local Storage、IndexedDB、OPFS、quota 与兼容 Service Worker，并新增“正在验证 Chromium 存储格式兼容性”；事件不含路径、域名或存储值，监听器失败也不会中止事务。Cookie Worker 使用 SQLite iterator 逐行转换，10,000 条回归不再同时物化完整原始行数组；写入端继续约束并发，并通过复合身份索引完成线性验证，避免大 Profile 在发布前出现内存翻倍或平方级扫描。Profile Registry 使用串行 next-state 原子写入，失败不会污染内存或毒化后续重试；目标 partition 冲突时只删除本次 staging job，绝不把预先存在的目录当成本事务产物清理；注册表已经发布后，即使最终 job journal 写入失败也保持成功，由冷启动恢复清理残留。打包后的 App 也已完成同一隔离导入成功审计，ASAR 同时强制包含 Cookie Worker、storage preflight Worker、Cookie diff Worker 与 storage revision Worker；Space 菜单、冷启动、实时预览往返、fingerprint/OOPIF 和 JanitorAI Turnstile 继续保留独立门禁。
 - UFO-Browser CLI 现在完整暴露 Ego `LEGACY_GLOBAL_HELPERS` 调用表面，包括 `check`、`selectOption`、`textContent`、`waitForURL`、`waitForRequest/Response` 等，不再只覆盖 Skill 常用别名。脚本执行也改为与 Ego 一致的全局 helper 绑定，用户可正常声明 `const screenshot`、`const count` 等同名局部变量；真实表单 helper 审计与 Janitor 回归均已验证。
 - Overview 预览缓存采用 24 项与 8 MiB 双上限 LRU，保护当前可见卡片、正在 Presentation/预留的页面、pending capture 与主 screencast；本地 New Tab 冷捕获使用短提交预算。新增 `npm run verify:restart-scale`：64 个持久 Space 冷启动在 2.8 秒采样前首屏 8 张全部 ready，滚动到 Space 64 时仍保持 renderer ≤ 1、隐藏 surface ≤ 1、业务 capture ≤ 2、冷 capture ≤ 1，缓存严格停在 24 项并发生真实 LRU 淘汰，证明总 Space 数不会线性扩大后台页面与预览内存。
 - Agent 控制态的页面反馈已按 Ego Lite 收敛：只有用户真正进入受控 Space 后才创建点阵保护层，Overview 卡片与后台 Agent 页面不绘制遮罩或运行其动画；前台保护层使用静态高密度点阵、冷色边缘光和仅由 transform/opacity 驱动的低成本流动高光，无全屏模糊。底部只保留一套接近 macOS 原生质感的深色控制胶囊；Agent 的鼠标移动/点击会显示带“正在浏览网页”标签的可见指针反馈，坐标经过页面视口约束，不再从左上角闪入或落到页面外。遮罩宿主始终允许网页命中，只有胶囊按钮自身接收用户点击。

@@ -32,7 +32,7 @@ It also provides:
 
 `browser` provides tab listing, selection, creation/reuse, closing, iframe target lookup, and real-tab selection.
 
-`taskSpaces` provides `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`.
+`taskSpaces` provides `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`. `new(name, options?)` and `useOrCreate(nameOrId, options?)` accept a Profile id string or `{ profileId }`; `Temporary` creates a one-time memory-backed Session. The option is ignored when `useOrCreate` finds an existing Space.
 
 `site` provides optional learned site tools. `fetch.server` issues Node-side requests; `fetch.browser` issues requests from the active browser page. `cdp` sends a raw protocol command.
 
@@ -46,12 +46,18 @@ Node's callable `fetch` keeps its original enumerable property.
 
 `getBrowserVersion()` resolves to
 `{ currentVersion: string, updateAvailable: boolean }`. `listProfiles()`
-resolves to `{ profiles: [{ id, isDefault, name }] }`. `createTab(url)` requires
+resolves to `{ profiles: [{ id, isDefault, name }] }`, including the built-in
+`{ id: 'Temporary', isDefault: false, name: '临时 Profile' }` template.
+`createTaskSpace(name, profileId?)` accepts the same optional Profile id while
+preserving legacy one-argument calls. `createTab(url)` requires
 a string URL and resolves to `{ targetId }`.
 
 ## Task Space lifecycle
 
 Spaces persist metadata and page sessions across CLI processes. Ownership and the active socket lease are separate:
+
+- Persistent Profile Spaces are saved and reuse that Profile's `persist:*` Session.
+- Temporary Profile Spaces use a unique non-persistent Session per Space, clear it on close, and never enter restart state.
 
 - `ownership=agent` allows the selected connection to acquire a lease.
 - `ownership=agentDelegatedToUser` preserves Agent ownership while manual control is delegated.

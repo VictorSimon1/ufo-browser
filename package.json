@@ -22,6 +22,7 @@
     "verify:restart-scale": "npm run build && node scripts/restart-scale-e2e.mjs",
     "verify:live-preview": "npm run build && node scripts/live-preview-e2e.mjs",
     "verify:space-ui": "npm run build && node scripts/space-ui-e2e.mjs",
+    "verify:temporary-profile": "npm run build && node scripts/temporary-profile-e2e.mjs",
     "verify:browser-interaction": "npm run build && node scripts/browser-interaction-e2e.mjs",
     "verify:control-ui": "npm run build && node scripts/control-ui-e2e.mjs",
     "verify:agent-initial-tab": "npm run build && node scripts/agent-initial-tab-e2e.mjs",

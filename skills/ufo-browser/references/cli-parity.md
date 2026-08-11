@@ -21,7 +21,7 @@ operation timings in
 | Runtime iframe lookup | `iframeTarget` | Same | Flat global and `browser.iframeTarget(...)` are available. |
 | Native fetch | Callable, enumerable global | Same | UFO additionally exposes `fetch.server` and `fetch.browser`. |
 | Version result | `{ currentVersion, updateAvailable }` | Same shape | UFO reports its own version and never claims to be Ego. |
-| Profile result | `{ profiles: [{ id, isDefault, name }] }` | Same shape | Default profile id is `Default`; the display name remains UFO-branded. |
+| Profile result | `{ profiles: [{ id, isDefault, name }] }` | Same shape plus built-in `Temporary` entry | Default profile id is `Default`; `Temporary` selects a fresh one-time Session without changing the persistent default. |
 | `createTab(url)` | Requires a string and returns `{ targetId }` | Same | Missing arguments throw the same `TypeError` text before RPC. |
 | Task Spaces | list, create/reuse, claim, handoff, takeover, complete | Aligned | UFO additionally enforces a generation lease on every host mutation and CDP command. |
 | Tabs and navigation | list, reuse/open, switch, close, wait | Aligned | Internal file paths are hidden behind `x-browser://newtab/`. |
@@ -58,7 +58,9 @@ GPU parking, and live-preview tests remain separate hard gates.
   loaded by the product.
 - The legacy `x-browser` executable remains as a compatibility alias.
 - Stable `EGO_*` error codes remain accepted for script compatibility.
-- Profile/Cookie import is intentionally deferred; normal Spaces share the
-  UFO-Browser profile partition.
+- UFO adds a built-in Temporary Profile and optional Profile selection to
+  task-space creation. Persistent Spaces still share their chosen Profile;
+  each Temporary Space owns a unique memory-backed Session and is never
+  restored after restart.
 - UFO adds bounded Overview rendering, preview caching, and adaptive GPU
   cadence outside the shared CLI contract.

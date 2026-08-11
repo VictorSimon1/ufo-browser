@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { BrowserState } from "./types.js";
+import { isTemporarySpace } from "./temporary-profile.js";
 
 export const EMPTY_BROWSER_STATE: BrowserState = {
   version: 1,
@@ -19,7 +20,7 @@ export class BrowserStateStore {
       if (parsed?.version !== 1 || !Array.isArray(parsed.spaces)) {
         throw new Error("unsupported browser state");
       }
-      return parsed;
+      return restorableBrowserState(parsed);
     } catch (error: any) {
       if (error?.code === "ENOENT") return structuredClone(EMPTY_BROWSER_STATE);
       throw error;
@@ -27,7 +28,7 @@ export class BrowserStateStore {
   }
 
   save(state: BrowserState): Promise<void> {
-    const snapshot = structuredClone(state);
+    const snapshot = restorableBrowserState(state);
     this.writeQueue = this.writeQueue.then(() => this.writeAtomically(snapshot));
     return this.writeQueue;
   }
@@ -45,4 +46,18 @@ export class BrowserStateStore {
     await chmod(temp, 0o600);
     await rename(temp, this.path);
   }
+}
+
+export function restorableBrowserState(state: BrowserState): BrowserState {
+  return {
+    ...structuredClone(state),
+    // A temporary Profile is a template for a fresh in-memory Chromium
+    // Session, not a durable browser identity. Filtering at the Store boundary
+    // protects every save path (including native popup/title updates) and also
+    // drops any stale temporary record left by a crash or older development
+    // build before cold-start restoration can create a renderer for it.
+    spaces: state.spaces
+      .filter((space) => !isTemporarySpace(space))
+      .map((space) => structuredClone(space)),
+  };
 }

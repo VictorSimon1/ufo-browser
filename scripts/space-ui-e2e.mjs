@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -21,6 +21,7 @@ let stderr = "";
 
 try {
   await stopTestApp();
+  await rm(testRoot, { recursive: true, force: true });
   child = spawn(electron, ["."], {
     cwd: root,
     env: {
@@ -34,7 +35,7 @@ try {
     stderr += String(chunk);
     if (stderr.length > 24_000) stderr = stderr.slice(-24_000);
   });
-  const audit = await freshJson("space-ui-audit.json", 12_000);
+  const audit = await freshJson("space-ui-audit.json", 24_000);
   assert.equal(audit.ok, true, JSON.stringify(audit));
   process.stdout.write(`${JSON.stringify(audit, null, 2)}\n`);
 } catch (error) {

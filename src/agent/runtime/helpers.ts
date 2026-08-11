@@ -182,15 +182,21 @@ export async function switchTaskSpace(nameOrId) {
 /**
  * Create an agent-owned task space and select it for the current Node invocation.
  * @param {string} name Task space name.
+ * @param {string|{profileId?:string}} [options] Optional Profile id. Use
+ * `Temporary` for a fresh one-time Session owned only by this Space.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function newTaskSpace(name) {
+export async function newTaskSpace(name, options?) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.createTaskSpace !== "function") {
     throw new Error("newTaskSpace requires ego.createTaskSpace");
   }
+  const profileId = taskSpaceProfileId(options, "newTaskSpace");
   const created = normalizeTaskSpace(
-    assertNoEgoError(await ego.createTaskSpace(name), "newTaskSpace"),
+    assertNoEgoError(
+      await ego.createTaskSpace(name, profileId),
+      "newTaskSpace",
+    ),
   );
   if (!created) {
     throw new Error("newTaskSpace returned an invalid task space");
@@ -204,16 +210,18 @@ export async function newTaskSpace(name) {
  * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
  * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
  * @param {string|number} nameOrId Task space name or numeric id.
+ * @param {string|{profileId?:string}} [options] Profile selection used only
+ * when a new Space is created.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function useOrCreateTaskSpace(nameOrId) {
+export async function useOrCreateTaskSpace(nameOrId, options?) {
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
     if (typeof nameOrId === "number") {
       throw new Error(`task space not found: ${nameOrId}`);
     }
-    return newTaskSpace(nameOrId);
+    return newTaskSpace(nameOrId, options);
   }
   if (isAgentOwned(existing.ownership)) {
     return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
@@ -228,6 +236,27 @@ export async function useOrCreateTaskSpace(nameOrId) {
   throw new Error(
     `useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(existing.ownership)}`,
   );
+}
+
+function taskSpaceProfileId(options, operation) {
+  if (options === undefined || options === null || options === "") {
+    return undefined;
+  }
+  const profileId =
+    typeof options === "string"
+      ? options
+      : typeof options === "object"
+        ? options.profileId
+        : undefined;
+  if (profileId === undefined || profileId === null || profileId === "") {
+    return undefined;
+  }
+  if (typeof profileId !== "string" || !profileId.trim()) {
+    throw new TypeError(
+      `${operation} expects profileId to be a non-empty string`,
+    );
+  }
+  return profileId.trim();
 }
 
 /**

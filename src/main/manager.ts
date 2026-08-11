@@ -4,6 +4,7 @@ import type {
   BrowserWindowConstructorOptions,
   NativeImage,
   Rectangle,
+  Session,
   WebContentsView,
 } from "electron";
 import {
@@ -42,6 +43,15 @@ import {
   previewVisualChanged,
   quantizedPreviewSignature,
 } from "./preview-cadence.js";
+import {
+  createTemporarySessionScope,
+  isTemporaryProfileId,
+  isTemporarySpace,
+  TEMPORARY_AGENT_PROFILE_ID,
+  TEMPORARY_PROFILE_ID,
+  TEMPORARY_PROFILE_NAME,
+  temporarySessionPartition,
+} from "./temporary-profile.js";
 
 type TabRuntime = {
   view: WebContentsView;
@@ -140,6 +150,7 @@ export class TaskSpaceManager {
   private readonly backgroundVisibilityPrimedTargets = new Set<string>();
   private readonly surfaceGenerations = new Map<string, number>();
   private readonly profileSessionSetup = new Map<string, Promise<void>>();
+  private readonly temporarySessionPartitions = new Set<string>();
   private readonly previewCache = new Map<string, PreviewCacheEntry>();
   private readonly publishedPreviewRevision = new Map<number, number>();
   private readonly visiblePreviewSpaceIds = new Set<number>();
@@ -174,6 +185,13 @@ export class TaskSpaceManager {
 
   async initialize() {
     this.state = await this.options.store.load();
+    this.state.spaces = this.state.spaces.map((space) => ({
+      ...space,
+      // browser-state.json predates explicit Profile modes. Every restored
+      // legacy Space used a durable Profile, so migration is lossless.
+      profileMode: "persistent",
+      sessionScopeId: undefined,
+    }));
     // Profile Sessions are created lazily by createSpace/ensureTabRuntime.
     // This keeps startup light and lets the storage-sync gate run while the
     // already-loaded Overview can show its real progress strip.
@@ -222,11 +240,20 @@ export class TaskSpaceManager {
   }
 
   listProfiles() {
-    return this.options.profiles.listPublic().map(({ id, isDefault, name }) => ({
-      id: id === "default" ? "Default" : id,
-      isDefault,
-      name,
-    }));
+    return [
+      {
+        id: TEMPORARY_AGENT_PROFILE_ID,
+        isDefault: false,
+        name: TEMPORARY_PROFILE_NAME,
+      },
+      ...this.options.profiles
+        .listPublic()
+        .map(({ id, isDefault, name }) => ({
+          id: id === "default" ? "Default" : id,
+          isDefault,
+          name,
+        })),
+    ];
   }
 
   getSpace(spaceId: number) {
@@ -262,9 +289,12 @@ export class TaskSpaceManager {
     createdBy: "agent" | "user" = "user",
     profileId?: string,
   ) {
-    const profile = profileId
-      ? this.options.profiles.getOrThrow(profileId)
-      : this.options.profiles.getDefault();
+    const temporary = isTemporaryProfileId(profileId);
+    const profile = temporary
+      ? undefined
+      : profileId
+        ? this.options.profiles.getOrThrow(profileId)
+        : this.options.profiles.getDefault();
     const trimmed = name.trim() || `Space ${this.state.nextSpaceId}`;
     const now = Date.now();
     const tab = this.newTabRecord(X_BROWSER_DEFAULT_NEW_TAB_URL);
@@ -275,7 +305,9 @@ export class TaskSpaceManager {
       createdBy,
       ownership: createdBy === "agent" ? "agent" : "user",
       lifecycle: "active",
-      profileId: profile.id,
+      profileId: temporary ? TEMPORARY_PROFILE_ID : profile!.id,
+      profileMode: temporary ? "temporary" : "persistent",
+      sessionScopeId: temporary ? createTemporarySessionScope() : undefined,
       tabs: [tab],
       activeTabId: tab.targetId,
       agentTask:
@@ -328,6 +360,7 @@ export class TaskSpaceManager {
       this.publishedPreviewRevision.delete(spaceId);
       this.requestOverviewScreencastReconcile();
       await this.persistAndNotify();
+      await this.disposeTemporarySpaceSession(space);
       return true;
     });
   }
@@ -528,23 +561,21 @@ export class TaskSpaceManager {
 
   private async createTabRuntime(spaceId: number, targetId: string) {
     const initialSpace = this.getSpaceOrThrow(spaceId);
-    const profileId = initialSpace.profileId;
     if (!initialSpace.tabs.some((candidate) => candidate.targetId === targetId)) {
       throw new Error(`tab not found: ${targetId}`);
     }
 
-    await this.ensureProfileSessionSetup(profileId);
+    const partition = await this.ensureSpaceSessionSetup(initialSpace);
     const space = this.getSpaceOrThrow(spaceId);
     const tab = space.tabs.find((candidate) => candidate.targetId === targetId);
     if (!tab) throw new Error(`tab not found: ${targetId}`);
     const existing = this.runtimes.get(targetId);
     if (existing) return existing;
-    const profile = this.options.profiles.getOrThrow(profileId);
 
     const view = new ElectronWebContentsView({
       webPreferences: {
         preload: this.options.pagePreload,
-        partition: `persist:${profile.partitionId}`,
+        partition,
         contextIsolation: true,
         nodeIntegration: false,
         nodeIntegrationInSubFrames: true,
@@ -2765,25 +2796,66 @@ export class TaskSpaceManager {
     return this.surfaceGenerations.get(targetId) === generation;
   }
 
-  private ensureProfileSessionSetup(profileId: string) {
-    let setup = this.profileSessionSetup.get(profileId);
+  private async ensureSpaceSessionSetup(space: SpaceRecord) {
+    const temporary = isTemporarySpace(space);
+    const profile = temporary
+      ? undefined
+      : this.options.profiles.getOrThrow(space.profileId);
+    const partition = temporary
+      ? temporarySessionPartition(String(space.sessionScopeId || ""))
+      : `persist:${profile!.partitionId}`;
+    let setup = this.profileSessionSetup.get(partition);
     if (!setup) {
       setup = (async () => {
-        const profile = this.options.profiles.getOrThrow(profileId);
-        await this.options.beforeProfileSessionSetup?.(profileId);
-        await ensureChromiumProfilePreferences(
-          this.options.partitionsRoot,
-          profileId,
-          profile.partitionId,
-        );
-        const chromiumSession = session.fromPartition(
-          `persist:${profile.partitionId}`,
-        );
+        let chromiumSession: Session;
+        if (temporary) {
+          // A non-persist partition is memory-backed. Its UUID is owned by one
+          // Space only, so user/Agent Spaces created from the same template can
+          // never observe each other's Cookie, LocalStorage, IndexedDB, cache,
+          // Service Worker, permission, or authentication state.
+          chromiumSession = session.fromPartition(partition, { cache: false });
+          this.temporarySessionPartitions.add(partition);
+        } else {
+          await this.options.beforeProfileSessionSetup?.(space.profileId);
+          await ensureChromiumProfilePreferences(
+            this.options.partitionsRoot,
+            space.profileId,
+            profile!.partitionId,
+          );
+          chromiumSession = session.fromPartition(partition);
+        }
         await configureChromiumSession(chromiumSession);
       })();
-      this.profileSessionSetup.set(profileId, setup);
+      this.profileSessionSetup.set(partition, setup);
+      void setup.catch(() => {
+        if (this.profileSessionSetup.get(partition) === setup) {
+          this.profileSessionSetup.delete(partition);
+        }
+      });
     }
-    return setup;
+    await setup;
+    return partition;
+  }
+
+  private async disposeTemporarySpaceSession(space: SpaceRecord) {
+    if (!isTemporarySpace(space) || !space.sessionScopeId) return;
+    const partition = temporarySessionPartition(space.sessionScopeId);
+    this.profileSessionSetup.delete(partition);
+    if (!this.temporarySessionPartitions.delete(partition)) return;
+    const chromiumSession = session.fromPartition(partition);
+    await chromiumSession.closeAllConnections().catch(() => undefined);
+    try {
+      await chromiumSession.clearData();
+    } catch {
+      // Older Electron builds may not expose the broader clearData backend.
+      // Keep the cleanup exhaustive on those builds as well. The unique,
+      // never-reused partition remains the primary confidentiality boundary.
+      await Promise.allSettled([
+        chromiumSession.clearStorageData(),
+        chromiumSession.clearCache(),
+        chromiumSession.clearAuthCache(),
+      ]);
+    }
   }
 }
 

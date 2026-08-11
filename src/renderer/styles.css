@@ -164,6 +164,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .profile-avatar.has-image,
 .profile-row-avatar.has-image,
 .create-profile-option-avatar.has-image { overflow: hidden; background: #eef2f1; }
+.profile-avatar.temporary,
+.profile-row-avatar.temporary,
+.create-profile-option-avatar.temporary {
+  background: linear-gradient(145deg, #edf6f3, #d9ebe5);
+  color: #236652;
+  box-shadow: inset 0 0 0 1px rgba(35, 102, 82, .12);
+}
 .profile-avatar img,
 .profile-row-avatar img,
 .create-profile-option-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
@@ -273,6 +280,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   cursor: pointer;
 }
 .profile-row-select:disabled { cursor: default; opacity: .6; }
+.profile-row.temporary .profile-row-select:disabled { opacity: 1; }
 .profile-row-remove,
 .profile-row-clone {
   flex: 0 0 auto;
@@ -307,6 +315,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .profile-row-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #84908c; font-size: 10px; }
 .profile-row-check { color: #147c62; font-size: 16px; font-weight: 700; opacity: 0; }
 .profile-row.selected .profile-row-check { opacity: 1; }
+.profile-row-temporary-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #e3f1ec;
+  color: #28715b;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .02em;
+}
 .import-command {
   width: 100%;
   min-height: 62px;
@@ -553,6 +571,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 .space-meta span:last-child { flex: 0 0 auto; }
 .space-meta b, .space-meta em { font-weight: 500; font-size: 10px; font-style: normal; }
+.space-card[data-temporary="1"] .space-profile {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(38, 133, 103, .1);
+  color: #2c735d;
+  font-weight: 620;
+}
 .card-menu {
   position: absolute;
   z-index: 8;

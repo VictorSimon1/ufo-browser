@@ -861,7 +861,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: "await taskSpaces.switch(3)",
   },
   "taskSpaces.new": {
-    signature: "taskSpaces.new(name) => Promise<object>",
+    signature: "taskSpaces.new(name, options?) => Promise<object>",
     description: "Create and select a new task space.",
     params: [
       {
@@ -870,12 +870,18 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         required: true,
         description: "Task space name.",
       },
+      {
+        name: "options",
+        type: "string | { profileId?: string }",
+        required: false,
+        description: "Profile id; use Temporary for an isolated one-time Space.",
+      },
     ],
     returns: "Promise<object>",
-    example: "const task = await taskSpaces.new('research task')",
+    example: "const task = await taskSpaces.new('research task', { profileId: 'Temporary' })",
   },
   "taskSpaces.useOrCreate": {
-    signature: "taskSpaces.useOrCreate(nameOrId) => Promise<object>",
+    signature: "taskSpaces.useOrCreate(nameOrId, options?) => Promise<object>",
     description: "Reuse an agent-owned task space or create one by name.",
     params: [
       {
@@ -883,6 +889,12 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         type: "string | number",
         required: true,
         description: "Task space name, taskId, or numeric id.",
+      },
+      {
+        name: "options",
+        type: "string | { profileId?: string }",
+        required: false,
+        description: "Profile id used only when a new Space is created.",
       },
     ],
     returns: "Promise<object>",

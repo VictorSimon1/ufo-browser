@@ -156,7 +156,12 @@ export class AgentServer {
       case "listProfiles":
         return { profiles: this.manager.listProfiles() };
       case "createTaskSpace": {
-        const space = await this.manager.createSpace(String(args[0] || "Agent Space"), "agent");
+        const profileId = optionalAgentProfileId(args[1]);
+        const space = await this.manager.createSpace(
+          String(args[0] || "Agent Space"),
+          "agent",
+          profileId,
+        );
         await this.select(connection, space.id);
         return space;
       }
@@ -318,6 +323,22 @@ export class AgentServer {
       connection.socket.write(`${JSON.stringify(message)}\n`);
     }
   }
+}
+
+function optionalAgentProfileId(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const profileId =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object" && "profileId" in value
+        ? (value as { profileId?: unknown }).profileId
+        : undefined;
+  if (typeof profileId !== "string" || !profileId.trim()) {
+    throw new TypeError(
+      "ego.createTaskSpace(name, profileId) expects profileId to be a non-empty string",
+    );
+  }
+  return profileId.trim();
 }
 
 function normalizeAgentError(error: any) {

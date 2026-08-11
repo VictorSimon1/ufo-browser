@@ -35,7 +35,8 @@ class AgentHost {
 
   listTaskSpaces = () => this.rpc("listTaskSpaces");
   listProfiles = () => this.rpc("listProfiles");
-  createTaskSpace = (name: string) => this.rpc("createTaskSpace", name);
+  createTaskSpace = (name: string, profileId?: string) =>
+    this.rpc("createTaskSpace", name, profileId);
   claimTaskSpace = (id: number, name?: string) =>
     this.rpc("claimTaskSpace", id, name);
   useTaskSpace = (id: number) => this.rpc("useTaskSpace", id);

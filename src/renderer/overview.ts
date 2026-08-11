@@ -413,13 +413,17 @@ async function finishRename(
 
 function updateSpaceCard(card: HTMLElement, space: any) {
   const controlled = space.ownership === "agent" && space.lifecycle === "active";
+  const temporary = space.profileMode === "temporary";
   const activeTab = space.tabs.find(
     (tab: any) => tab.targetId === space.activeTabId,
   );
   card.dataset.controlled = controlled ? "1" : "0";
+  card.dataset.temporary = temporary ? "1" : "0";
   card.setAttribute(
     "aria-label",
-    controlled ? `打开 ${space.name}，Agent 正在浏览` : `打开 ${space.name}`,
+    `${controlled ? `打开 ${space.name}，Agent 正在浏览` : `打开 ${space.name}`}${
+      temporary ? "，一次性 Space" : ""
+    }`,
   );
   card.querySelector(".space-title-line strong")!.textContent = space.name;
   card.querySelector(".space-id-badge")!.textContent = `ID ${space.id}`;
@@ -428,7 +432,11 @@ function updateSpaceCard(card: HTMLElement, space: any) {
   card.querySelector(".space-meta span:first-child")!.textContent = controlled
     ? space.agentTask?.detail || "Agent 正在浏览"
     : activeTab?.title || "Ready";
-  card.querySelector(".space-profile")!.textContent = profileName(space.profileId);
+  const profile = card.querySelector<HTMLElement>(".space-profile")!;
+  profile.textContent = temporary ? "一次性 Space" : profileName(space.profileId);
+  profile.title = temporary
+    ? "独立临时登录状态，关闭后清理"
+    : profileName(space.profileId);
   card.querySelector(".space-meta em")!.textContent = String(space.tabs.length);
   updatePreviewChrome(card, space, activeTab);
   const placeholder = card.querySelector<HTMLElement>(".preview-placeholder");
@@ -635,7 +643,12 @@ function renderCreateProfileMenu() {
     );
     option.querySelector<HTMLElement>(".create-profile-option-name")!.textContent =
       profile.name;
-    option.querySelector("small")!.textContent = profile.isDefault ? "默认" : "";
+    option.querySelector("small")!.textContent =
+      profile.kind === "temporary"
+        ? "每个 Space 独立"
+        : profile.isDefault
+          ? "默认"
+          : "";
     option.addEventListener("click", (event) => {
       event.stopPropagation();
       void createSpaceWithProfile(profile.id);
@@ -731,6 +744,8 @@ function renderProfileHome() {
   for (const profile of browserProfiles) {
     const row = document.createElement("div");
     row.className = "profile-row";
+    const temporary = profile.kind === "temporary";
+    row.classList.toggle("temporary", temporary);
     row.dataset.profileId = String(profile.id);
     row.classList.toggle("selected", profile.isDefault);
     const select = document.createElement("button");
@@ -748,20 +763,35 @@ function renderProfileHome() {
     select.querySelector("small")!.textContent = profileDetail(profile);
     select.setAttribute(
       "aria-label",
-      profile.isDefault ? `${profile.name}，当前默认` : `将 ${profile.name} 设为默认`,
+      temporary
+        ? `${profile.name}，每次创建独立的一次性 Space`
+        : profile.isDefault
+          ? `${profile.name}，当前默认`
+          : `将 ${profile.name} 设为默认`,
     );
-    select.addEventListener("click", async () => {
-      if (profile.isDefault) return;
+    if (temporary) {
       select.disabled = true;
-      try {
-        await api.profiles.setDefault(profile.id);
-        await refreshProfiles();
-        renderProfileHome();
-      } catch {
-        select.disabled = false;
-      }
-    });
+      const badge = select.querySelector<HTMLElement>(".profile-row-check")!;
+      badge.className = "profile-row-temporary-badge";
+      badge.textContent = "一次性";
+    } else {
+      select.addEventListener("click", async () => {
+        if (profile.isDefault) return;
+        select.disabled = true;
+        try {
+          await api.profiles.setDefault(profile.id);
+          await refreshProfiles();
+          renderProfileHome();
+        } catch {
+          select.disabled = false;
+        }
+      });
+    }
     row.append(select);
+    if (temporary) {
+      list.append(row);
+      continue;
+    }
     const clone = document.createElement("button");
     clone.className = "profile-row-clone";
     clone.title = "克隆这个 Profile";
@@ -1136,6 +1166,7 @@ function updateCreateCard() {
 
 function renderProfileAvatar(element: HTMLElement, profile: any) {
   element.replaceChildren();
+  element.classList.toggle("temporary", profile?.kind === "temporary");
   const source = String(profile?.avatarDataUrl || "");
   if (source.startsWith("data:image/")) {
     const image = document.createElement("img");
@@ -1195,6 +1226,9 @@ function renderCloneProfile(sourceProfile: any) {
 }
 
 function profileDetail(profile: any) {
+  if (profile?.kind === "temporary") {
+    return "一次性 Space · 登录状态完全独立 · 关闭即清理";
+  }
   if (profile?.kind !== "imported") return "UFO-Browser 本地 Profile";
   const source =
     profile?.source?.type === "ufo"

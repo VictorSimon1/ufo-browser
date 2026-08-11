@@ -157,6 +157,99 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
   }
 });
 
+test("Agent createTaskSpace forwards Profile selection and preserves legacy calls", async () => {
+  const root = await mkdtemp(join(tmpdir(), "x-browser-agent-profile-"));
+  const socketPath = join(root, "agent.sock");
+  const spaces = new Map<number, any>();
+  const creations: Array<{ name: string; profileId?: string }> = [];
+  const manager = {
+    listSpaces: () => [...spaces.values()].map((space) => structuredClone(space)),
+    listProfiles: () => [
+      { id: "Temporary", isDefault: false, name: "临时 Profile" },
+      { id: "Default", isDefault: true, name: "您的 UFO-Browser" },
+    ],
+    createSpace: async (name: string, _createdBy: string, profileId?: string) => {
+      creations.push({ name, profileId });
+      const id = spaces.size + 1;
+      const space = {
+        id,
+        name,
+        taskId: name,
+        lifecycle: "active",
+        ownership: "agent",
+        profileId: profileId === "Temporary" ? "temporary" : "default",
+        profileMode: profileId === "Temporary" ? "temporary" : "persistent",
+        activeTabId: `page-${id}`,
+        tabs: [
+          {
+            targetId: `page-${id}`,
+            title: "New Tab",
+            url: "https://www.google.com/",
+          },
+        ],
+      };
+      spaces.set(id, space);
+      return structuredClone(space);
+    },
+    getSpaceOrThrow: (id: number) => {
+      const space = spaces.get(id);
+      if (!space) throw new Error("task space not found");
+      return space;
+    },
+    setAgentConnectionActive: () => undefined,
+  };
+  const broker = {
+    registerConnection: () => undefined,
+    removeConnection: () => undefined,
+    releaseConnectionSpace: () => undefined,
+  };
+  const snapshot = {
+    snapshot: async () => ({ content: "ok", refs: [] }),
+    resolveHistoricalRef: async () => undefined,
+  };
+  const server = new AgentServer(
+    socketPath,
+    manager as any,
+    new SpaceLeaseRegistry(),
+    snapshot as any,
+    broker as any,
+  );
+  let socket: Socket | undefined;
+  try {
+    await server.listen();
+    socket = await connectSocket(socketPath);
+
+    const profiles = await rpc(socket, 1, "listProfiles", []);
+    assert.deepEqual(profiles.result.profiles[0], {
+      id: "Temporary",
+      isDefault: false,
+      name: "临时 Profile",
+    });
+
+    const temporary = await rpc(socket, 2, "createTaskSpace", [
+      "isolated Agent Space",
+      "Temporary",
+    ]);
+    assert.equal(temporary.result.profileMode, "temporary");
+    assert.equal(temporary.result.profileId, "temporary");
+
+    const legacy = await rpc(socket, 3, "createTaskSpace", ["legacy Space"]);
+    assert.equal(legacy.result.profileMode, "persistent");
+    assert.deepEqual(creations, [
+      { name: "isolated Agent Space", profileId: "Temporary" },
+      { name: "legacy Space", profileId: undefined },
+    ]);
+
+    const invalid = await rpc(socket, 4, "createTaskSpace", ["bad", {}]);
+    assert.equal(invalid.type, "rpc-error");
+    assert.match(invalid.error, /profileId to be a non-empty string/);
+  } finally {
+    socket?.destroy();
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CDP sends stay multiplexed while an earlier command is pending", async () => {
   const root = await mkdtemp(join(tmpdir(), "x-browser-agent-cdp-"));
   const socketPath = join(root, "agent.sock");

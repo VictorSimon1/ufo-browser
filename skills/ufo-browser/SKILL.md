@@ -67,11 +67,35 @@ For Playwright-style automation, use the structured `page` facade:
 
 A task space is an **isolated browsing context** that ufo-browser provides for AI Agents. Each task space has its own set of tabs but **inherits the current user's login state** by default, so Agents can operate on authenticated sites without competing with or disturbing the user's normal browser windows.
 
+When the task needs a fresh identity with no inherited or shared login state,
+use the built-in `Temporary` Profile while creating it:
+
+```js
+const profiles = await listProfiles()
+const task = await useOrCreateTaskSpace('isolated signup', {
+  profileId: 'Temporary',
+})
+```
+
+`listProfiles()` returns `{ profiles: [{ id, isDefault, name }] }`; the
+temporary entry has `id: 'Temporary'` and `name: '临时 Profile'`.
+`newTaskSpace(name, options)`, `taskSpaces.new(name, options)`,
+`useOrCreateTaskSpace(nameOrId, options)`, and
+`taskSpaces.useOrCreate(nameOrId, options)` accept either the Profile id string
+or `{ profileId }`. Options are used only when a new Space is created; an
+existing matching Space is never silently replaced.
+
+Every Temporary Space receives its own memory-backed Chromium Session. Cookie,
+LocalStorage, IndexedDB, Service Worker, cache, permission, and authentication
+state are isolated even between two Temporary Agent Spaces. Closing it clears
+the Session, and App restart does not restore it. Use a persistent Profile when
+the work must survive restart or reuse an existing login.
+
 Closing all tabs in a task space is equivalent to closing that task space.
 
 A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, normal working heredocs should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds. The exception is resuming after a handoff: once the user confirms "continue" (through an Ask or in chat), start the next heredoc with `takeOverTaskSpace(nameOrId)` instead.
 
-`nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space.
+`nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space. Profile options never apply to an already-existing match.
 
 Use a short name for the active user goal when creating a new task space. Keep reusing that task space for follow-up questions, corrections, refinements, re-checks, and result validation, even if you previously thought the task was complete. Choose a new task space only when the user clearly starts a separate, unrelated goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
 
