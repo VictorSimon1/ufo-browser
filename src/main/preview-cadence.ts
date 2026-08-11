@@ -10,13 +10,13 @@ export function overviewSnapshotDelay(options: {
   );
 
   // Overview intentionally uses bounded screenshots instead of a continuous
-  // compositor subscription. Dynamic cards are sampled often enough to show
-  // progress, while settled cards back off so several visible Spaces do not
-  // behave like several foreground browser windows.
-  if (options.visualChanged) return 1_400;
-  if (unchangedSamples < 2) return 1_800;
-  if (unchangedSamples < 5) return 2_800;
-  return 4_000;
+  // compositor subscription. Even continuously changing cards are sampled at
+  // most once every four seconds; settled cards only get slower so several
+  // visible Spaces do not behave like several foreground browser windows.
+  if (options.visualChanged) return 4_000;
+  if (unchangedSamples < 2) return 4_000;
+  if (unchangedSamples < 5) return 6_000;
+  return 8_000;
 }
 
 export function overviewPreviewDelay(options: {
