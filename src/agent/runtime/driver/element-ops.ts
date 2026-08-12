@@ -336,6 +336,7 @@ export async function waitForActionableHandle(
   if (!source) throw new Error(`unsupported actionability state: ${action}`);
   let lastReason = "not-ready";
   let interceptedBy;
+  let interceptedSince = 0;
   let attempts = 0;
   const callLog = ["等待元素解析、显示、启用并稳定"];
   do {
@@ -363,6 +364,11 @@ export async function waitForActionableHandle(
       }
       lastReason = value.reason || lastReason;
       interceptedBy = value.interceptedBy || interceptedBy;
+      if (value.reason === "intercepted") {
+        if (!interceptedSince) interceptedSince = state.now();
+      } else {
+        interceptedSince = 0;
+      }
       const detail =
         value.reason === "intercepted" && value.interceptedBy
           ? `第 ${attempts} 次：被 ${value.interceptedBy} 遮挡`
@@ -390,6 +396,9 @@ export async function waitForActionableHandle(
     await state.sleep(Math.min(16, remaining));
   } while (state.now() <= deadline);
   callLog.push(`超时：${timeout} ms，最终原因 ${lastReason}`);
+  if (lastReason === "intercepted" && interceptedSince && state.now() - interceptedSince >= 300) {
+    callLog.push("建议：遮挡已持续超过 300 ms；先检查 dialog/overlay，再决定是否重试或使用 force");
+  }
   throw new ActionabilityError({
     operation,
     locator: selectorOrRef,

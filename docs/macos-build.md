@@ -11,6 +11,7 @@
 | 临时 `.app` | `npm run dist:mac` | 否 | `release/mac-*/UFO-Browser.app` |
 | 临时 DMG/ZIP | `npm run package:mac:test` | 否 | `release/*.dmg`、`release/*.zip` |
 | 正式内部包 | `npm run package:mac` | 是 | 已验证的 App、DMG 和 ZIP |
+| 安装并替换本地 App | `npm run install:mac -- release/UFO-Browser-*.dmg` | 安装后同步 | `/Applications/UFO-Browser.app`、CLI、Skills |
 
 通常使用前三个命令即可。`package:mac` 会更新用户级 Agent Skill，只有准备正式内部包时才运行。
 
@@ -64,6 +65,27 @@ npm run package:mac
 9. 连续三次在页面注册 `beforeunload` 的情况下执行原生 `app.quit()`，要求打包 App 均以退出码 0 结束且不出现 macOS `NSAlert` 与窗口销毁重入崩溃。
 
 `npm run release:mac` 是同一正式流程的别名。
+
+## 从 DMG 安装到 `/Applications`
+
+DMG 生成后，使用明确的 DMG 路径执行安装流程：
+
+```bash
+npm run install:mac -- release/UFO-Browser-0.1.7-arm64.dmg
+```
+
+该流程只替换明确的 `/Applications/UFO-Browser.app`：
+
+1. 以只读方式挂载 DMG，并确认镜像中包含 `UFO-Browser.app`。
+2. 仅结束 UFO-Browser 自己的 `UFO-Browser` 进程，不影响 Ego Lite 或其他 Electron 应用。
+3. 先复制到 `/Applications/.UFO-Browser.app.install-*`，再原子替换旧 App；替换失败会尝试恢复旧 App。
+4. 卸载 DMG，并校验已安装 App 的可执行文件、ASAR、内置 Skill 和版本信息。
+5. 让 `~/.local/bin/ufo-browser`、`~/.local/bin/x-browser` 指向已安装 App 内的 CLI，避免继续使用仓库旧构建。
+6. 从已安装 App 的 `Contents/Resources/skills/ufo-browser` 同步 Claude、Codex、Cursor、Gemini、Copilot、OpenCode 和 Agent Skills 目录。
+
+安装脚本默认不会覆盖用户手动维护的同名 Skill；只有带 `.ufo-browser-managed.json` 标记的目录会自动更新。CLI 使用 `--force` 是因为它明确管理 `~/.local/bin` 中的 UFO-Browser 两个入口。如果需要自定义目标，可继续使用 `UFO_BROWSER_CLI_BIN`、`UFO_BROWSER_EXTRA_SKILL_ROOTS` 等环境变量。
+
+这是未签名、未公证的本地内部测试安装流程。它不等同于面向用户发布的安装器，也不会自动删除浏览器 Profile 数据。
 
 ## Agent Skill 自动同步
 

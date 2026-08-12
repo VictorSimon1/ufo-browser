@@ -95,7 +95,21 @@ test("snapshot emits locators only when they are unique and root-executable", ()
     ],
     refs,
   );
-  assert.doesNotMatch(content, /loc=role:button\[name="Save"\]/);
+  assert.match(content, /button "Save" \[ref=42, loc=ambiguous, hint=use nth\(0\) of 2\]/);
+  assert.match(content, /button "Save" \[ref=43, loc=ambiguous, hint=use nth\(1\) of 2\]/);
   assert.match(content, /iframe "Embedded" \[ref=44, loc=role:iframe/);
   assert.doesNotMatch(content, /Inside frame.*loc=/);
+});
+
+test("snapshot exposes structural role locators without assuming HTML tags", () => {
+  const refs: any[] = [];
+  const content = formatAxTree(
+    [
+      { nodeId: "1", role: { value: "dialog" }, name: { value: "OTP" }, childIds: ["2"] },
+      { nodeId: "2", backendDOMNodeId: 52, role: { value: "textbox" }, name: { value: "PIN" } },
+    ],
+    refs,
+  );
+  assert.match(content, /dialog "OTP" \[loc=role:dialog\[name="OTP"\]\]/);
+  assert.match(content, /textbox "PIN" \[ref=52, loc=role:textbox\[name="PIN"\]\]/);
 });

@@ -9,10 +9,35 @@ const binRoot = resolve(
 );
 const force = process.argv.includes("--force");
 
+function optionValue(name) {
+  const index = process.argv.indexOf(name);
+  if (index === -1) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${name} requires a path`);
+  }
+  return value;
+}
+
+const appArgument = optionValue("--app") || process.env.UFO_BROWSER_APP_ROOT;
+const appRoot = appArgument ? resolve(appArgument) : undefined;
+const sourceRoot = appRoot
+  ? join(
+      appRoot,
+      "Contents/Resources/app.asar.unpacked/dist/bin",
+    )
+  : join(root, "dist/bin");
+if (appRoot && !appRoot.endsWith(".app")) {
+  throw new Error(`--app must point to an App bundle: ${appRoot}`);
+}
+
 await mkdir(binRoot, { recursive: true, mode: 0o700 });
 
 for (const name of ["ufo-browser", "x-browser"]) {
-  const source = join(root, "dist/bin", name);
+  const source = join(sourceRoot, name);
+  await lstat(source).catch(() => {
+    throw new Error(`CLI executable is missing from source: ${source}`);
+  });
   const target = join(binRoot, name);
   const state = await lstat(target).catch(() => null);
   if (state?.isSymbolicLink()) {

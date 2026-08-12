@@ -42,6 +42,7 @@
     "cli:install:local": "npm run build && node scripts/install-local-cli.mjs",
     "skills:sync": "node scripts/sync-agent-skills.mjs",
     "skills:sync:dry-run": "node scripts/sync-agent-skills.mjs --dry-run",
+    "install:mac": "node scripts/install-mac.mjs",
     "verify:skill-sync": "node --test scripts/sync-agent-skills.test.mjs",
     "dist:mac": "node scripts/package-mac.mjs --dir",
     "package:mac:test": "node scripts/package-mac.mjs --temporary",

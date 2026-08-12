@@ -146,6 +146,7 @@ Requests expose `url()`, `method()`, `headers()`, `postData()`,
 Normal locator clicks wait for the target to exist, be visible, enabled,
 stable, and able to receive pointer events. A failed click throws
 `ActionabilityError` with `locator`, `reason`, `interceptedBy`, `attempts`,
+`recovery` suggestions,
 `callLog`, and, when capture succeeds, `screenshot`.
 
 `locator.click({ trial: true })` performs the checks without clicking.

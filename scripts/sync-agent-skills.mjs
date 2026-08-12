@@ -356,7 +356,17 @@ const isMain =
 if (isMain) {
   const dryRun = process.argv.includes("--dry-run");
   const force = process.argv.includes("--force");
-  const summary = await syncAgentSkills({ dryRun, force });
+  const sourceIndex = process.argv.indexOf("--source");
+  const sourceArgument = sourceIndex === -1 ? undefined : process.argv[sourceIndex + 1];
+  if (sourceIndex !== -1 && (!sourceArgument || sourceArgument.startsWith("--"))) {
+    throw new Error("--source requires a Skill directory path");
+  }
+  const sourceRoot = resolve(
+    sourceArgument ||
+      process.env.UFO_BROWSER_SKILL_SOURCE_ROOT ||
+      join(process.cwd(), "skills", SKILL_NAME),
+  );
+  const summary = await syncAgentSkills({ sourceRoot, dryRun, force });
   printSummary(summary, { dryRun });
   if (summary.results.some((result) => result.status === "error")) {
     process.exitCode = 1;

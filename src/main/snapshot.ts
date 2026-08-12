@@ -28,6 +28,17 @@ const ACTION_ROLES = new Set([
   "iframe",
 ]);
 
+// AX roles such as dialog do not imply a literal HTML <dialog> element.
+// Expose these structural roles as stable locators so agents can scope
+// repeated controls without guessing DOM tag names.
+const STRUCTURAL_LOCATOR_ROLES = new Set([
+  "dialog",
+  "alertdialog",
+  "region",
+  "main",
+  "form",
+]);
+
 type SnapshotRef = {
   refId?: number;
   backendNodeId: number;
@@ -35,6 +46,8 @@ type SnapshotRef = {
   name: string;
   loc?: string;
   frameId?: string;
+  matchCount?: number;
+  matchIndex?: number;
 };
 
 type SnapshotOptions = {
@@ -355,6 +368,7 @@ export function formatAxTree(
   const childIds = new Set(nodes.flatMap((node) => node.childIds ?? []));
   const roots = nodes.filter((node) => !childIds.has(node.nodeId));
   const locatorCounts = countStableLocators(roots, byId);
+  const locatorOccurrences = new Map<string, number>();
   const lines: string[] = [];
   const visit = (node: AxNode, depth: number, insideFrame = false) => {
     if (node.ignored) {
@@ -369,12 +383,19 @@ export function formatAxTree(
     const actionable =
       ACTION_ROLES.has(role.toLowerCase()) &&
       typeof node.backendDOMNodeId === "number";
-    const candidate =
-      actionable && !insideFrame && options.includeStableLocator !== false
-        ? stableLocator(role, name, node)
-        : undefined;
-    const locator =
-      candidate && locatorCounts.get(candidate) === 1 ? candidate : undefined;
+    const locatorEligible =
+      !insideFrame &&
+      options.includeStableLocator !== false &&
+      (actionable || STRUCTURAL_LOCATOR_ROLES.has(role.toLowerCase()));
+    const candidate = locatorEligible ? stableLocator(role, name, node) : undefined;
+    const matchCount = candidate ? locatorCounts.get(candidate) ?? 0 : 0;
+    const matchIndex = candidate
+      ? (locatorOccurrences.set(
+          candidate,
+          (locatorOccurrences.get(candidate) ?? 0) + 1,
+        ), (locatorOccurrences.get(candidate) ?? 1) - 1)
+      : undefined;
+    const locator = candidate && matchCount === 1 ? candidate : undefined;
     let suffix = "";
     if (actionable && options.includeActionMarks !== false) {
       const refId = options.refIdForBackendNodeId
@@ -382,6 +403,9 @@ export function formatAxTree(
         : node.backendDOMNodeId!;
       suffix += ` [ref=${refId}`;
       if (locator) suffix += `, loc=${locator}`;
+      else if (candidate && matchCount > 1) {
+        suffix += `, loc=ambiguous, hint=use nth(${matchIndex}) of ${matchCount}`;
+      }
       suffix += "]";
       refs.push({
         refId,
@@ -390,7 +414,15 @@ export function formatAxTree(
         name,
         loc: locator,
         frameId: options.frameId,
+        matchCount: matchCount || undefined,
+        matchIndex,
       });
+    }
+    if (!actionable && candidate) {
+      if (locator) suffix = ` [loc=${locator}]`;
+      else if (matchCount > 1) {
+        suffix = ` [loc=ambiguous, hint=use a narrower ${role} locator]`;
+      }
     }
     const label = name ? `${role} ${JSON.stringify(name)}` : role;
     if (label !== "generic" && label !== "none") {
@@ -416,8 +448,8 @@ function countStableLocators(roots: AxNode[], byId: Map<string, AxNode>) {
     if (
       !node.ignored &&
       !insideFrame &&
-      ACTION_ROLES.has(role.toLowerCase()) &&
-      typeof node.backendDOMNodeId === "number"
+      (ACTION_ROLES.has(role.toLowerCase()) ||
+        STRUCTURAL_LOCATOR_ROLES.has(role.toLowerCase()))
     ) {
       const locator = stableLocator(role, name, node);
       if (locator) counts.set(locator, (counts.get(locator) || 0) + 1);
@@ -445,5 +477,6 @@ function stableLocator(role: string, name: string, node: AxNode) {
     ?.value;
   if (role === "link" && typeof url === "string") return `href:${url}`;
   if (name) return `role:${role}[name=${JSON.stringify(name)}]`;
+  if (STRUCTURAL_LOCATOR_ROLES.has(role.toLowerCase())) return `role:${role}`;
   return undefined;
 }

@@ -63,7 +63,7 @@ For Playwright-style automation, use the structured `page` facade:
 - Performance traces: `page.tracing.start(...)` and `page.tracing.stop({ path })` write Chrome Trace/Perfetto-compatible JSON.
 - Assertions: `await expect(locator).toHaveText(...)`, `toBeVisible`, `toBeEnabled`, `toHaveCount`, `toHaveValue`, and `await expect(page).toHaveURL(...)` retry until success or throw `TimeoutError`. Add `.not` for negated assertions.
 - Events: `page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`, `request`, and `requestfailed`; popup/download waits remain supported.
-- Actionability: locator clicks wait for visibility, enabled state, stability, and an unobstructed hit target. `click({ trial: true })` checks without clicking. Use `force: true` only when intentionally bypassing normal page hit-testing.
+- Actionability: locator clicks wait for visibility, enabled state, stability, and an unobstructed hit target. `click({ trial: true })` checks without clicking. Use `force: true` only when intentionally bypassing normal page hit-testing. If an action is intercepted, inspect the reported overlay/dialog before retrying.
 
 
 ### Task spaces
@@ -239,7 +239,7 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 
 - `wait(...)` and `timeout` values are in **seconds**; only parameters whose names end in `Ms` are milliseconds.
 - `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs only visible content.
-- `@N` refs come from the latest `snapshotText()` result. UFO-Browser automatically refreshes a stale ref after navigation or DOM replacement when it can recover the element through a unique stable locator. If the element disappeared or the locator became ambiguous, the action still fails instead of guessing. Snapshot output only includes `loc=...` values that are unique and executable from the root page context; prefer them or explicit CSS for long-lived scripts.
+- `@N` refs come from the latest `snapshotText()` result. UFO-Browser automatically refreshes a stale ref after navigation or DOM replacement when it can recover the element through a unique stable locator. If the element disappeared or the locator became ambiguous, the action still fails instead of guessing. Repeated controls are marked with an `ambiguous` hint; use `locator.all()`, `count()` + `nth(index)`, or a narrower parent locator. AX `dialog` is a role, not necessarily a literal `<dialog>` tag; prefer `page.getByRole('dialog')`.
 - `page.waitForSelector(...)` throws `TimeoutError` by default. Pass `{ returnFalseOnTimeout: true }` only when a missing element is an expected branch. The legacy flat `waitForElement(...)` helper keeps its boolean timeout behavior for Ego compatibility.
 - `js()` returns the evaluated result, not a JSON string — don't wrap it with `JSON.parse(...)`.
 - Inside a `js(...)` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.

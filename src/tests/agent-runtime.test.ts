@@ -22,7 +22,6 @@ test("the bundled UFO-Browser runtime owns the complete flat helper surface", ()
   assert.equal(typeof context.taskSpaces.use, "function");
   assert.equal(typeof context.fetch.server, "function");
 });
-
 test("completing an already removed task space is idempotent", async () => {
   const previousEgo = (globalThis as any).ego;
   (globalThis as any).ego = {

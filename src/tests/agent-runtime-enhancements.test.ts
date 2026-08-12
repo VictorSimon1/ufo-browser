@@ -150,6 +150,8 @@ test("actionability errors identify the intercepting element and retry count", a
         assert.equal(error.interceptedBy, "#loading-overlay");
         assert.ok(error.attempts >= 2);
         assert.match(error.message, /#loading-overlay/);
+        assert.equal(error.recovery.kind, "intercepted");
+        assert.ok(error.recovery.suggestions.some((item: string) => item.includes("dialog")));
         return true;
       },
     );
