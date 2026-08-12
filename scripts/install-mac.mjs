@@ -51,15 +51,21 @@ async function pathExists(path) {
 }
 
 async function mountedDmg(dmgPath) {
-  const output = await run("/usr/bin/hdiutil", ["attach", "-readonly", "-nobrowse", dmgPath], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const lines = output.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const mountRoot = lines.at(-1)?.split(/\s{2,}|\t/).at(-1);
-  if (!mountRoot || !mountRoot.startsWith("/Volumes/")) {
-    throw new Error(`Could not determine DMG mount point for ${dmgPath}`);
+  const mountRoot = await mkdtemp(join(tmpdir(), "ufo-browser-dmg-install-"));
+  try {
+    await run("/usr/bin/hdiutil", [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-mountpoint",
+      mountRoot,
+      dmgPath,
+    ]);
+    return mountRoot;
+  } catch (error) {
+    await rm(mountRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
-  return mountRoot;
 }
 
 async function stopInstalledApp() {
@@ -136,6 +142,7 @@ async function main() {
     await rm(stagingApp, { recursive: true, force: true }).catch(() => {});
     if (replaced) await rm(backupApp, { recursive: true, force: true }).catch(() => {});
     await run("/usr/bin/hdiutil", ["detach", mountRoot, "-force"], { stdio: "ignore" }).catch(() => {});
+    await rm(mountRoot, { recursive: true, force: true }).catch(() => {});
   }
 }
 
