@@ -495,7 +495,7 @@ function verifyFingerprint(fingerprint, topLevel) {
 
 function browserAuditSource(taskName, pagePort, expression) {
   return `
-const task = await useOrCreateTaskSpace(${JSON.stringify(taskName)})
+const task = await bootstrapTaskSpace({ name: ${JSON.stringify(taskName)} })
 await openOrReuseTab('http://127.0.0.1:${pagePort}/main', { wait: true, timeout: 20 })
 await wait(0.4)
 const probeExpression = ${JSON.stringify(expression)}
@@ -515,7 +515,7 @@ for (let offset = 0; offset < payload.length; offset += 12000) {
 
 function continuationAuditSource(taskId, expression) {
   return `
-const task = await useOrCreateTaskSpace(${Number(taskId)})
+const task = await useTaskSpace(${Number(taskId)})
 const probeExpression = ${JSON.stringify(expression)}
 const rootFingerprint = await js(probeExpression)
 const targets = await cdp('Target.getTargets')

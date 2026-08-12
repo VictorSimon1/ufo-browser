@@ -29,7 +29,7 @@ try {
 
   const taskName = `popup download e2e ${Date.now()}`;
   const output = await runCli(`
-const task = await useOrCreateTaskSpace(${JSON.stringify(taskName)})
+const task = await bootstrapTaskSpace({ name: ${JSON.stringify(taskName)} })
 const main = await openOrReuseTab('http://127.0.0.1:${port}/main', { wait: true, timeout: 20 })
 const beforeClick = await js(String.raw\`(() => {
   const button = document.querySelector('#open')
@@ -130,7 +130,7 @@ cliLog(JSON.stringify({
 } finally {
   if (taskId) {
     await runCli(`
-const task = await useOrCreateTaskSpace(${Number(taskId)})
+const task = await useTaskSpace(${Number(taskId)})
 cliLog(await completeTaskSpace(task.id, { keep: false }))
 `).catch(() => undefined);
   }

@@ -120,7 +120,7 @@ try {
 
   const crossSnapshot = markedJson(
     await runCli(`
-await switchTaskSpace(${Number(taskId)})
+await useTaskSpace(${Number(taskId)})
 await page.goto(${JSON.stringify(fixtureUrl + "?cross-heredoc=1")}, { timeout: 20000 })
 const raw = await page.snapshotRaw()
 const ref = raw.refs.find(entry => entry.role === 'button' && entry.name === 'Stale action')?.refId
@@ -132,12 +132,12 @@ cliLog('__UFO_CROSS_REF__' + JSON.stringify({ ref }))
   const crossHeredoc = { successes: 0, attempts: [] };
   for (let index = 0; index < 5; index += 1) {
     await runCli(`
-await switchTaskSpace(${Number(taskId)})
+await useTaskSpace(${Number(taskId)})
 await page.goto(${JSON.stringify(fixtureUrl)} + '?cross-heredoc=' + ${Number(index)}, { waitUntil: 'load', timeout: 20000 })
 `);
     const attempt = markedJson(
       await runCli(`
-await switchTaskSpace(${Number(taskId)})
+await useTaskSpace(${Number(taskId)})
 await page.locator('@${Number(crossSnapshot.ref)}').click({ timeout: 1000 })
 cliLog('__UFO_CROSS_RESULT__' + JSON.stringify({ count: await page.evaluate(() => window.fixture.state.stale) }))
 `),
@@ -149,12 +149,12 @@ cliLog('__UFO_CROSS_RESULT__' + JSON.stringify({ count: await page.evaluate(() =
   assert.equal(crossHeredoc.successes, 5, JSON.stringify(crossHeredoc));
 
   await runCli(`
-await switchTaskSpace(${Number(taskId)})
+await useTaskSpace(${Number(taskId)})
 await page.goto(${JSON.stringify(fixtureUrl + "?duplicate-stale=1")}, { waitUntil: 'load', timeout: 20000 })
 `);
   const ambiguousRef = markedJson(
     await runCli(`
-await switchTaskSpace(${Number(taskId)})
+await useTaskSpace(${Number(taskId)})
 let error
 try { await page.locator('@${Number(crossSnapshot.ref)}').click({ timeout: 500 }) }
 catch (caught) { error = { name: caught?.name, message: caught?.message || String(caught) } }
@@ -183,7 +183,7 @@ cliLog(await completeTaskSpace(${Number(taskId)}, { keep: false }))
 
 function auditSource(fixtureUrl, oopifUrl, uploadPath, storageStatePath, tracePath) {
   return String.raw`
-const task = await useOrCreateTaskSpace(${JSON.stringify(`locator reliability ${Date.now()}`)})
+const task = await bootstrapTaskSpace({ name: ${JSON.stringify(`locator reliability ${Date.now()}`)} })
 await openOrReuseTab(${JSON.stringify(fixtureUrl)}, { wait: true, timeout: 20 })
 page.setDefaultTimeout(1000)
 

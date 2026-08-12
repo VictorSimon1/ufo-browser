@@ -100,7 +100,7 @@ async function runPhase({ presentation }) {
     const pageHtml =
       '<!doctype html><meta charset="utf-8"><title>Agent Focus Isolation</title><style>body{font:16px system-ui;padding:40px}input,button{font:inherit;padding:10px;margin:8px}</style><input id="agent-input"><button id="agent-button">Apply</button><output id="result"></output><script>document.getElementById("agent-button").addEventListener("click",()=>{document.getElementById("result").textContent=document.getElementById("agent-input").value})</script>';
     const operation = runCli(`
-const task = await useOrCreateTaskSpace(1)
+const task = await useTaskSpace(1)
 const html = ${JSON.stringify(pageHtml)}
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 })
 await fillInput('#agent-input', 'background-agent-input')
@@ -169,7 +169,7 @@ await wait(1.2)
     }
 
     await runCli(`
-const task = await useOrCreateTaskSpace(1)
+const task = await useTaskSpace(1)
 cliLog(JSON.stringify(await completeTaskSpace(task.id, { keep: true })))
 `);
 

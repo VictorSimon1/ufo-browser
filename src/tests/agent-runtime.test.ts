@@ -18,7 +18,8 @@ test("the bundled UFO-Browser runtime owns the complete flat helper surface", ()
   );
   assert.equal(typeof context.page.locator, "function");
   assert.equal(typeof context.browser.openOrReuseTab, "function");
-  assert.equal(typeof context.taskSpaces.useOrCreate, "function");
+  assert.equal(typeof context.taskSpaces.bootstrap, "function");
+  assert.equal(typeof context.taskSpaces.use, "function");
   assert.equal(typeof context.fetch.server, "function");
 });
 
@@ -37,7 +38,7 @@ test("completing an already removed task space is idempotent", async () => {
   }
 });
 
-test("Agent task-space helpers forward an explicit temporary Profile", async () => {
+test("strict task-space helpers bootstrap and resume by numeric ID", async () => {
   const previousEgo = (globalThis as any).ego;
   const calls: unknown[][] = [];
   const created = {
@@ -46,58 +47,52 @@ test("Agent task-space helpers forward an explicit temporary Profile", async () 
     name: "isolated signup",
     createdBy: "agent",
     ownership: "agent",
+    profileId: "temporary",
+    profileMode: "temporary",
+    sessionScopeId: "scope-1",
+    url: "https://example.com/",
+    verified: true,
   };
   (globalThis as any).ego = {
-    listTaskSpaces: async () => ({ taskSpaces: [] }),
-    createTaskSpace: async (...args: unknown[]) => {
+    bootstrapTaskSpace: async (...args: unknown[]) => {
       calls.push(args);
       return created;
     },
-    useTaskSpace: async () => 8,
+    useTaskSpace: async (id: number) => ({ ...created, id }),
   };
   try {
     assert.deepEqual(
-      await runtime.newTaskSpace("isolated signup", {
+      await runtime.bootstrapTaskSpace({
+        name: "isolated signup",
         profileId: "Temporary",
+        url: "https://example.com/",
       }),
       created,
     );
-    assert.deepEqual(calls, [["isolated signup", "Temporary"]]);
+    assert.deepEqual(calls, [[{
+      name: "isolated signup",
+      profileId: "Temporary",
+      url: "https://example.com/",
+    }]]);
 
     calls.length = 0;
-    await runtime.useOrCreateTaskSpace("another isolated task", "Temporary");
-    assert.deepEqual(calls, [["another isolated task", "Temporary"]]);
+    assert.deepEqual(await runtime.useTaskSpace(8), created);
+    await assert.rejects(() => runtime.useTaskSpace("8" as any), /numeric Space ID/);
+    assert.deepEqual(calls, []);
   } finally {
     (globalThis as any).ego = previousEgo;
   }
 });
 
-test("Profile options do not replace an existing task Space", async () => {
+test("useTaskSpace never creates or resolves by name", async () => {
   const previousEgo = (globalThis as any).ego;
-  let creations = 0;
   (globalThis as any).ego = {
-    listTaskSpaces: async () => ({
-      taskSpaces: [
-        {
-          id: 9,
-          taskId: "existing",
-          name: "existing",
-          ownership: "agent",
-        },
-      ],
-    }),
-    createTaskSpace: async () => {
-      creations += 1;
-      throw new Error("must not create");
-    },
-    useTaskSpace: async () => 9,
+    useTaskSpace: async (id: number) => ({ id, name: "existing", taskId: "existing", ownership: "agent" }),
   };
   try {
-    const selected = await runtime.useOrCreateTaskSpace("existing", {
-      profileId: "Temporary",
-    });
+    const selected = await runtime.useTaskSpace(9);
     assert.equal(selected.id, 9);
-    assert.equal(creations, 0);
+    await assert.rejects(() => runtime.useTaskSpace("existing" as any), /numeric Space ID/);
   } finally {
     (globalThis as any).ego = previousEgo;
   }

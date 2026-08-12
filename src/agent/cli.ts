@@ -35,8 +35,11 @@ class AgentHost {
 
   listTaskSpaces = () => this.rpc("listTaskSpaces");
   listProfiles = () => this.rpc("listProfiles");
-  createTaskSpace = (name: string, profileId?: string) =>
-    this.rpc("createTaskSpace", name, profileId);
+  bootstrapTaskSpace = (options: {
+    name: string;
+    profileId?: string;
+    url?: string;
+  }) => this.rpc("bootstrapTaskSpace", options);
   claimTaskSpace = (id: number, name?: string) =>
     this.rpc("claimTaskSpace", id, name);
   useTaskSpace = (id: number) => this.rpc("useTaskSpace", id);
@@ -123,7 +126,7 @@ async function runCompatibleMain(harness: Record<string, any>) {
   const argv = process.argv.slice(2).filter((arg: string) => arg !== "nodejs");
   if (argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(
-      "ufo-browser nodejs <<'EOF'\nconst task = await useOrCreateTaskSpace('task')\ncliLog(task)\nEOF\n",
+      "ufo-browser nodejs <<'EOF'\nconst task = await bootstrapTaskSpace({ name: 'task', url: 'https://example.com/' })\ncliLog(task)\nEOF\n",
     );
     return 0;
   }

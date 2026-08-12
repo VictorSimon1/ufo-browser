@@ -28,7 +28,7 @@ try {
   await waitForTestSocket(20_000);
 
   const output = await runCli(`
-const task = await useOrCreateTaskSpace(${JSON.stringify(`janitor turnstile e2e ${Date.now()}`)})
+const task = await bootstrapTaskSpace({ name: ${JSON.stringify(`janitor turnstile e2e ${Date.now()}`)} })
 await openOrReuseTab('https://janitorai.com/register', { wait: true, timeout: 30 })
 let state
 for (let attempt = 0; attempt < 55; attempt += 1) {
@@ -76,7 +76,7 @@ cliLog(JSON.stringify({ taskId: task.id, ...state, screenshot }, null, 2))
 } finally {
   if (taskId) {
     await runCli(`
-const task = await useOrCreateTaskSpace(${Number(taskId)})
+const task = await useTaskSpace(${Number(taskId)})
 cliLog(await completeTaskSpace(task.id, { keep: false }))
 `).catch(() => undefined);
   }

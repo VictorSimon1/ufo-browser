@@ -137,7 +137,7 @@ export async function listTaskSpaces() {
  * bridge when real commands run, not here. The rows below describe what each helper
  * does when the target space is user-owned:
  *
- *   switchTaskSpace                     -> throws (agent-owned only)
+ *   useTaskSpace                        -> ID-only; active agent-owned Space only
  *   claimTaskSpace                      -> claims it (ownership transfers to the agent), then selects it
  *   handOffTaskSpace                    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: true }    -> skipped, resolves { done: false, skipped: "user-owned" }
@@ -161,102 +161,83 @@ function isAgentOwned(ownership) {
 }
 
 /**
- * Select an existing task space by id/name for the current Node invocation.
- * @param {string|number} nameOrId Task space id or name.
- * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
+ * Always create, verify, and select a fresh agent-owned task space. Creation,
+ * optional navigation, and cleanup on failure are atomic in the App host.
+ * @param {{name:string,profileId?:string,url?:string}} options
+ * @returns {Promise<{taskId:string,id:number,name:string,profileId:string,profileMode:"persistent"|"temporary",sessionScopeId?:string,url:string,verified:true}>}
  */
-export async function switchTaskSpace(nameOrId) {
+export async function bootstrapTaskSpace(options) {
   const ego = globalThis.ego;
-  if (!ego || typeof ego.useTaskSpace !== "function") {
-    throw new Error("switchTaskSpace requires ego.useTaskSpace");
+  if (!ego || typeof ego.bootstrapTaskSpace !== "function") {
+    throw new Error("bootstrapTaskSpace requires ego.bootstrapTaskSpace");
   }
-  const space = await findTaskSpace(nameOrId);
-  if (!isAgentOwned(space.ownership)) {
-    throw new Error(
-      `switchTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(space.ownership)}`,
-    );
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("bootstrapTaskSpace expects { name, profileId?, url? }");
   }
-  return selectTaskSpace(ego, space, "switchTaskSpace");
-}
-
-/**
- * Create an agent-owned task space and select it for the current Node invocation.
- * @param {string} name Task space name.
- * @param {string|{profileId?:string}} [options] Optional Profile id. Use
- * `Temporary` for a fresh one-time Session owned only by this Space.
- * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
- */
-export async function newTaskSpace(name, options?) {
-  const ego = globalThis.ego;
-  if (!ego || typeof ego.createTaskSpace !== "function") {
-    throw new Error("newTaskSpace requires ego.createTaskSpace");
+  if (typeof options.name !== "string" || !options.name.trim()) {
+    throw new TypeError("bootstrapTaskSpace expects name to be a non-empty string");
   }
-  const profileId = taskSpaceProfileId(options, "newTaskSpace");
+  const profileId = optionalNonEmptyString(
+    options.profileId,
+    "bootstrapTaskSpace profileId",
+  );
+  const url = optionalNonEmptyString(options.url, "bootstrapTaskSpace url");
   const created = normalizeTaskSpace(
     assertNoEgoError(
-      await ego.createTaskSpace(name, profileId),
-      "newTaskSpace",
+      await ego.bootstrapTaskSpace({
+        name: options.name.trim(),
+        ...(profileId ? { profileId } : {}),
+        ...(url ? { url } : {}),
+      }),
+      "bootstrapTaskSpace",
     ),
   );
-  if (!created) {
-    throw new Error("newTaskSpace returned an invalid task space");
+  if (!created || created.verified !== true) {
+    throw new Error("bootstrapTaskSpace returned an unverified task space");
   }
-  taskSpaceNumericId(created, "newTaskSpace");
-  return selectTaskSpace(ego, created, "newTaskSpace");
+  taskSpaceNumericId(created, "bootstrapTaskSpace");
+  return created;
 }
 
 /**
- * Use an existing agent-owned task space, or create it when missing. User-owned
- * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
- * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
- * @param {string|number} nameOrId Task space name or numeric id.
- * @param {string|{profileId?:string}} [options] Profile selection used only
- * when a new Space is created.
+ * Select one existing active, available agent-owned task space by numeric ID.
+ * Never creates a Space and never changes its Profile or Session.
+ * @param {number} id Positive numeric task space ID.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function useOrCreateTaskSpace(nameOrId, options?) {
-  const spaces = await listTaskSpaces();
-  const existing = findMatchingTaskSpace(spaces, nameOrId);
-  if (!existing) {
-    if (typeof nameOrId === "number") {
-      throw new Error(`task space not found: ${nameOrId}`);
-    }
-    return newTaskSpace(nameOrId, options);
+export async function useTaskSpace(id) {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new TypeError("useTaskSpace expects a positive numeric Space ID");
   }
-  if (isAgentOwned(existing.ownership)) {
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.useTaskSpace !== "function") {
+    throw new Error("useTaskSpace requires ego.useTaskSpace");
   }
-  if (existing.ownership === "user") {
-    // Don't claim user-owned spaces here. Select it as-is; the user stays in
-    // control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as ego-browser's owned
-    // guidance, not the raw native text). Call claimTaskSpace(nameOrId) to take
-    // ownership.
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
-  }
-  throw new Error(
-    `useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(existing.ownership)}`,
+  const selected = normalizeTaskSpace(
+    assertNoEgoError(await ego.useTaskSpace(id), "useTaskSpace"),
   );
-}
-
-function taskSpaceProfileId(options, operation) {
-  if (options === undefined || options === null || options === "") {
-    return undefined;
+  if (!selected || taskSpaceNumericId(selected, "useTaskSpace") !== id) {
+    throw new Error("useTaskSpace returned an invalid task space");
   }
-  const profileId =
-    typeof options === "string"
-      ? options
-      : typeof options === "object"
-        ? options.profileId
-        : undefined;
-  if (profileId === undefined || profileId === null || profileId === "") {
-    return undefined;
+  if (selected.lifecycle && selected.lifecycle !== "active") {
+    throw new Error(`useTaskSpace cannot use inactive task space ${id}`);
   }
-  if (typeof profileId !== "string" || !profileId.trim()) {
-    throw new TypeError(
-      `${operation} expects profileId to be a non-empty string`,
+  if (selected.ownership && !isAgentOwned(selected.ownership)) {
+    throw new Error(
+      `useTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(selected.ownership)}`,
     );
   }
-  return profileId.trim();
+  return selected;
+}
+
+function optionalNonEmptyString(value, label) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`${label} must be a non-empty string`);
+  }
+  return value.trim();
 }
 
 /**
@@ -948,9 +929,8 @@ function createBrowserFacade() {
 function createTaskSpacesFacade() {
   return {
     list: listTaskSpaces,
-    switch: switchTaskSpace,
-    new: newTaskSpace,
-    useOrCreate: useOrCreateTaskSpace,
+    bootstrap: bootstrapTaskSpace,
+    use: useTaskSpace,
     claim: claimTaskSpace,
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
@@ -976,7 +956,7 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab and storage facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), browser.closeTab(target), browser.storageState(options), and browser.setStorageState(stateOrPath, options). Treat targetId as short-lived: obtain and validate it in the current script before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.bootstrap(options), taskSpaces.use(id), taskSpaces.claim(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

@@ -846,59 +846,33 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object[]>",
     example: "console.log(await taskSpaces.list())",
   },
-  "taskSpaces.switch": {
-    signature: "taskSpaces.switch(nameOrId) => Promise<object>",
-    description: "Switch to an agent-owned task space.",
+  "taskSpaces.bootstrap": {
+    signature: "taskSpaces.bootstrap(options) => Promise<object>",
+    description: "Always create, verify, and select a fresh task space.",
     params: [
-      {
-        name: "nameOrId",
-        type: "string | number",
-        required: true,
-        description: "Task space name, taskId, or numeric id.",
-      },
-    ],
-    returns: "Promise<object>",
-    example: "await taskSpaces.switch(3)",
-  },
-  "taskSpaces.new": {
-    signature: "taskSpaces.new(name, options?) => Promise<object>",
-    description: "Create and select a new task space.",
-    params: [
-      {
-        name: "name",
-        type: "string",
-        required: true,
-        description: "Task space name.",
-      },
       {
         name: "options",
-        type: "string | { profileId?: string }",
-        required: false,
-        description: "Profile id; use Temporary for an isolated one-time Space.",
+        type: "{ name: string, profileId?: string, url?: string }",
+        required: true,
+        description: "Name, optional Profile id, and optional initial URL.",
       },
     ],
     returns: "Promise<object>",
-    example: "const task = await taskSpaces.new('research task', { profileId: 'Temporary' })",
+    example: "const task = await taskSpaces.bootstrap({ name: 'research task', profileId: 'Temporary', url: 'https://example.com/' })",
   },
-  "taskSpaces.useOrCreate": {
-    signature: "taskSpaces.useOrCreate(nameOrId, options?) => Promise<object>",
-    description: "Reuse an agent-owned task space or create one by name.",
+  "taskSpaces.use": {
+    signature: "taskSpaces.use(id) => Promise<object>",
+    description: "Select one existing active and available task space by numeric ID.",
     params: [
       {
-        name: "nameOrId",
-        type: "string | number",
+        name: "id",
+        type: "number",
         required: true,
-        description: "Task space name, taskId, or numeric id.",
-      },
-      {
-        name: "options",
-        type: "string | { profileId?: string }",
-        required: false,
-        description: "Profile id used only when a new Space is created.",
+        description: "Positive numeric Space ID returned by bootstrap.",
       },
     ],
     returns: "Promise<object>",
-    example: "const task = await taskSpaces.useOrCreate('google sheets task')",
+    example: "await taskSpaces.use(3)",
   },
   "taskSpaces.claim": {
     signature: "taskSpaces.claim(nameOrId) => Promise<object>",

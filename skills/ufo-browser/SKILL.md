@@ -15,7 +15,10 @@ Use the `Bash` tool to run all browser operations via `ufo-browser nodejs <<'EOF
 ```bash
 ufo-browser nodejs <<'EOF'
 // Name the task space for the whole user task, then reuse that space across heredoc rounds.
-const task = await useOrCreateTaskSpace('inspect example page')
+const task = await bootstrapTaskSpace({
+  name: 'inspect example page',
+  url: 'https://example.com/',
+})
 cliLog('task space id: ' + task.id)
 
 await openOrReuseTab('https://example.com', { wait: true, timeout: 20 })
@@ -30,7 +33,7 @@ The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and E
 
 ## Common helpers
 
-- Task spaces: `listTaskSpaces`, `useOrCreateTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `waitForAgentControl`, `completeTaskSpace`
+- Task spaces: `listTaskSpaces`, `bootstrapTaskSpace`, `useTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `waitForAgentControl`, `completeTaskSpace`
 - Navigation / state: `listTabs`, `openOrReuseTab`, `closeTab`, `gotoAndWait`, `currentTab`, `switchTab`, `gotoUrl`, `pageInfo`, `ensureRealTab`
 - Observation: `snapshotText`, `captureScreenshot`, `drainEvents`
 - Scroll / mouse: `scrollBy`, `scrollToBottomUntil`, `scroll`, `click`, `doubleClick`, `hover`, `dragMouse`
@@ -72,18 +75,21 @@ use the built-in `Temporary` Profile while creating it:
 
 ```js
 const profiles = await listProfiles()
-const task = await useOrCreateTaskSpace('isolated signup', {
+const task = await bootstrapTaskSpace({
+  name: 'isolated signup',
   profileId: 'Temporary',
+  url: 'https://example.com/',
 })
 ```
 
 `listProfiles()` returns `{ profiles: [{ id, isDefault, name }] }`; the
 temporary entry has `id: 'Temporary'` and `name: '临时 Profile'`.
-`newTaskSpace(name, options)`, `taskSpaces.new(name, options)`,
-`useOrCreateTaskSpace(nameOrId, options)`, and
-`taskSpaces.useOrCreate(nameOrId, options)` accept either the Profile id string
-or `{ profileId }`. Options are used only when a new Space is created; an
-existing matching Space is never silently replaced.
+`bootstrapTaskSpace({ name, profileId?, url? })` always creates a fresh Space,
+validates its Profile Session, selects it, and optionally opens `url`.
+`useTaskSpace(id)` only accepts the numeric ID returned by bootstrap and selects
+an existing active Space without creating, guessing by name, or changing its
+Profile/Session. `taskSpaces.bootstrap(options)` and `taskSpaces.use(id)` are
+the structured equivalents.
 
 Every Temporary Space receives its own memory-backed Chromium Session. Cookie,
 LocalStorage, IndexedDB, Service Worker, cache, permission, and authentication
@@ -93,11 +99,11 @@ the work must survive restart or reuse an existing login.
 
 Closing all tabs in a task space is equivalent to closing that task space.
 
-A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, normal working heredocs should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds. The exception is resuming after a handoff: once the user confirms "continue" (through an Ask or in chat), start the next heredoc with `takeOverTaskSpace(nameOrId)` instead.
+A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, save the numeric ID returned by `bootstrapTaskSpace()` and start later heredocs with `useTaskSpace(taskId)`. The exception is resuming after a handoff: once the user confirms "continue" (through an Ask or in chat), start the next heredoc with `takeOverTaskSpace(taskId)` instead.
 
-`nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space. Profile options never apply to an already-existing match.
+`useTaskSpace(id)` requires a positive numeric Space ID. It never accepts names or numeric strings, never creates a Space, and fails clearly for missing, inactive, user-owned, or leased Spaces.
 
-Use a short name for the active user goal when creating a new task space. Keep reusing that task space for follow-up questions, corrections, refinements, re-checks, and result validation, even if you previously thought the task was complete. Choose a new task space only when the user clearly starts a separate, unrelated goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
+Use a short name for the active user goal when creating a new task space. Keep reusing that task space ID for follow-up questions, corrections, refinements, re-checks, and result validation, even if you previously thought the task was complete. Choose a new task space only when the user clearly starts a separate, unrelated goal.
 
 For any follow-up on the same user goal — including continue, corrections, retries, validation, user-reported problems, or work after `completeTaskSpace(..., { keep: true })` — resume the original task space first if it still exists. Do not create a new task space for the same goal unless the user asks for a fresh space, starts an unrelated goal, or the original space is unavailable after checking. If a new space is necessary, state why.
 
@@ -107,7 +113,7 @@ After explicit user confirmation, to continue work from an existing user-owned, 
 
 | Helper | When the target space is user-owned |
 |---|---|
-| `switchTaskSpace` | throws — agent-owned spaces only |
+| `useTaskSpace` | accepts only an existing numeric ID; never creates or claims |
 | `claimTaskSpace` | claims it (ownership transfers to the agent), then selects it |
 | `handOffTaskSpace` | skipped — resolves `{ done: false, skipped: 'user-owned' }` |
 | `completeTaskSpace(…, { keep: true })` | skipped — resolves `{ done: false, skipped: 'user-owned' }` |
@@ -212,7 +218,7 @@ Use the semantic workflow first for ordinary websites with real DOM controls. Fo
 Before writing substantial content into a rich editor, perform a tiny write probe, then verify it with `await captureScreenshot()`, an export/readback path, or another reliable visual/state check. If the probe appears in the title bar, toolbar search, hidden input, or any wrong field, stop using DOM/input helpers for that surface and switch to screenshot-guided mouse actions plus real keyboard operations.
 
 1. **Semantic workflow: `snapshotText()` + refs / locators** — default for most pages with normal text, links, buttons, forms, tables, and lists.
-   - Reuse or create a task space: `const task = await useOrCreateTaskSpace(name)`.
+   - Create or resume a task space with `bootstrapTaskSpace({ name, url })` or `useTaskSpace(taskId)`.
    - Open or switch pages with `await openOrReuseTab(url, { wait: true })`; use `await gotoAndWait(url, { timeout, settle })` only when navigating inside the current tab.
    - Observe with `await snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`.
    - Act with `await click('@N')`, `await fillInput('@N', ...)`, or stable `loc=...` values. Use direct DOM logic only when it is simpler than helper calls.

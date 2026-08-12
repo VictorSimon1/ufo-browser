@@ -4,7 +4,7 @@ UFO-Browser 的 Agent 控制必须是后台事务，不能成为 macOS 前台 Pr
 
 ## 不变量
 
-1. `useOrCreateTaskSpace`、`Target.activateTarget` 和所有 Agent RPC 只改变连接选择、Space lease 或 Space 内 active tab，不调用 `showSpace()`、`window.show()`、`window.focus()` 或 `app.focus()`。
+1. `bootstrapTaskSpace`、`useTaskSpace`、`Target.activateTarget` 和所有 Agent RPC 只改变连接选择、Space lease 或 Space 内 active tab，不调用 `showSpace()`、`window.show()`、`window.focus()` 或 `app.focus()`。
 2. 主窗口的唯一产品状态仍是 `Presentation = overview | space(id)`。Agent 命令执行前后 Presentation 必须相同。
 3. Overview 模式下，主窗口 native child tree 不能出现任何 page `WebContentsView`。后台页面只在需要 compositor 的时间内挂到共享 capture window。
 4. capture window 必须保持透明、`opacity: 0`、不可聚焦、鼠标穿透、无阴影、不可缩放/最小化/最大化/全屏，并隐藏于 Mission Control；没有挂载页面时立即隐藏。

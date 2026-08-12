@@ -27,7 +27,7 @@ try {
   await waitForTestSocket(Date.now(), 20_000);
   const created = JSON.parse(
     await runCli(`
-const task = await useOrCreateTaskSpace('ufo-browser live preview e2e ' + Date.now())
+const task = await bootstrapTaskSpace({ name: 'ufo-browser live preview e2e ' + Date.now() })
 const html = \`<!doctype html><meta charset="utf-8"><title>Live Preview E2E</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:hsl(205 72% 90%);transition:background .1s linear}.value{font:800 96px/1 -apple-system;color:#173a32}iframe{display:none}</style><div class="value">0</div><iframe id="churn" src="about:blank"></iframe><script>let n=0;globalThis.previewTimer=setInterval(()=>{n++;document.querySelector('.value').textContent=String(n);document.body.style.background='hsl('+((205+n*13)%360)+' 72% 90%)'},180);let f=0;globalThis.frameTimer=setInterval(()=>{document.querySelector('#churn').contentWindow.location.replace('about:blank#'+(++f))},140)</script>\`
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 })
 cliLog(JSON.stringify({ taskId: task.id }))
@@ -121,7 +121,7 @@ cliLog(JSON.stringify({ taskId: task.id }))
 
   const page = JSON.parse(
     await runCli(`
-const task = await useOrCreateTaskSpace(${taskId})
+const task = await useTaskSpace(${taskId})
 cliLog(JSON.stringify({
   value: Number(await js("document.querySelector('.value').textContent")),
   stopped: await js("clearInterval(globalThis.previewTimer); clearInterval(globalThis.frameTimer); true"),

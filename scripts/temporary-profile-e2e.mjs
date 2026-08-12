@@ -51,7 +51,7 @@ try {
     join(root, "dist/bin/ufo-browser"),
     ["nodejs"],
     `const profiles = await listProfiles()
-const task = await taskSpaces.new('CLI Temporary', { profileId: 'Temporary' })
+const task = await taskSpaces.bootstrap({ name: 'CLI Temporary', profileId: 'Temporary' })
 cliLog(JSON.stringify({ profiles, task }))
 `,
   );

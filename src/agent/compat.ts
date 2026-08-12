@@ -63,9 +63,8 @@ export const EGO_GLOBAL_HELPER_NAMES = [
   "serverFetch",
   "browserFetch",
   "listTaskSpaces",
-  "switchTaskSpace",
-  "newTaskSpace",
-  "useOrCreateTaskSpace",
+  "bootstrapTaskSpace",
+  "useTaskSpace",
   "claimTaskSpace",
   "completeTaskSpace",
   "handOffTaskSpace",
@@ -226,12 +225,11 @@ export function createEgoCompatibilityContext(
       call(host.animationHighlightMouseToPosition, ...args),
     iframeTarget: harness.iframeTarget ?? browser.iframeTarget,
 
-    // ego-lite Skill compatible flat task-space helpers.
+    // UFO-Browser's strict two-entry task-space API.
     listTaskSpaces: harness.listTaskSpaces ?? taskSpaces.list,
-    switchTaskSpace: harness.switchTaskSpace ?? taskSpaces.switch,
-    newTaskSpace: harness.newTaskSpace ?? taskSpaces.new,
-    useOrCreateTaskSpace:
-      harness.useOrCreateTaskSpace ?? taskSpaces.useOrCreate,
+    bootstrapTaskSpace:
+      harness.bootstrapTaskSpace ?? taskSpaces.bootstrap,
+    useTaskSpace: harness.useTaskSpace ?? taskSpaces.use,
     claimTaskSpace: harness.claimTaskSpace ?? taskSpaces.claim,
     completeTaskSpace: harness.completeTaskSpace ?? taskSpaces.complete,
     handOffTaskSpace: harness.handOffTaskSpace ?? taskSpaces.handOff,
@@ -347,8 +345,10 @@ export function installEgoCompatibilityGlobals(
 }
 
 const LEGACY_HELP: Record<string, string> = {
-  useOrCreateTaskSpace:
-    "useOrCreateTaskSpace(nameOrId) => Promise<TaskSpace>",
+  bootstrapTaskSpace:
+    "bootstrapTaskSpace({ name, profileId?, url? }) => Promise<VerifiedTaskSpace>; always creates a new Space",
+  useTaskSpace:
+    "useTaskSpace(id) => Promise<TaskSpace>; accepts a positive numeric Space ID only",
   openOrReuseTab:
     "openOrReuseTab(url, { wait?, timeout?, settle?, match? }) => Promise<Tab>; timeout and settle are seconds",
   snapshotText:

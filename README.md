@@ -59,7 +59,10 @@ UFO-Browser ships a JavaScript Skill and CLI. Run browser operations as a heredo
 
 ```bash
 ufo-browser nodejs <<'EOF'
-const task = await useOrCreateTaskSpace('inspect example page')
+const task = await bootstrapTaskSpace({
+  name: 'inspect example page',
+  url: 'https://example.com/',
+})
 
 await openOrReuseTab('https://example.com', {
   wait: true,
@@ -71,13 +74,13 @@ EOF
 ```
 
 For a fresh one-time browser identity instead of the current persistent login
-Profile, select the built-in Temporary Profile. Existing calls remain
-backward-compatible and continue to use the current default Profile:
+Profile, select the built-in Temporary Profile:
 
 ```bash
 ufo-browser nodejs <<'EOF'
 const profiles = await listProfiles()
-const task = await taskSpaces.new('isolated signup', {
+const task = await taskSpaces.bootstrap({
+  name: 'isolated signup',
   profileId: 'Temporary',
 })
 cliLog({ profiles, task })
@@ -91,7 +94,7 @@ default Profile.
 
 Common helpers include:
 
-- Task Spaces: `useOrCreateTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `completeTaskSpace`
+- Task Spaces: `bootstrapTaskSpace`, `useTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `completeTaskSpace`
 - Navigation: `openOrReuseTab`, `gotoAndWait`, `listTabs`, `switchTab`, `closeTab`
 - Observation: `snapshotText`, `pageInfo`, `captureScreenshot`, `drainEvents`
 - Input: `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `typeText`, `pressKey`, `scroll`

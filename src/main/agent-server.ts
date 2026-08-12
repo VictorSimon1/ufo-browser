@@ -155,15 +155,41 @@ export class AgentServer {
         return { taskSpaces: this.manager.listSpaces() };
       case "listProfiles":
         return { profiles: this.manager.listProfiles() };
-      case "createTaskSpace": {
-        const profileId = optionalAgentProfileId(args[1]);
-        const space = await this.manager.createSpace(
-          String(args[0] || "Agent Space"),
-          "agent",
-          profileId,
-        );
-        await this.select(connection, space.id);
-        return space;
+      case "bootstrapTaskSpace": {
+        const options = bootstrapTaskSpaceOptions(args[0]);
+        let createdSpaceId: number | undefined;
+        try {
+          const space = await this.manager.createSpace(
+            options.name,
+            "agent",
+            options.profileId,
+          );
+          createdSpaceId = space.id;
+          await this.select(connection, space.id);
+          if (options.url) {
+            await this.manager.createAgentTab(space.id, options.url);
+          }
+          const verified = this.manager.getSpaceOrThrow(space.id);
+          verifyBootstrappedSpace(verified, options.profileId);
+          const activeTab = verified.tabs.find(
+            (tab) => tab.targetId === verified.activeTabId,
+          );
+          if (!activeTab) throw new Error("EGO_TASK_SPACE_BOOTSTRAP_FAILED: active tab missing");
+          return {
+            ...structuredClone(verified),
+            url: activeTab.url,
+            verified: true,
+          };
+        } catch (error) {
+          if (createdSpaceId !== undefined) {
+            if (connection.selectedSpaceId === createdSpaceId) {
+              this.release(connection);
+              connection.selectedSpaceId = undefined;
+            }
+            await this.manager.closeSpace(createdSpaceId).catch(() => undefined);
+          }
+          throw error;
+        }
       }
       case "claimTaskSpace": {
         const spaceId = Number(args[0]);
@@ -173,9 +199,13 @@ export class AgentServer {
         await this.select(connection, spaceId);
         return this.manager.getSpaceOrThrow(spaceId);
       }
-      case "useTaskSpace":
-        await this.select(connection, Number(args[0]));
-        return Number(args[0]);
+      case "useTaskSpace": {
+        const spaceId = strictSpaceId(args[0], "useTaskSpace");
+        const space = this.manager.getSpaceOrThrow(spaceId);
+        if (space.lifecycle !== "active") throw new Error("EGO_TASK_SPACE_INACTIVE");
+        await this.select(connection, spaceId);
+        return structuredClone(this.manager.getSpaceOrThrow(spaceId));
+      }
       case "closeTaskSpace": {
         const { spaceId } = this.assertSelected(connection);
         await this.manager.closeSpace(spaceId);
@@ -325,20 +355,67 @@ export class AgentServer {
   }
 }
 
-function optionalAgentProfileId(value: unknown) {
-  if (value === undefined || value === null || value === "") return undefined;
-  const profileId =
-    typeof value === "string"
-      ? value
-      : value && typeof value === "object" && "profileId" in value
-        ? (value as { profileId?: unknown }).profileId
-        : undefined;
-  if (typeof profileId !== "string" || !profileId.trim()) {
+function bootstrapTaskSpaceOptions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(
-      "ego.createTaskSpace(name, profileId) expects profileId to be a non-empty string",
+      "bootstrapTaskSpace expects { name, profileId?, url? }",
     );
   }
-  return profileId.trim();
+  const input = value as Record<string, unknown>;
+  if (typeof input.name !== "string" || !input.name.trim()) {
+    throw new TypeError("bootstrapTaskSpace name must be a non-empty string");
+  }
+  return {
+    name: input.name.trim(),
+    profileId: optionalString(input.profileId, "bootstrapTaskSpace profileId"),
+    url: optionalString(input.url, "bootstrapTaskSpace url"),
+  };
+}
+
+function optionalString(value: unknown, label: string) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function strictSpaceId(value: unknown, operation: string) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new TypeError(`${operation} expects a positive numeric Space ID`);
+  }
+  return value;
+}
+
+function verifyBootstrappedSpace(
+  space: {
+    profileId: string;
+    profileMode: string;
+    sessionScopeId?: string;
+    lifecycle: string;
+    ownership: string;
+  },
+  requestedProfileId?: string,
+) {
+  if (space.lifecycle !== "active" || space.ownership !== "agent") {
+    throw new Error("EGO_TASK_SPACE_BOOTSTRAP_FAILED: Space is not active");
+  }
+  const temporary = requestedProfileId?.toLowerCase() === "temporary";
+  if (temporary) {
+    if (
+      space.profileId !== "temporary" ||
+      space.profileMode !== "temporary" ||
+      !space.sessionScopeId
+    ) {
+      throw new Error(
+        "EGO_TASK_SPACE_BOOTSTRAP_FAILED: Temporary Profile Session was not created",
+      );
+    }
+  } else if (space.profileMode !== "persistent" || space.sessionScopeId) {
+    throw new Error(
+      "EGO_TASK_SPACE_BOOTSTRAP_FAILED: persistent Profile Session is invalid",
+    );
+  }
 }
 
 function normalizeAgentError(error: any) {

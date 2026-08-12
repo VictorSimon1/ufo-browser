@@ -48,7 +48,7 @@ try {
 
   const dynamicPage = `<!doctype html><meta charset="utf-8"><title>Surface Budget</title><style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#edf4f1}.pulse{width:120px;height:120px;border-radius:50%;background:#397968;animation:pulse .6s ease-in-out infinite alternate}@keyframes pulse{to{transform:scale(1.12);opacity:.68}}</style><div class="pulse"></div><output>0</output><script>globalThis.surfaceTicks=0;setInterval(()=>{surfaceTicks+=1;document.querySelector('output').textContent=String(surfaceTicks)},50)</script>`;
   const firstRun = runCli(`
-const task = await useOrCreateTaskSpace(1)
+const task = await useTaskSpace(1)
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(${JSON.stringify(dynamicPage)}), { wait: true, timeout: 20 })
 await wait(4.4)
 cliLog(JSON.stringify({ taskId: task.id, ticks: await js('globalThis.surfaceTicks'), page: await pageInfo() }))
@@ -102,7 +102,7 @@ cliLog(JSON.stringify({ taskId: task.id, ticks: await js('globalThis.surfaceTick
   await new Promise((resolve) => setTimeout(resolve, 450));
   const resumed = JSON.parse(
     await runCli(`
-const task = await useOrCreateTaskSpace(1)
+const task = await useTaskSpace(1)
 await wait(0.25)
 cliLog(JSON.stringify({ taskId: task.id, ticks: await js('globalThis.surfaceTicks'), page: await pageInfo() }))
 `),
@@ -126,7 +126,7 @@ cliLog(JSON.stringify({ taskId: task.id, ticks: await js('globalThis.surfaceTick
   );
 
   const handoffRun = runCli(`
-const task = await useOrCreateTaskSpace(1)
+const task = await useTaskSpace(1)
 const handoff = await handOffTaskSpace(task.id)
 cliLog(JSON.stringify({ taskId: task.id, handoff }))
 await new Promise(resolve => setTimeout(resolve, 1400))
@@ -154,7 +154,7 @@ cliLog(JSON.stringify(await completeTaskSpace(1, { keep: false })))
 
   const directlyClosed = JSON.parse(
     await runCli(`
-const task = await useOrCreateTaskSpace('direct surface close ' + Date.now())
+const task = await bootstrapTaskSpace({ name: 'direct surface close ' + Date.now() })
 const html = '<!doctype html><title>Direct Surface Close</title><style>html,body{height:100%;margin:0;background:#eef5f2}</style>'
 await openOrReuseTab('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 })
 const completed = await completeTaskSpace(task.id, { keep: false })

@@ -32,7 +32,7 @@ try {
 
   const audit = JSON.parse(
     await runCli(`
-const task = await useOrCreateTaskSpace('agent initial tab parity')
+const task = await bootstrapTaskSpace({ name: 'agent initial tab parity' })
 const before = await listTabs()
 const first = await openOrReuseTab('http://127.0.0.1:${port}/first', { wait: true, timeout: 10 })
 const afterFirst = await listTabs()
@@ -70,7 +70,7 @@ cliLog(JSON.stringify({ taskId: task.id, before, first, afterFirst, firstPage, s
 } finally {
   if (taskId) {
     await runCli(`
-const task = await useOrCreateTaskSpace(${Number(taskId)})
+const task = await useTaskSpace(${Number(taskId)})
 cliLog(await completeTaskSpace(task.id, { keep: false }))
 `).catch(() => undefined);
   }

@@ -84,7 +84,7 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
 
     const selected = await rpc(socket, 1, "useTaskSpace", [space.id]);
     assert.equal(selected.type, "rpc-result");
-    assert.equal(selected.result, space.id);
+    assert.equal(selected.result.id, space.id);
     assert.equal(space.ownership, "agentDelegatedToUser");
 
     const blocked = await rpc(socket, 2, "snapshot", []);
@@ -157,7 +157,7 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
   }
 });
 
-test("Agent createTaskSpace forwards Profile selection and preserves legacy calls", async () => {
+test("Agent bootstrapTaskSpace verifies Profile selection and rejects legacy calls", async () => {
   const root = await mkdtemp(join(tmpdir(), "x-browser-agent-profile-"));
   const socketPath = join(root, "agent.sock");
   const spaces = new Map<number, any>();
@@ -179,6 +179,7 @@ test("Agent createTaskSpace forwards Profile selection and preserves legacy call
         ownership: "agent",
         profileId: profileId === "Temporary" ? "temporary" : "default",
         profileMode: profileId === "Temporary" ? "temporary" : "persistent",
+        sessionScopeId: profileId === "Temporary" ? "scope-1" : undefined,
         activeTabId: `page-${id}`,
         tabs: [
           {
@@ -195,6 +196,15 @@ test("Agent createTaskSpace forwards Profile selection and preserves legacy call
       const space = spaces.get(id);
       if (!space) throw new Error("task space not found");
       return space;
+    },
+    closeSpace: async (id: number) => {
+      spaces.delete(id);
+      return true;
+    },
+    createAgentTab: async (id: number, url: string) => {
+      const space = spaces.get(id);
+      space.tabs[0].url = url;
+      return { targetId: space.activeTabId, url };
     },
     setAgentConnectionActive: () => undefined,
   };
@@ -226,23 +236,22 @@ test("Agent createTaskSpace forwards Profile selection and preserves legacy call
       name: "临时 Profile",
     });
 
-    const temporary = await rpc(socket, 2, "createTaskSpace", [
-      "isolated Agent Space",
-      "Temporary",
-    ]);
+    const temporary = await rpc(socket, 2, "bootstrapTaskSpace", [{
+      name: "isolated Agent Space",
+      profileId: "Temporary",
+      url: "https://example.com/",
+    }]);
     assert.equal(temporary.result.profileMode, "temporary");
     assert.equal(temporary.result.profileId, "temporary");
-
-    const legacy = await rpc(socket, 3, "createTaskSpace", ["legacy Space"]);
-    assert.equal(legacy.result.profileMode, "persistent");
+    assert.equal(temporary.result.verified, true);
+    assert.equal(temporary.result.url, "https://example.com/");
     assert.deepEqual(creations, [
       { name: "isolated Agent Space", profileId: "Temporary" },
-      { name: "legacy Space", profileId: undefined },
     ]);
 
-    const invalid = await rpc(socket, 4, "createTaskSpace", ["bad", {}]);
+    const invalid = await rpc(socket, 3, "bootstrapTaskSpace", [{ name: "bad", profileId: {} }]);
     assert.equal(invalid.type, "rpc-error");
-    assert.match(invalid.error, /profileId to be a non-empty string/);
+    assert.match(invalid.error, /profileId must be a non-empty string/);
   } finally {
     socket?.destroy();
     await server.close();

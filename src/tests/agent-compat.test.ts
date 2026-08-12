@@ -86,7 +86,7 @@ test("legacy ego Skill helper names map to the facade harness", async () => {
       keyboard: { type: fn("type") },
     },
     browser: { openOrReuseTab: fn("openOrReuseTab") },
-    taskSpaces: { useOrCreate: fn("useOrCreate") },
+    taskSpaces: { bootstrap: fn("bootstrap"), use: fn("use") },
     fetch: { server: fn("serverFetch"), browser: fn("browserFetch") },
     site: {
       skills: fn("siteSkills"),
@@ -110,7 +110,11 @@ test("legacy ego Skill helper names map to the facade harness", async () => {
     (...values) => output.push(values),
   );
 
-  assert.equal(await context.useOrCreateTaskSpace("task"), "useOrCreate");
+  assert.equal(
+    await context.bootstrapTaskSpace({ name: "task" }),
+    "bootstrap",
+  );
+  assert.equal(await context.useTaskSpace(3), "use");
   assert.equal(await context.snapshotText(), "snapshot");
   assert.equal(await context.snapshotRaw(), "snapshotRaw");
   assert.equal(await context.elementCenter("@12"), "elementCenter");

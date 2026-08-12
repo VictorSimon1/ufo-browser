@@ -14,8 +14,8 @@
 
 ## Facades
 
-The installed Ego-compatible Skill flat API is also first-class. Existing scripts can call
-`useOrCreateTaskSpace`, `openOrReuseTab`, `snapshotText`, `fillInput`,
+The installed UFO-Browser flat API is first-class. Scripts can call
+`bootstrapTaskSpace`, `useTaskSpace`, `openOrReuseTab`, `snapshotText`, `fillInput`,
 `pressKey`, `click`, `doubleClick`, `hover`, `scrollBy`, `js`, `cdp`,
 `captureScreenshot`, `wait`, and `cliLog` without rewriting them to facades.
 Legacy `timeout`, `settle`, and `wait` values are interpreted as seconds.
@@ -32,7 +32,7 @@ It also provides:
 
 `browser` provides tab listing, selection, creation/reuse, closing, iframe target lookup, and real-tab selection.
 
-`taskSpaces` provides `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`. `new(name, options?)` and `useOrCreate(nameOrId, options?)` accept a Profile id string or `{ profileId }`; `Temporary` creates a one-time memory-backed Session. The option is ignored when `useOrCreate` finds an existing Space.
+`taskSpaces` provides `list`, `bootstrap`, `use`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`. `bootstrap({ name, profileId?, url? })` always creates and verifies a fresh Space. `use(id)` accepts only an existing numeric Space ID and never creates, guesses by name, or changes Profile/Session.
 
 `site` provides optional learned site tools. `fetch.server` issues Node-side requests; `fetch.browser` issues requests from the active browser page. `cdp` sends a raw protocol command.
 
@@ -48,8 +48,8 @@ Node's callable `fetch` keeps its original enumerable property.
 `{ currentVersion: string, updateAvailable: boolean }`. `listProfiles()`
 resolves to `{ profiles: [{ id, isDefault, name }] }`, including the built-in
 `{ id: 'Temporary', isDefault: false, name: '临时 Profile' }` template.
-`createTaskSpace(name, profileId?)` accepts the same optional Profile id while
-preserving legacy one-argument calls. `createTab(url)` requires
+`bootstrapTaskSpace({ name, profileId?, url? })` returns a verified Space record
+with its active tab URL. `createTab(url)` requires
 a string URL and resolves to `{ targetId }`.
 
 ## Task Space lifecycle
@@ -74,7 +74,7 @@ The UFO-Browser-owned runtime talks to these App host methods over newline-delim
 createTab                   listTabs
 listTaskSpaces              listProfiles
 snapshot                    resolveRef
-createTaskSpace             claimTaskSpace
+bootstrapTaskSpace          claimTaskSpace
 closeTaskSpace              useTaskSpace
 animationHighlightMouseToPosition
 handOffTaskSpace            takeOverTaskSpace

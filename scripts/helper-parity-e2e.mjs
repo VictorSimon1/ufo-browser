@@ -216,7 +216,10 @@ const resultOf = async operation => {
   try { return { ok: true, value: await operation() } }
   catch (error) { return { ok: false, name: error?.name, message: error?.message } }
 }
-const task = await useOrCreateTaskSpace(${JSON.stringify(taskName)})
+if (typeof bootstrapTaskSpace !== 'function') {
+  throw new Error('helper parity requires bootstrapTaskSpace on both runtimes')
+}
+const task = await bootstrapTaskSpace({ name: ${JSON.stringify(taskName)} })
 const contractNames = [
   'createTab',
   'getBrowserVersion',
