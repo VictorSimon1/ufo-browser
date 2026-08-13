@@ -119,6 +119,12 @@ export class NativeCefTaskSpaceManager {
     space.lifecycle = lifecycle;
     space.updatedAt = Date.now();
     await this.save();
+    if (ownership !== "agent") {
+      // Handoff/completion returns the native browser surface to the human.
+      // Do not start a cold Space just to show it; only an already-presented
+      // runtime is eligible for this best-effort presentation update.
+      await this.showRunningSpace(spaceId);
+    }
     return structuredClone(space);
   }
 
@@ -127,6 +133,7 @@ export class NativeCefTaskSpaceManager {
     space.lifecycle = lifecycle;
     space.updatedAt = Date.now();
     await this.save();
+    if (lifecycle !== "active") await this.showRunningSpace(spaceId);
     return structuredClone(space);
   }
 
@@ -313,6 +320,13 @@ export class NativeCefTaskSpaceManager {
   async focusSpace(spaceId: number) {
     const runtime = await this.ensureRuntime(spaceId);
     return runtime.control("focus");
+  }
+
+  private async showRunningSpace(spaceId: number) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const runtime = this.runtimes.get(this.runtimeKey(space));
+    if (!runtime?.isRunning()) return undefined;
+    return runtime.control("show").catch(() => undefined);
   }
 
   getActiveTab(spaceId: number) {
