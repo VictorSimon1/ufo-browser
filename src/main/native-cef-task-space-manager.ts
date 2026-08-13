@@ -327,6 +327,10 @@ export class NativeCefTaskSpaceManager {
     return browser;
   }
 
+  async ensureBrowserConnectionForAgent(spaceId: number, runtime: NativeCefRuntime) {
+    return this.ensureBrowserConnection(spaceId, runtime);
+  }
+
   private runtimeKey(space: SpaceRecord) {
     return `space-${space.id}`;
   }
