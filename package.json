@@ -7,6 +7,7 @@
   "description": "A high-performance local-first Chromium browser built for AI agents and people.",
   "main": "dist/main/electron.js",
   "scripts": {
+    "start": "npm run start:native",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js scripts/sync-agent-skills.test.mjs",
@@ -54,6 +55,7 @@
     "native:cef:app:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-application-smoke.mjs",
     "native:cef:presentation:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-presentation-smoke.mjs",
     "native:cef:bundle:smoke": "npm run package:native:mac && node scripts/native-cef-bundle-smoke.mjs",
+    "native:cef:install:smoke": "npm run package:native:mac && node scripts/native-cef-install-smoke.mjs",
     "start:native": "npm run native:cef:app",
     "package:native": "npm run package:native:mac",
     "package:native:mac": "npm run build && npm run native:cef:build && node scripts/package-native-mac.mjs",

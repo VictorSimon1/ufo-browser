@@ -1,9 +1,10 @@
 import { mkdir, readFile, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
+import { pathToFileURL } from "node:url";
 
 export type NativeCefApplicationOptions = {
   agentScript?: string;
@@ -43,11 +44,12 @@ export class NativeCefApplication {
     if (this.isRunning()) return this.status();
     if (process.platform !== "darwin") throw new Error("Native CEF currently supports macOS only");
     const merged = { ...this.defaults, ...options };
+    const bundleRoot = process.env.UFO_BROWSER_NATIVE_WORKING_DIR;
     const userDataDir = resolve(merged.userDataDir || join(homedir(), "Library/Application Support/UFO-Browser"));
     await mkdir(userDataDir, { recursive: true, mode: 0o700 });
     const infoFile = resolve(merged.infoFile || join(userDataDir, "overview.json"));
     await rm(infoFile, { force: true });
-    const agentScript = resolve(merged.agentScript || process.env.UFO_BROWSER_NATIVE_AGENT_SCRIPT || join(process.cwd(), "dist/main/native-cef-agent.js"));
+    const agentScript = resolve(merged.agentScript || process.env.UFO_BROWSER_NATIVE_AGENT_SCRIPT || join(bundleRoot || process.cwd(), bundleRoot ? "Contents/Resources/native-cef-agent.js" : "dist/main/native-cef-agent.js"));
     const cefExecutable = resolve(merged.cefExecutable || resolveCefExecutable());
     const socketPath = join(userDataDir, "ufo-browser.sock");
     const overviewControlSocket = merged.env?.UFO_BROWSER_OVERVIEW_CONTROL_SOCKET || join(process.env.TMPDIR || "/tmp", `ufo-browser-overview-${process.pid}.sock`);
@@ -60,11 +62,14 @@ export class NativeCefApplication {
       UFO_BROWSER_OVERVIEW_INFO_FILE: infoFile,
       UFO_CEF_HOST: cefExecutable,
       UFO_BROWSER_OVERVIEW_CONTROL_SOCKET: overviewControlSocket,
-      UFO_BROWSER_NATIVE_KEYCHAIN_HELPER: merged.env?.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || join(process.cwd(), "dist/bin/ufo-keychain-helper"),
+      UFO_BROWSER_NATIVE_KEYCHAIN_HELPER: merged.env?.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || join(bundleRoot || process.cwd(), bundleRoot ? "Contents/Resources/ufo-keychain-helper" : "dist/bin/ufo-keychain-helper"),
+      UFO_BROWSER_NATIVE_WORKING_DIR: bundleRoot || "",
       ...(merged.useMockKeychain ? { UFO_CEF_USE_MOCK_KEYCHAIN: "1" } : {}),
     };
     this.infoPath = infoFile;
-    this.agent = spawn(process.execPath, [agentScript], { cwd: process.cwd(), env, stdio: "ignore" });
+    this.agent = spawn(process.execPath, [agentScript], { cwd: bundleRoot || process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
+    this.agent.stdout?.on("data", (chunk) => process.stdout.write(chunk));
+    this.agent.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     this.agent.once("exit", () => {
       this.agent = undefined;
       if (!this.stopping) void this.stop();
@@ -79,7 +84,9 @@ export class NativeCefApplication {
       `--control-socket=${overviewControlSocket}`,
       `--user-data-dir=${join(userDataDir, "OverviewWindow")}`,
       ...(merged.useMockKeychain ? ["--use-mock-keychain"] : []),
-    ], { cwd: process.cwd(), env, stdio: "ignore" });
+    ], { cwd: bundleRoot || process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
+    this.overview.stdout?.on("data", (chunk) => process.stdout.write(chunk));
+    this.overview.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     this.overview.once("exit", () => {
       this.overview = undefined;
       if (!this.stopping) void this.stop();
@@ -179,6 +186,8 @@ async function findFreePort() {
 }
 
 function resolveCefExecutable() {
+  const bundleRoot = process.env.UFO_BROWSER_NATIVE_WORKING_DIR;
+  if (bundleRoot) return join(bundleRoot, "Contents/MacOS/ufo-cef-host");
   const candidates = [
     join(process.cwd(), "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),
     join(process.cwd(), "native/cef-host/build/Release/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),
@@ -192,7 +201,10 @@ function delay(ms: number) {
   return new Promise<void>((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Normalize aliases such as macOS /tmp -> /private/tmp before deciding if
+// this module is the executable entry point. Without this, a relocated .app
+// can exit cleanly because Node sees two different spellings of the same file.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const application = new NativeCefApplication({
     useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
     userDataDir: process.env.UFO_BROWSER_NATIVE_USER_DATA,

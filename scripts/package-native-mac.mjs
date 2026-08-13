@@ -31,7 +31,24 @@ async function main() {
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(join(appRoot, "Contents/MacOS"), { recursive: true });
   await mkdir(join(appRoot, "Contents/Resources"), { recursive: true });
-  await cp(frameworkRoot, join(appRoot, "Contents/Frameworks"), { recursive: true });
+  // Node's fs.cp can materialize CEF framework symlinks as absolute links to
+  // the build tree. That works in-place but breaks after a DMG drag-install.
+  // ditto preserves the framework's relative Versions/A links and is the
+  // canonical macOS bundle copier.
+  await run("/usr/bin/ditto", [
+    join(frameworkRoot, "Chromium Embedded Framework.framework"),
+    join(appRoot, "Contents/Frameworks/Chromium Embedded Framework.framework"),
+  ]);
+  for (const helper of [
+    "ufo-cef-host Helper.app",
+    "ufo-cef-host Helper (Alerts).app",
+    "ufo-cef-host Helper (GPU).app",
+    "ufo-cef-host Helper (Plugin).app",
+    "ufo-cef-host Helper (Renderer).app",
+  ]) {
+    const source = join(frameworkRoot, helper);
+    if (await exists(source)) await run("/usr/bin/ditto", [source, join(appRoot, "Contents/Frameworks", helper)]);
+  }
   // Keep the CEF executable under Contents/MacOS. Its generated rpath is
   // @executable_path/../Frameworks; moving it to Resources would make the
   // installed DMG unable to locate Chromium Embedded Framework.framework.

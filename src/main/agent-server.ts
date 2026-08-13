@@ -40,7 +40,13 @@ export class AgentServer {
         resolve();
       });
     });
-    await chmod(this.socketPath, 0o600);
+    // A relocated macOS app can report the listen callback before the socket
+    // directory entry is observable. Permissions are best-effort here; the
+    // directory itself is already mode 0700 and the smoke/CLI clients wait for
+    // the socket to become visible.
+    await chmod(this.socketPath, 0o600).catch((error: any) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
   }
 
   async close() {

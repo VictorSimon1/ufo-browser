@@ -61,12 +61,22 @@ static NSString* HostExecutablePath() {
   environment[@"UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER"] = storageWorker;
   environment[@"UFO_BROWSER_NATIVE_KEYCHAIN_HELPER"] = keychain;
   environment[@"UFO_BROWSER_NATIVE_RENDERER_ROOT"] = ResourcePath(@"renderer");
+  environment[@"UFO_BROWSER_NATIVE_WORKING_DIR"] = [NSBundle mainBundle].bundlePath;
 
   NSTask* task = [[NSTask alloc] init];
   task.launchPath = node;
   task.arguments = @[script];
   task.currentDirectoryPath = [NSBundle mainBundle].bundlePath;
   task.environment = environment;
+  // Forward the coordinator's diagnostics to the native app's stderr. This is
+  // important for relocated .app bundles: a failed resource lookup must be
+  // visible to the installer smoke test and to Console.app instead of looking
+  // like a silent clean exit.
+  task.standardOutput = [NSFileHandle fileHandleWithStandardOutput];
+  task.standardError = [NSFileHandle fileHandleWithStandardError];
+  fprintf(stderr, "[UFO Native launcher] node=%s script=%s cwd=%s\\n",
+          node.fileSystemRepresentation, script.fileSystemRepresentation,
+          task.currentDirectoryPath.fileSystemRepresentation);
   __weak UfoNativeLauncherDelegate* weakSelf = self;
   task.terminationHandler = ^(NSTask* terminatedTask) {
     (void)terminatedTask;
