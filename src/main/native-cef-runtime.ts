@@ -166,7 +166,7 @@ export class NativeCefRuntime {
   constructor(private readonly defaults: NativeCefRuntimeOptions = {}) {}
 
   isRunning() {
-    return Boolean(this.process && !this.process.killed);
+    return Boolean(this.process && this.process.exitCode === null && !this.process.killed);
   }
 
   getPort() {
@@ -281,6 +281,13 @@ export class NativeCefRuntime {
       }
     }
     throw new Error(`Native CEF control socket unavailable: ${String(lastError || path)}`);
+  }
+
+  hasExited() {
+    // The exit handler clears the ChildProcess reference deliberately. A
+    // missing reference is therefore also a stale runtime and callers may
+    // safely recreate it instead of retrying a dead control socket forever.
+    return !this.isRunning();
   }
 
   private endpoint(path: string) {

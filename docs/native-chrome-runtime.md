@@ -136,6 +136,16 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    and post-install CLI/Skill synchronization before replacing the release
    Electron package.
 
+   Native presentation is now coordinated explicitly instead of letting each
+   CEF window show itself independently. Opening a Space hides Overview and
+   all other running Space windows; closing the visible Space returns to and
+   focuses Overview. Background Spaces keep their Chromium state but remain
+   hidden, and cold Spaces are still started only when opened or used by an
+   Agent. Control sockets live in a short per-Agent temporary directory to
+   stay below macOS `sockaddr_un` path limits even when Profile data lives in a
+   deeply nested directory. Run `npm run native:cef:presentation:smoke` for the
+   create/open/close/return lifecycle gate.
+
 ## Build and run
 
 CEF binaries are intentionally excluded from Git. Set `UFO_CEF_ROOT` to a

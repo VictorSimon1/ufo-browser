@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { BrowserProfileRegistry } from "./profile-registry.js";
 import { BrowserStateStore } from "./state-store.js";
 import type { SpaceLifecycle, SpaceOwnership, SpaceRecord, TabRecord } from "./types.js";
@@ -21,7 +21,13 @@ export type NativeCefTaskSpaceManagerOptions = {
   portBase?: number;
   useMockKeychain?: boolean;
   sourcePartitionsRoot?: string;
+  controlSocketsRoot?: string;
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
+};
+
+export type NativeCefPresentationHooks = {
+  onSpaceClosed?(spaceId: number): Promise<void> | void;
+  onSpaceStateChanged?(spaceId: number): Promise<void> | void;
 };
 
 /**
@@ -37,8 +43,13 @@ export class NativeCefTaskSpaceManager {
   private readonly runtimes = new Map<string, NativeCefRuntime>();
   private readonly browserConnections = new Map<string, any>();
   private readonly agentOverlayState = new Map<string, boolean>();
+  private presentationHooks?: NativeCefPresentationHooks;
 
   constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {}
+
+  setPresentationHooks(hooks: NativeCefPresentationHooks | undefined) {
+    this.presentationHooks = hooks;
+  }
 
   async initialize() {
     const loaded = await this.options.store.load();
@@ -127,6 +138,7 @@ export class NativeCefTaskSpaceManager {
       // Do not start a cold Space just to show it; only an already-presented
       // runtime is eligible for this best-effort presentation update.
       await this.showRunningSpace(spaceId);
+      await this.presentationHooks?.onSpaceStateChanged?.(spaceId);
     }
     return structuredClone(space);
   }
@@ -137,6 +149,7 @@ export class NativeCefTaskSpaceManager {
     space.updatedAt = Date.now();
     await this.save();
     if (lifecycle !== "active") await this.showRunningSpace(spaceId);
+    if (lifecycle !== "active") await this.presentationHooks?.onSpaceStateChanged?.(spaceId);
     return structuredClone(space);
   }
 
@@ -257,6 +270,7 @@ export class NativeCefTaskSpaceManager {
     await runtime?.stop().catch(() => undefined);
     this.state.spaces.splice(index, 1);
     await this.save();
+    await this.presentationHooks?.onSpaceClosed?.(spaceId);
     return true;
   }
 
@@ -284,10 +298,17 @@ export class NativeCefTaskSpaceManager {
       url: url || tab.url,
       port: (this.options.portBase ?? 9420) + this.runtimePortOffset(runtimeKey),
       userDataDir: dataDir,
-      controlSocket: join(dataDir, "control.sock"),
+      // Darwin sockaddr_un paths are limited to roughly 104 bytes. Profile
+      // directories can be much deeper than that, so never nest the socket
+      // inside the CEF user-data directory.
+      controlSocket: join(
+        this.options.controlSocketsRoot || join(this.options.partitionsRoot, "..", "Control"),
+        `space-${space.id}.sock`,
+      ),
       useMockKeychain: this.options.useMockKeychain,
     };
     const runtime = new NativeCefRuntime(runtimeOptions);
+    if (runtimeOptions.controlSocket) await mkdir(dirname(runtimeOptions.controlSocket), { recursive: true, mode: 0o700 });
     await runtime.start();
     if (space.profileMode === "persistent" && this.options.seedCookies) {
       const target = await this.createNativeCookieTarget(runtime, space);
@@ -323,7 +344,11 @@ export class NativeCefTaskSpaceManager {
 
   async showSpace(spaceId: number) {
     const runtime = await this.ensureRuntime(spaceId);
-    return runtime.control("show");
+    return runtime.control("show").catch(async (error) => {
+      if (!runtime.hasExited()) throw error;
+      this.runtimes.delete(this.runtimeKey(this.getSpaceOrThrow(spaceId)));
+      return (await this.ensureRuntime(spaceId)).control("show");
+    });
   }
 
   async hideSpace(spaceId: number) {
@@ -331,9 +356,29 @@ export class NativeCefTaskSpaceManager {
     return runtime.control("hide");
   }
 
+  async hideRunningSpaces(exceptSpaceId?: number) {
+    const pending: Promise<unknown>[] = [];
+    for (const space of this.state.spaces) {
+      if (space.id === exceptSpaceId) continue;
+      const runtime = this.runtimes.get(this.runtimeKey(space));
+      if (runtime?.isRunning()) pending.push(runtime.control("hide").catch(() => undefined));
+    }
+    await Promise.all(pending);
+  }
+
+  async presentSpace(spaceId: number) {
+    await this.hideRunningSpaces(spaceId);
+    await this.showSpace(spaceId);
+    await this.focusSpace(spaceId);
+  }
+
   async focusSpace(spaceId: number) {
     const runtime = await this.ensureRuntime(spaceId);
-    return runtime.control("focus");
+    return runtime.control("focus").catch(async (error) => {
+      if (!runtime.hasExited()) throw error;
+      this.runtimes.delete(this.runtimeKey(this.getSpaceOrThrow(spaceId)));
+      return (await this.ensureRuntime(spaceId)).control("focus");
+    });
   }
 
   private async showRunningSpace(spaceId: number) {
@@ -375,6 +420,9 @@ export class NativeCefTaskSpaceManager {
     this.browserConnections.clear();
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));
     await Promise.all(browsers.map((browser) => browser.close().catch(() => undefined)));
+    if (this.options.controlSocketsRoot) {
+      await rm(this.options.controlSocketsRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   private newTab(url: string): TabRecord {

@@ -12,6 +12,7 @@ import { NativeCefOverview } from "./native-cef-overview.js";
 import { readChromeCookies } from "./chrome-import/cookies.js";
 import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { writeAndVerifyCookies } from "./chrome-import/cookie-writer.js";
+import { NativeCefPresentationCoordinator } from "./native-cef-presentation.js";
 
 const userDataPath = resolve(
   process.env.UFO_BROWSER_NATIVE_USER_DATA ||
@@ -24,6 +25,14 @@ const socketPath = resolve(
     join(userDataPath, "ufo-browser.sock"),
 );
 const partitionsRoot = join(userDataPath, "Spaces");
+const controlSocketsRoot = resolve(
+  process.env.UFO_BROWSER_CONTROL_SOCKETS ||
+    join(process.env.TMPDIR || "/tmp", `ufo-browser-${process.pid}`),
+);
+const overviewControlSocket = resolve(
+  process.env.UFO_BROWSER_OVERVIEW_CONTROL_SOCKET ||
+    join(controlSocketsRoot, "overview.sock"),
+);
 const sourcePartitionsRoot = resolve(
   process.env.UFO_BROWSER_SOURCE_PARTITIONS ||
     join(homedir(), "Library/Application Support/UFO-Browser", "Partitions"),
@@ -42,6 +51,7 @@ const manager = new NativeCefTaskSpaceManager({
   portBase: Number(process.env.UFO_CEF_PORT_BASE || 9420),
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   sourcePartitionsRoot,
+  controlSocketsRoot,
   seedCookies: async (profileId, target) => {
     const profile = profiles.getOrThrow(profileId);
     const sourceRoot = join(sourcePartitionsRoot, profile.partitionId);
@@ -61,8 +71,15 @@ const overview = new NativeCefOverview({
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   startRuntime: process.env.UFO_BROWSER_NATIVE_OVERVIEW_MODE !== "external",
   infoFile: process.env.UFO_BROWSER_OVERVIEW_INFO_FILE,
+  controlSocket: overviewControlSocket,
 });
 await overview.start();
+const presentation = new NativeCefPresentationCoordinator(manager, overview);
+overview.setPresentationController(presentation);
+manager.setPresentationHooks({
+  onSpaceClosed: (spaceId) => presentation.onSpaceClosed(spaceId),
+  onSpaceStateChanged: (spaceId) => presentation.onSpaceStateChanged(spaceId),
+});
 const leases = new SpaceLeaseRegistry();
 const broker = new NativeCefBroker(manager);
 const snapshot = new NativeCefSnapshotService(manager);

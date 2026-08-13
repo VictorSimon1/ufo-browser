@@ -48,6 +48,7 @@ export class NativeCefApplication {
     const agentScript = resolve(merged.agentScript || process.env.UFO_BROWSER_NATIVE_AGENT_SCRIPT || join(process.cwd(), "dist/main/native-cef-agent.js"));
     const cefExecutable = resolve(merged.cefExecutable || resolveCefExecutable());
     const socketPath = join(userDataDir, "ufo-browser.sock");
+    const overviewControlSocket = merged.env?.UFO_BROWSER_OVERVIEW_CONTROL_SOCKET || join(process.env.TMPDIR || "/tmp", `ufo-browser-overview-${process.pid}.sock`);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...merged.env,
@@ -56,6 +57,7 @@ export class NativeCefApplication {
       UFO_BROWSER_NATIVE_OVERVIEW_MODE: "external",
       UFO_BROWSER_OVERVIEW_INFO_FILE: infoFile,
       UFO_CEF_HOST: cefExecutable,
+      UFO_BROWSER_OVERVIEW_CONTROL_SOCKET: overviewControlSocket,
       UFO_BROWSER_NATIVE_KEYCHAIN_HELPER: merged.env?.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || join(process.cwd(), "dist/bin/ufo-keychain-helper"),
       ...(merged.useMockKeychain ? { UFO_CEF_USE_MOCK_KEYCHAIN: "1" } : {}),
     };
@@ -69,6 +71,7 @@ export class NativeCefApplication {
       `--url=${info.url}`,
       "--overview",
       `--agent-devtools-port=${port}`,
+      `--control-socket=${overviewControlSocket}`,
       `--user-data-dir=${join(userDataDir, "OverviewWindow")}`,
       ...(merged.useMockKeychain ? ["--use-mock-keychain"] : []),
     ], { cwd: process.cwd(), env, stdio: "ignore" });

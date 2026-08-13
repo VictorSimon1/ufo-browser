@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { createServer as createNetServer } from "node:net";
+import { createServer as createNetServer, createConnection } from "node:net";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { NativeCefRuntime } from "./native-cef-runtime.js";
@@ -17,6 +17,13 @@ export type NativeCefOverviewOptions = {
   startRuntime?: boolean;
   /** Optional JSON rendezvous file for a native app launcher. */
   infoFile?: string;
+  controlSocket?: string;
+};
+
+export type NativeCefOverviewPresentation = {
+  openSpace(spaceId: number): Promise<void>;
+  showOverview(): Promise<void>;
+  closeSpace(spaceId: number): Promise<boolean>;
 };
 
 /** Electron-free Overview bridge. The page itself is rendered by CEF. */
@@ -24,8 +31,13 @@ export class NativeCefOverview {
   private server?: Server;
   private runtime?: NativeCefRuntime;
   private address?: { host: string; port: number };
+  private presentation?: NativeCefOverviewPresentation;
 
   constructor(private readonly options: NativeCefOverviewOptions) {}
+
+  setPresentationController(controller: NativeCefOverviewPresentation) {
+    this.presentation = controller;
+  }
 
   async start() {
     if (this.runtime) return this.info();
@@ -55,6 +67,7 @@ export class NativeCefOverview {
       userDataDir: this.options.userDataDir,
       useMockKeychain: this.options.useMockKeychain,
       overview: true,
+      controlSocket: this.options.controlSocket,
     });
     await this.runtime.start();
     return this.info();
@@ -78,6 +91,24 @@ export class NativeCefOverview {
       : undefined;
   }
 
+  async showWindow() {
+    return this.control("show");
+  }
+
+  async hideWindow() {
+    return this.control("hide");
+  }
+
+  async focusWindow() {
+    return this.control("focus");
+  }
+
+  private async control(command: "show" | "hide" | "focus") {
+    if (this.runtime) return this.runtime.control(command);
+    if (!this.options.controlSocket) return "ok";
+    return sendControlCommand(this.options.controlSocket, command);
+  }
+
   private async handle(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) {
     try {
       const url = new URL(request.url || "/", `http://${this.options.host || "127.0.0.1"}`);
@@ -94,9 +125,17 @@ export class NativeCefOverview {
       if (request.method === "POST" && match) {
         const spaceId = Number(match[1]);
         const action = match[2];
-        if (action === "open") await this.options.manager.showSpace(spaceId);
-        else if (action === "focus") await this.options.manager.focusSpace(spaceId);
-        else await this.options.manager.closeSpace(spaceId);
+        if (action === "open") {
+          if (this.presentation) await this.presentation.openSpace(spaceId);
+          else await this.options.manager.showSpace(spaceId);
+        } else if (action === "focus") {
+          if (this.presentation) await this.presentation.openSpace(spaceId);
+          else await this.options.manager.focusSpace(spaceId);
+        } else if (this.presentation) {
+          await this.presentation.closeSpace(spaceId);
+        } else {
+          await this.options.manager.closeSpace(spaceId);
+        }
         this.json(response, { ok: true });
         return;
       }
@@ -124,6 +163,18 @@ async function findFreePort() {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   if (!port) throw new Error("unable to allocate Native CEF Overview DevTools port");
   return port;
+}
+
+function sendControlCommand(path: string, command: string) {
+  return new Promise<string>((resolveResponse, reject) => {
+    const socket = createConnection(path);
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { response += chunk; });
+    socket.once("error", reject);
+    socket.once("close", () => resolveResponse(response.trim()));
+    socket.once("connect", () => socket.end(`${command}\n`));
+  });
 }
 
 const OVERVIEW_HTML = `<!doctype html>
