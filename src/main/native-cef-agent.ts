@@ -8,6 +8,7 @@ import { NativeCefTaskSpaceManager } from "./native-cef-task-space-manager.js";
 import { BrowserProfileRegistry } from "./profile-registry.js";
 import { BrowserStateStore } from "./state-store.js";
 import { SpaceLeaseRegistry } from "./space-lease.js";
+import { NativeCefOverview } from "./native-cef-overview.js";
 import { readChromeCookies } from "./chrome-import/cookies.js";
 import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { writeAndVerifyCookies } from "./chrome-import/cookie-writer.js";
@@ -50,6 +51,15 @@ const manager = new NativeCefTaskSpaceManager({
   },
 });
 await manager.initialize();
+const overview = new NativeCefOverview({
+  manager,
+  executable: process.env.UFO_CEF_HOST,
+  userDataDir: join(userDataPath, "Overview"),
+  port: Number(process.env.UFO_CEF_OVERVIEW_HTTP_PORT || 0),
+  devtoolsPort: Number(process.env.UFO_CEF_OVERVIEW_PORT || 0),
+  useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
+});
+await overview.start();
 const leases = new SpaceLeaseRegistry();
 const broker = new NativeCefBroker(manager);
 const snapshot = new NativeCefSnapshotService(manager);
@@ -63,6 +73,7 @@ async function shutdown() {
   shuttingDown = true;
   await server.close().catch(() => undefined);
   await manager.shutdown().catch(() => undefined);
+  await overview.stop().catch(() => undefined);
   await manager.flushState().catch(() => undefined);
 }
 process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));

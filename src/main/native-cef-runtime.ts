@@ -304,7 +304,7 @@ export class NativeCefRuntime {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Native CEF endpoint returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Native CEF endpoint returned HTTP ${response.status} at ${url}`);
   return (await response.json()) as T;
 }
 
