@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { CdpEvent, CdpTransport } from "./cdp-transport.js";
 
 export type NativeCefTarget = {
   id: string;
@@ -68,7 +69,11 @@ export class NativeCdpConnection {
     this.socket.addEventListener("error", () => this.failPending("Native CEF CDP WebSocket error"));
   }
 
-  async send(method: string, params: Record<string, unknown> = {}) {
+  async send(
+    method: string,
+    params: Record<string, unknown> = {},
+    sessionId?: string,
+  ) {
     await this.ready;
     if (this.closed || this.socket.readyState !== OPEN) {
       throw new Error("Native CEF CDP connection is closed");
@@ -76,7 +81,7 @@ export class NativeCdpConnection {
     const id = this.nextId++;
     return new Promise<any>((resolveResult, rejectResult) => {
       this.pending.set(id, { resolve: resolveResult, reject: rejectResult });
-      this.socket.send(JSON.stringify({ id, method, params }));
+      this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
 
@@ -109,6 +114,32 @@ export class NativeCdpConnection {
     const error = new Error(message);
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+  }
+}
+
+/** CEF's DevTools WebSocket as a UFO browser-protocol transport. */
+export class NativeCefCdpTransport implements CdpTransport {
+  private readonly listeners = new Set<(event: CdpEvent) => void>();
+  private readonly connection: NativeCdpConnection;
+
+  constructor(webSocketUrl: string) {
+    this.connection = new NativeCdpConnection(webSocketUrl, (event) => {
+      for (const listener of this.listeners) listener(event);
+    });
+  }
+
+  sendCommand(method: string, params: Record<string, unknown> = {}, sessionId?: string) {
+    return this.connection.send(method, params, sessionId);
+  }
+
+  onEvent(listener: (event: CdpEvent) => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  close() {
+    this.listeners.clear();
+    return this.connection.close();
   }
 }
 
