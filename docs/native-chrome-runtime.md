@@ -65,6 +65,20 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    menu, browser dialogs, popup handling, title updates, and graceful close.
 2. **Standalone Agent bridge** — map the existing Agent API to CEF DevTools targets and
    preserve the current Skill call shapes.
+
+   The first Electron-free vertical slice is now available during development:
+
+   ```bash
+   npm run native:cef:build
+   npm run native:cef:agent:smoke
+   ```
+
+   `native-cef-agent` is a standalone Node process. It owns the private Agent
+   Unix socket, starts one CEF Chrome Runtime per Space, and exposes the same
+   `ufo-browser nodejs` helpers. The smoke covers bootstrap, `pageInfo`, `js`,
+   `snapshotText`, screenshot capture, navigation, and completion. This is
+   intentionally a vertical slice; multi-Space Overview and profile import are
+   the next integration gates.
 3. **Profiles and login state** — create one `CefRequestContext` per Profile
    and write imported cookies through `CefCookieManager`. Existing Chrome
    decryption, compatibility preflight, rollback, and redacted reporting stay

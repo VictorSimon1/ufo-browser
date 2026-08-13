@@ -45,13 +45,14 @@ const OPEN = 1;
 export class NativeCdpConnection {
   private readonly socket: NativeWebSocket;
   private readonly pending = new Map<number, PendingCommand>();
+  private readonly eventListeners = new Set<(message: CdpEvent) => void>();
   private nextId = 1;
   private closed = false;
   private readonly ready: Promise<void>;
 
   constructor(
     webSocketUrl: string,
-    private readonly onEvent?: (message: CdpEvent) => void,
+    onEvent?: (message: CdpEvent) => void,
   ) {
     const WebSocketCtor = (globalThis as any).WebSocket;
     if (typeof WebSocketCtor !== "function") {
@@ -67,6 +68,7 @@ export class NativeCdpConnection {
     this.socket.addEventListener("message", (event) => this.receive(event.data));
     this.socket.addEventListener("close", () => this.failPending("Native CEF CDP connection closed"));
     this.socket.addEventListener("error", () => this.failPending("Native CEF CDP WebSocket error"));
+    if (onEvent) this.eventListeners.add(onEvent);
   }
 
   async send(
@@ -91,6 +93,11 @@ export class NativeCdpConnection {
     if (this.socket.readyState !== 3) this.socket.close();
   }
 
+  onEvent(listener: (message: CdpEvent) => void) {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
+  }
+
   private receive(raw: unknown) {
     let message: any;
     try {
@@ -106,7 +113,9 @@ export class NativeCdpConnection {
       else pending.resolve(message.result);
       return;
     }
-    if (typeof message?.method === "string") this.onEvent?.(message);
+    if (typeof message?.method === "string") {
+      for (const listener of this.eventListeners) listener(message as CdpEvent);
+    }
   }
 
   private failPending(message: string) {

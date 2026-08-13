@@ -2,10 +2,8 @@ import { chmod, mkdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createServer, type Socket } from "node:net";
 import { randomUUID } from "node:crypto";
-import { TaskSpaceManager } from "./manager.js";
+import type { AgentCdpBrokerHost, AgentManagerHost, AgentSnapshotHost } from "./agent-host-types.js";
 import { SpaceLeaseRegistry, type SpaceLease } from "./space-lease.js";
-import { SnapshotService } from "./snapshot.js";
-import { CdpBroker } from "./cdp-broker.js";
 
 type Connection = {
   id: string;
@@ -23,10 +21,10 @@ export class AgentServer {
 
   constructor(
     readonly socketPath: string,
-    private readonly manager: TaskSpaceManager,
+    private readonly manager: AgentManagerHost,
     private readonly leases: SpaceLeaseRegistry,
-    private readonly snapshotService: SnapshotService,
-    private readonly broker: CdpBroker,
+    private readonly snapshotService: AgentSnapshotHost,
+    private readonly broker: AgentCdpBrokerHost,
     private readonly browserVersion = "0.1.6",
   ) {}
 
@@ -172,7 +170,7 @@ export class AgentServer {
           const verified = this.manager.getSpaceOrThrow(space.id);
           verifyBootstrappedSpace(verified, options.profileId);
           const activeTab = verified.tabs.find(
-            (tab) => tab.targetId === verified.activeTabId,
+            (tab: any) => tab.targetId === verified.activeTabId,
           );
           if (!activeTab) throw new Error("EGO_TASK_SPACE_BOOTSTRAP_FAILED: active tab missing");
           return {
@@ -227,7 +225,7 @@ export class AgentServer {
         const { spaceId } = this.assertAgentControl(connection);
         const space = this.manager.getSpaceOrThrow(spaceId);
         return {
-          tabs: space.tabs.map((tab) => ({
+          tabs: space.tabs.map((tab: any) => ({
             ...tab,
             type: "page",
             active: tab.targetId === space.activeTabId,
@@ -276,7 +274,7 @@ export class AgentServer {
       }
       case "animationHighlightMouseToPosition": {
         const { spaceId } = this.assertAgentControl(connection);
-        this.manager.showAgentPointer(
+        this.manager.showAgentPointer?.(
           spaceId,
           Number(args[0]),
           Number(args[1]),
@@ -310,7 +308,7 @@ export class AgentServer {
     }
     const lease = this.leases.acquire(spaceId, connection.id);
     connection.lease = lease;
-    this.manager.setAgentConnectionActive(spaceId, true);
+    this.manager.setAgentConnectionActive?.(spaceId, true);
   }
 
   private assertSelected(connection: Connection) {
@@ -335,7 +333,7 @@ export class AgentServer {
         connection.id,
         spaceId,
       );
-      this.manager.setAgentConnectionActive(spaceId, false);
+      this.manager.setAgentConnectionActive?.(spaceId, false);
       this.leases.release(spaceId, connection.id);
     }
     connection.lease = undefined;
