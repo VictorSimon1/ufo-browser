@@ -5,8 +5,11 @@ import { CHROME_STORAGE_PATHS } from "./chrome-import/storage-preflight.js";
 
 const PROFILE_SEED_VERSION = 1;
 const ROOT_FILES = ["Local State", "Preferences", "Secure Preferences"] as const;
-const COOKIE_FILES = ["Cookies", join("Network", "Cookies")] as const;
-const SEED_PATHS = [...ROOT_FILES, ...COOKIE_FILES, ...CHROME_STORAGE_PATHS];
+// Cookie SQLite files are intentionally excluded. Electron/UFO and CEF can
+// use different OSCrypt application keys; copying the encrypted database
+// would preserve bytes but not the authenticated login state. The Native CEF
+// manager imports decrypted Cookies through Network.setCookie instead.
+const SEED_PATHS = [...ROOT_FILES, ...CHROME_STORAGE_PATHS];
 
 type SeedMarker = {
   version: 1;

@@ -10,7 +10,7 @@ const executable = process.env.UFO_CEF_HOST || join(root, "native/cef-host/build
 await access(executable);
 const agent = spawn(process.execPath, [join(root, "dist/main/native-cef-agent.js")], {
   cwd: root,
-  env: { ...process.env, UFO_CEF_HOST: executable, UFO_BROWSER_NATIVE_USER_DATA: userData, UFO_BROWSER_SOCKET: socket, UFO_CEF_PORT_BASE: "9970", UFO_CEF_USE_MOCK_KEYCHAIN: "1" },
+  env: { ...process.env, UFO_CEF_HOST: executable, UFO_BROWSER_NATIVE_USER_DATA: userData, UFO_BROWSER_SOURCE_PARTITIONS: join(userData, "NoSource"), UFO_BROWSER_SOCKET: socket, UFO_CEF_PORT_BASE: "9970", UFO_CEF_USE_MOCK_KEYCHAIN: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let stderr = "";

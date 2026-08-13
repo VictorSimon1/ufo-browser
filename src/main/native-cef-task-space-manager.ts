@@ -11,6 +11,7 @@ import {
 } from "./temporary-profile.js";
 import { NativeCefRuntime, type NativeCefRuntimeOptions } from "./native-cef-runtime.js";
 import { seedNativeCefProfile } from "./native-cef-profile-seed.js";
+import type { CookieWriteTarget } from "./chrome-import/cookie-writer.js";
 
 export type NativeCefTaskSpaceManagerOptions = {
   store: BrowserStateStore;
@@ -20,6 +21,7 @@ export type NativeCefTaskSpaceManagerOptions = {
   portBase?: number;
   useMockKeychain?: boolean;
   sourcePartitionsRoot?: string;
+  seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
 };
 
 /**
@@ -286,6 +288,14 @@ export class NativeCefTaskSpaceManager {
     };
     const runtime = new NativeCefRuntime(runtimeOptions);
     await runtime.start();
+    if (space.profileMode === "persistent" && this.options.seedCookies) {
+      const target = await this.createNativeCookieTarget(runtime, space);
+      try {
+        await this.options.seedCookies(space.profileId, target);
+      } finally {
+        await target.dispose();
+      }
+    }
     const target = await waitForPageTarget(runtime, tab.url, 15_000);
     if (!target) {
       await runtime.stop();
@@ -385,6 +395,58 @@ export class NativeCefTaskSpaceManager {
 
   private runtimePortOffset(key: string) {
     return Number(key.replace(/\D/g, "")) || 1;
+  }
+
+  private async createNativeCookieTarget(runtime: NativeCefRuntime, space: SpaceRecord): Promise<CookieWriteTarget> {
+    const target = await waitForPageTarget(runtime, space.tabs[0]?.url || "", 15_000);
+    if (!target) throw new Error("Native CEF cookie target did not become ready");
+    const connection = await runtime.connect(target.id);
+    await connection.send("Network.enable");
+    const cookies = {
+      get: async () => {
+        const result = await connection.send("Network.getAllCookies");
+        return (result?.cookies ?? []).map((cookie: any) => ({
+          name: String(cookie.name || ""),
+          value: String(cookie.value || ""),
+          domain: String(cookie.domain || ""),
+          hostOnly: !String(cookie.domain || "").startsWith("."),
+          path: String(cookie.path || "/"),
+          secure: Boolean(cookie.secure),
+          httpOnly: Boolean(cookie.httpOnly),
+          sameSite: cookie.sameSite === "None" ? "no_restriction" :
+            cookie.sameSite === "Lax" ? "lax" :
+              cookie.sameSite === "Strict" ? "strict" : "unspecified",
+          session: Boolean(cookie.session),
+          expirationDate: Number(cookie.expires) || 0,
+        })) as any[];
+      },
+      set: async (details: any) => {
+        const sameSite = details.sameSite === "no_restriction" ? "None" :
+          details.sameSite === "lax" ? "Lax" :
+            details.sameSite === "strict" ? "Strict" : undefined;
+        const result = await connection.send("Network.setCookie", {
+          name: details.name,
+          value: details.value,
+          url: details.url,
+          domain: details.domain,
+          path: details.path,
+          secure: details.secure,
+          httpOnly: details.httpOnly,
+          sameSite,
+          expires: details.expirationDate,
+        });
+        if (result?.success === false) throw new Error("native CEF Cookie write failed");
+      },
+      remove: async (url: string, name: string) => {
+        await connection.send("Network.deleteCookies", { url, name });
+      },
+    };
+    return {
+      cookies,
+      cdp: connection,
+      flush: async () => undefined,
+      dispose: () => connection.close(),
+    };
   }
 }
 
