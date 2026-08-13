@@ -64,6 +64,12 @@ export class NativeCefApplication {
       UFO_BROWSER_OVERVIEW_CONTROL_SOCKET: overviewControlSocket,
       UFO_BROWSER_NATIVE_KEYCHAIN_HELPER: merged.env?.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER || join(bundleRoot || process.cwd(), bundleRoot ? "Contents/Resources/ufo-keychain-helper" : "dist/bin/ufo-keychain-helper"),
       UFO_BROWSER_NATIVE_WORKING_DIR: bundleRoot || "",
+      // Native Application owns the production default. Keep the private CEF
+      // bridge explicit when spawning the standalone Agent so a DMG launch or
+      // a test runner with a sanitized environment cannot silently fall back
+      // to the legacy public DevTools port.
+      UFO_CEF_PRIVATE_BRIDGE: merged.env?.UFO_CEF_PRIVATE_BRIDGE ||
+        process.env.UFO_CEF_PRIVATE_BRIDGE || "1",
       ...(merged.useMockKeychain ? { UFO_CEF_USE_MOCK_KEYCHAIN: "1" } : {}),
     };
     this.infoPath = infoFile;

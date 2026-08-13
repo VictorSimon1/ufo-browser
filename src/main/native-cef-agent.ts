@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { lstat } from "node:fs/promises";
+import { lstat, rm } from "node:fs/promises";
 import { AgentServer } from "./agent-server.js";
 import { NativeCefBroker } from "./native-cef-broker.js";
 import { NativeCefSnapshotService } from "./native-cef-snapshot.js";
@@ -64,7 +64,13 @@ const manager = new NativeCefTaskSpaceManager({
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   sourcePartitionsRoot,
   controlSocketsRoot,
-  devtoolsSocketsRoot: join(userDataPath, "DevTools"),
+  // macOS sockaddr_un paths are limited to roughly 104 bytes. Keep transient
+  // per-Space sockets under a short TMPDIR root; browser data remains under
+  // the user-data directory and is not moved or exposed by this change.
+  devtoolsSocketsRoot: resolve(
+    process.env.UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT ||
+      join(process.env.TMPDIR || "/tmp", `ufo-browser-devtools-${process.pid}`),
+  ),
   onRuntimeReady: async (spaceId) => profileSync?.baselineSpace(spaceId),
   seedCookies: async (profileId, target) => {
     const profile = profiles.getOrThrow(profileId);
@@ -140,6 +146,10 @@ async function shutdown() {
   await manager.shutdown().catch(() => undefined);
   await overview.stop().catch(() => undefined);
   await manager.flushState().catch(() => undefined);
+  await rm(resolve(
+    process.env.UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT ||
+      join(process.env.TMPDIR || "/tmp", `ufo-browser-devtools-${process.pid}`),
+  ), { recursive: true, force: true }).catch(() => undefined);
 }
 process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
 process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));

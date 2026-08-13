@@ -54,6 +54,11 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
     if (method === "Target.getTargets") {
       const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
       const result = await browser.send("Target.getTargets");
+      // Reconcile asynchronously. Target enumeration is a control-plane
+      // query and must return immediately even while the durable Space state
+      // store is flushing a popup/title update; serializing the save here can
+      // otherwise make listTabs appear to hang after window.open().
+      void this.manager.refreshTabsFromTargetInfos(spaceId, result?.targetInfos ?? []).catch(() => undefined);
       return { targetInfos: result?.targetInfos ?? [] };
     }
     if (method === "Target.createTarget") {
@@ -94,6 +99,10 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
       });
       this.sessions.set(synthetic, { connectionId, spaceId, targetId: target.targetId, generation, connection: browser, unsubscribe, upstreamSessionId });
       return { sessionId: synthetic };
+    }
+    if (method === "Target.setDiscoverTargets" || method === "Target.setAutoAttach") {
+      const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
+      return browser.send(method, params);
     }
     if (!sessionId) throw new Error(`missing sessionId for ${method}`);
     const session = this.sessions.get(sessionId);

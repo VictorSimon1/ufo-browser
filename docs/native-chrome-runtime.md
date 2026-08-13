@@ -56,13 +56,15 @@ The production direction is a per-runtime private Unix-socket CEF DevTools
 bridge. Its browser-level and page-level slices are verified for
 `Browser.getVersion`, `Target.getTargets`, flattened `Target.attachToTarget`,
 `Runtime.evaluate`, `Page.enable`, navigation readiness, and screenshots. The
-bridge remains opt-in while OOPIF, popup, and long-running event parity are
-completed. The tested Agent path may use a randomly allocated loopback DevTools
-port per native runtime; packaged Native launches do not expose a fixed or
-user-configurable endpoint. The Agent Unix socket remains the only externally
-discoverable UFO control surface and validates the Space lease before every
-operation. The standalone Agent Service owns no browser UI, so the Native path
-is Electron-free at runtime.
+bridge is now the default for Native Task Spaces. Set
+`UFO_CEF_PRIVATE_BRIDGE=0` only for legacy diagnostics that explicitly need the
+temporary loopback DevTools HTTP endpoint. OOPIF, popup, and screenshot paths
+are covered by Native smoke tests; long-running event parity and
+platform-specific download edge cases remain acceptance gates. Packaged Native
+launches do not expose a fixed or user-configurable endpoint. The Agent Unix
+socket remains the only externally discoverable UFO control surface and
+validates the Space lease before every operation. The standalone Agent Service
+owns no browser UI, so the Native path is Electron-free at runtime.
 
 ## Integration order
 

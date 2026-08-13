@@ -253,6 +253,23 @@ export class NativeCefTaskSpaceManager {
     const space = this.getSpaceOrThrow(spaceId);
     const runtime = await this.ensureRuntime(spaceId);
     const targets = (await runtime.targets()).filter((target) => target.type === "page");
+    return this.reconcilePageTargets(space, targets);
+  }
+
+  async refreshTabsFromTargetInfos(spaceId: number, targetInfos: any[]) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const targets = targetInfos
+      .filter((target) => target.type === "page")
+      .map((target) => ({
+        id: target.targetId,
+        type: target.type,
+        title: target.title,
+        url: target.url,
+      }));
+    return this.reconcilePageTargets(space, targets);
+  }
+
+  private async reconcilePageTargets(space: SpaceRecord, targets: any[]) {
     const known = new Map(space.tabs.map((tab) => [tab.targetId, tab]));
     const liveIds = new Set(targets.map((target) => target.id));
     for (const target of targets) {
@@ -262,6 +279,18 @@ export class NativeCefTaskSpaceManager {
         tab.title = target.title || tab.title;
       }
     }
+    // Chrome Runtime can create popup/window.open targets without going
+    // through UFO's explicit createTab RPC. Promote newly observed page
+    // targets into the Space tab list so page.waitForEvent('popup') and the
+    // existing listTabs helper see the same target set as Electron.
+    for (const target of targets) {
+      if (known.has(target.id)) continue;
+      const tab = this.newTab(target.url || "about:blank");
+      tab.targetId = target.id;
+      tab.title = target.title || "";
+      space.tabs.push(tab);
+      known.set(target.id, tab);
+    }
     space.tabs = space.tabs.filter((tab) => liveIds.has(tab.targetId));
     if (space.tabs.length === 0 && targets.length > 0) {
       const target = targets[0];
@@ -269,7 +298,10 @@ export class NativeCefTaskSpaceManager {
     }
     const active = targets.find((target) => target.id === space.activeTabId);
     if (active) space.activeTabId = active.id;
-    await this.save();
+    // Tab enumeration is latency-sensitive (page.waitForEvent('popup') polls
+    // it). Persist the reconciled metadata in the background so a slow disk
+    // flush or a concurrent profile checkpoint cannot block listTabs.
+    void this.save().catch(() => undefined);
     return structuredClone(space.tabs);
   }
 
@@ -328,7 +360,10 @@ export class NativeCefTaskSpaceManager {
         this.options.controlSocketsRoot || join(this.options.partitionsRoot, "..", "Control"),
         `space-${space.id}.sock`,
       ),
-      devtoolsSocket: process.env.UFO_CEF_PRIVATE_BRIDGE === "1"
+      // Native Spaces use the private CEF bridge by default. Set
+      // UFO_CEF_PRIVATE_BRIDGE=0 only for legacy diagnostics that explicitly
+      // need the loopback DevTools HTTP endpoint during migration.
+      devtoolsSocket: process.env.UFO_CEF_PRIVATE_BRIDGE !== "0"
         ? join(
             this.options.devtoolsSocketsRoot || join(this.options.partitionsRoot, "..", "DevTools"),
             `space-${space.id}.sock`,

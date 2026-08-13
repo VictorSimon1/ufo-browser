@@ -9,6 +9,9 @@ export type NativeCefTarget = {
   type: string;
   title: string;
   url: string;
+  parentId?: string;
+  parentFrameId?: string;
+  openerId?: string;
   webSocketDebuggerUrl?: string;
 };
 
@@ -231,11 +234,18 @@ export class NativeCefPrivateConnection implements NativeCdpConnectionLike {
       try { message = JSON.parse(line); } catch { continue; }
       if (Number.isInteger(message?.id)) {
         const pending = this.pending.get(message.id);
-        if (!pending) continue;
-        this.pending.delete(message.id);
-        if (message.error) pending.reject(new Error(String(message.error.message || "Native CEF DevTools error")));
-        else pending.resolve(message.result);
-      } else if (typeof message?.method === "string") {
+        if (pending) {
+          this.pending.delete(message.id);
+          if (message.error) pending.reject(new Error(String(message.error.message || "Native CEF DevTools error")));
+          else pending.resolve(message.result);
+        }
+        // A private CEF observer broadcasts the same CDP result/event stream to
+        // every route registered on a browser. A response for another route
+        // must not discard a valid event that happens to include an id field.
+        // Standard CDP responses have no method; fall through for method events.
+        if (typeof message?.method !== "string") continue;
+      }
+      if (typeof message?.method === "string") {
         for (const listener of this.listeners) listener(message as CdpEvent);
       }
     }
@@ -333,6 +343,9 @@ export class NativeCefRuntime {
           type: target.type,
           title: target.title,
           url: target.url,
+          parentId: target.parentId,
+          parentFrameId: target.parentFrameId,
+          openerId: target.openerId,
         }));
       } finally { await connection.close(); }
     }
@@ -344,16 +357,17 @@ export class NativeCefRuntime {
     if (this.devtoolsSocketPath) {
       const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
       if (targetId) {
-        const attached = await connection.send("Target.attachToTarget", {
-          targetId,
-          flatten: true,
-        });
-        if (!attached?.sessionId) {
-          await connection.close();
-          throw new Error(`Native CEF private target attach failed: ${targetId}`);
-        }
+        const target = (await this.targets()).find((candidate) => candidate.id === targetId);
+        const attached = await attachPrivateTarget(connection, targetId);
         connection.setDefaultSessionId(String(attached.sessionId));
-        await waitForPrivatePage(connection, 15_000);
+        // Page and iframe renderers can briefly report about:blank during
+        // initial navigation. Internal targets and freshly-created popups may
+        // legitimately have an empty URL, so only wait when a non-blank
+        // document URL is already known.
+        if ((target?.type === "page" || target?.type === "iframe") &&
+            target.url && target.url !== "about:blank") {
+          await waitForPrivatePage(connection, 15_000);
+        }
       }
       return connection;
     }
@@ -364,6 +378,15 @@ export class NativeCefRuntime {
     if (!target?.webSocketDebuggerUrl) throw new Error(`Native CEF target not found: ${targetId || "page"}`);
     const connection = new NativeCdpConnection(target.webSocketDebuggerUrl);
     this.connections.add(connection);
+    return connection;
+  }
+
+  /** Attach without waiting for document navigation; used for volatile OOPIF targets. */
+  async connectRaw(targetId: string) {
+    if (!this.devtoolsSocketPath) return this.connect(targetId);
+    const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+    const attached = await attachPrivateTarget(connection, targetId);
+    connection.setDefaultSessionId(String(attached.sessionId));
     return connection;
   }
 
@@ -457,6 +480,26 @@ export class NativeCefRuntime {
     }
     throw new Error(`Native CEF DevTools did not become ready: ${String(lastError || "timeout")}`);
   }
+}
+
+async function attachPrivateTarget(connection: NativeCefPrivateConnection, targetId: string, attempts = 8) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const attached = await connection.send("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      });
+      const sessionId = attached?.sessionId || attached?.result?.sessionId;
+      if (sessionId) return { sessionId: String(sessionId) };
+      lastError = new Error("CEF returned no sessionId");
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 75 * (attempt + 1)));
+  }
+  await connection.close();
+  throw new Error(`Native CEF private target attach failed: ${targetId}: ${String(lastError || "no session")}`);
 }
 
 async function waitForPrivatePage(connection: NativeCefPrivateConnection, timeoutMs: number) {

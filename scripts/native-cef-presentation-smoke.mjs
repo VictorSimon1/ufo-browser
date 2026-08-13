@@ -13,7 +13,7 @@ const app = new NativeCefApplication({
   userDataDir,
   cefExecutable: executable,
   useMockKeychain: true,
-  env: { UFO_BROWSER_SOURCE_PARTITIONS: noSource },
+  env: { UFO_BROWSER_SOURCE_PARTITIONS: noSource, UFO_CEF_PRIVATE_BRIDGE: "1" },
 });
 if (!userDataDir.includes("ufo-native-presentation-smoke-")) {
   throw new Error(`Native presentation smoke must use an isolated data root: ${userDataDir}`);

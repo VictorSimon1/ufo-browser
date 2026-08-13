@@ -11,6 +11,7 @@ const app = new NativeCefApplication({
   userDataDir,
   cefExecutable: executable,
   useMockKeychain: true,
+  env: { UFO_CEF_PRIVATE_BRIDGE: "1" },
 });
 if (!userDataDir.includes("ufo-native-app-smoke-")) {
   throw new Error(`Native app smoke must use an isolated data root: ${userDataDir}`);
