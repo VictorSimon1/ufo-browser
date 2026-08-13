@@ -51,7 +51,7 @@ export class NativeCdpConnection {
 
   constructor(
     webSocketUrl: string,
-    private readonly onEvent?: (message: { method: string; params?: any }) => void,
+    private readonly onEvent?: (message: CdpEvent) => void,
   ) {
     const WebSocketCtor = (globalThis as any).WebSocket;
     if (typeof WebSocketCtor !== "function") {
