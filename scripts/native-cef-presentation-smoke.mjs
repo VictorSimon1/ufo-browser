@@ -43,8 +43,20 @@ try {
   const spaceId = Number(stdout.trim().split(/\s+/).at(-1));
   if (!Number.isInteger(spaceId) || spaceId <= 0) throw new Error(`invalid Space id: ${stdout}`);
   const spacesUrl = `http://${info.host}:${info.port}/api/spaces`;
+  const profilesResponse = await fetch(`http://${info.host}:${info.port}/api/profiles`).then((response) => response.json());
+  if (!Array.isArray(profilesResponse.profiles) || profilesResponse.profiles.length === 0) {
+    throw new Error(`Native Overview profiles failed: ${JSON.stringify(profilesResponse)}`);
+  }
+  const created = await fetch(spacesUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "native overview created", profileId: profilesResponse.profiles[0].id }),
+  }).then((response) => response.json());
+  if (!created.space?.id) throw new Error(`Native Overview create Space failed: ${JSON.stringify(created)}`);
+  const createdSpaceId = Number(created.space.id);
+  if (createdSpaceId === spaceId) throw new Error("Overview create endpoint reused an existing Space");
   const before = await fetch(spacesUrl).then((response) => response.json());
-  if (!before.spaces?.some((space) => space.id === spaceId)) throw new Error("Space missing from Overview API");
+  if (!before.spaces?.some((space) => space.id === spaceId) || !before.spaces?.some((space) => space.id === createdSpaceId)) throw new Error("Space missing from Overview API");
   const preview = await fetch(`${spacesUrl}/${spaceId}/preview`).then((response) => response.json());
   if (!String(preview.dataUrl || "").startsWith("data:image/jpeg;base64,")) {
     throw new Error(`Native Overview preview failed: ${JSON.stringify(preview).slice(0, 500)}`);
@@ -54,7 +66,9 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
   const close = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
   if (!close.ok) throw new Error(`close Space failed: ${JSON.stringify(close)}`);
-  console.log(JSON.stringify({ spaceId, overview: info.url, opened: true, closed: true }));
+  const closeCreated = await fetch(`${spacesUrl}/${createdSpaceId}/close`, { method: "POST" }).then((response) => response.json());
+  if (!closeCreated.ok) throw new Error(`close created Space failed: ${JSON.stringify(closeCreated)}`);
+  console.log(JSON.stringify({ spaceId, createdSpaceId, overview: info.url, opened: true, closed: true }));
 } finally {
   if (cli && cli.exitCode === null) cli.kill("SIGTERM");
   await app.stop();

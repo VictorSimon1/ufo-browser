@@ -124,6 +124,22 @@ export class NativeCefOverview {
         this.json(response, { spaces: this.options.manager.listSpaces() });
         return;
       }
+      if (request.method === "GET" && url.pathname === "/api/profiles") {
+        this.json(response, { profiles: this.options.manager.listProfiles() });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/spaces") {
+        const body = await readJsonBody(request);
+        const name = typeof body?.name === "string" ? body.name.trim() : "";
+        const profileId = typeof body?.profileId === "string" ? body.profileId : undefined;
+        if (!name) {
+          this.json(response, { error: "Space name is required" }, 400);
+          return;
+        }
+        const space = await this.options.manager.createSpace(name, "user", profileId);
+        this.json(response, { space }, 201);
+        return;
+      }
       const previewMatch = url.pathname.match(/^\/api\/spaces\/(\d+)\/preview$/);
       if (request.method === "GET" && previewMatch) {
         const spaceId = Number(previewMatch[1]);
@@ -207,6 +223,23 @@ function sendControlCommand(path: string, command: string) {
   });
 }
 
+async function readJsonBody(request: import("node:http").IncomingMessage) {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    size += buffer.length;
+    if (size > 64 * 1024) throw new Error("Overview request body is too large");
+    chunks.push(buffer);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new Error("Overview request body is not valid JSON");
+  }
+}
+
 function delay(ms: number) {
   return new Promise<void>((resolveDelay) => setTimeout(resolveDelay, ms));
 }
@@ -217,7 +250,7 @@ const OVERVIEW_HTML = `<!doctype html>
 <style>
   :root { color-scheme:light; font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif; background:#f5f5f7; color:#1d1d1f; }
   * { box-sizing:border-box; } body { margin:0; padding:36px 42px 56px; }
-  header { display:flex; align-items:flex-end; justify-content:space-between; max-width:1220px; margin:0 auto 24px; }
+  header { display:flex; align-items:flex-end; justify-content:space-between; max-width:1220px; margin:0 auto 24px; gap:20px; }
   h1 { font-size:34px; letter-spacing:-.05em; margin:0; font-weight:700; } header p { color:#86868b; margin:7px 0 0; font-size:13px; }
   #spaces { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:20px; max-width:1220px; margin:0 auto; }
   article { overflow:hidden; background:rgba(255,255,255,.9); border:1px solid #e3e3e7; border-radius:20px; box-shadow:0 12px 34px #0000000b; transition:transform .18s ease,box-shadow .18s ease; }
@@ -231,13 +264,15 @@ const OVERVIEW_HTML = `<!doctype html>
   .body { padding:15px 17px 16px; } h2 { font-size:17px; margin:0 0 6px; letter-spacing:-.02em; } .meta { color:#86868b; min-height:18px; margin:0 0 14px; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   button { border:0; border-radius:10px; padding:8px 12px; margin-right:6px; background:#f0f0f2; color:#1d1d1f; cursor:pointer; font:inherit; font-size:12px; } button.primary { background:#1d1d1f; color:#fff; } button:active { transform:scale(.98); }
   .empty-grid { grid-column:1/-1; text-align:center; padding:64px 16px; color:#86868b; }
+  .create { display:flex; align-items:center; gap:7px; } .create input,.create select { height:32px; border:1px solid #d8d8dc; border-radius:9px; background:#fff; padding:0 9px; font:inherit; font-size:12px; color:#1d1d1f; } .create input { width:150px; }
 </style>
-<header><div><h1>UFO-Browser</h1><p>原生 Chromium Task Spaces</p></div><p id="status">正在同步…</p></header><div id="spaces"></div>
+<header><div><h1>UFO-Browser</h1><p>原生 Chromium Task Spaces</p></div><div class="create"><input id="new-name" placeholder="新 Space 名称"><select id="new-profile"><option value="">Default</option></select><button class="primary" onclick="createSpace()">新建 Space</button><p id="status">正在同步…</p></div></header><div id="spaces"></div>
 <script>
 const cache=new Map();
-async function load(){const data=await fetch('/api/spaces',{cache:'no-store'}).then(r=>r.json());const spaces=data.spaces||[];document.querySelector('#status').textContent=spaces.length+' 个 Space';document.querySelector('#spaces').innerHTML=spaces.map(s=>card(s)).join('')||'<div class="empty-grid">还没有 Space</div>';await Promise.all(spaces.map(preview))}
+async function load(){const [data,profiles]=await Promise.all([fetch('/api/spaces',{cache:'no-store'}).then(r=>r.json()),fetch('/api/profiles',{cache:'no-store'}).then(r=>r.json())]);const spaces=data.spaces||[];const select=document.querySelector('#new-profile');const selected=select.value;select.innerHTML=(profiles.profiles||[]).map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name)+(p.isDefault?' · 默认':'')+'</option>').join('');if(selected)select.value=selected;document.querySelector('#status').textContent=spaces.length+' 个 Space';document.querySelector('#spaces').innerHTML=spaces.map(s=>card(s)).join('')||'<div class="empty-grid">还没有 Space</div>';await Promise.all(spaces.map(preview))}
 function card(s){return '<article id="space-'+s.id+'"><div class="preview empty" id="preview-'+s.id+'"><div class="chrome"><span class="traffic"><i></i><i></i><i></i></span><span class="address">'+esc((s.recentTabTitles||[]).at(-1)||'New Tab')+'</span></div>加载预览…</div><div class="body"><h2>'+esc(s.name)+'</h2><p class="meta">'+esc((s.recentTabTitles||[]).join(' · ')||s.lifecycle)+'</p><button class="primary" onclick="act('+s.id+',\'open\')">打开</button><button onclick="act('+s.id+',\'focus\')">聚焦</button><button onclick="act('+s.id+',\'close\')">关闭</button></div></article>'}
 async function preview(s){try{const v=await fetch('/api/spaces/'+s.id+'/preview',{cache:'no-store'}).then(r=>r.json());if(!v.dataUrl)return;const node=document.querySelector('#preview-'+s.id);if(!node)return;node.classList.remove('empty');node.innerHTML='<div class="chrome"><span class="traffic"><i></i><i></i><i></i></span><span class="address">'+esc(v.url||'New Tab')+'</span></div><img alt="'+esc(v.title||'')+'" src="'+v.dataUrl+'">'}catch(e){const node=document.querySelector('#preview-'+s.id);if(node)node.textContent='预览暂不可用'}}
 async function act(id,a){await fetch('/api/spaces/'+id+'/'+a,{method:'POST'});await load()}
+async function createSpace(){const input=document.querySelector('#new-name');const name=input.value.trim();if(!name){input.focus();return}const profile=document.querySelector('#new-profile').value;await fetch('/api/spaces',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name,profileId:profile||undefined})});input.value='';await load()}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}load();setInterval(load,4000);
 </script>`;
