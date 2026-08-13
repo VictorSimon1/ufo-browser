@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstdlib>
+#include <string>
 
 #include "include/cef_application_mac.h"
 #include "include/cef_command_line.h"
@@ -66,6 +67,13 @@ int main(int argc, char* argv[]) {
 
     CefSettings settings;
     settings.no_sandbox = true;
+    const auto user_data_dir = command_line->GetSwitchValue("user-data-dir");
+    if (!user_data_dir.empty()) {
+      // Chrome-style CEF owns its profile directory. The Node AgentHost passes
+      // one directory per native Profile/Space in later integration stages.
+      CefString(&settings.root_cache_path) = user_data_dir;
+      CefString(&settings.cache_path) = user_data_dir.ToString() + "/Cache";
+    }
     ConfigureDevelopmentDevTools(command_line, &settings);
     CefRefPtr<UfoCefApp> app(new UfoCefApp());
     if (!CefInitialize(main_args, settings, app.get(), nullptr)) {
@@ -80,4 +88,3 @@ int main(int argc, char* argv[]) {
   }
   return 0;
 }
-

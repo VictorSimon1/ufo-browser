@@ -1,0 +1,251 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { access } from "node:fs/promises";
+import { join, resolve } from "node:path";
+
+export type NativeCefTarget = {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  webSocketDebuggerUrl?: string;
+};
+
+export type NativeCefVersion = {
+  Browser: string;
+  "Protocol-Version": string;
+  UserAgent: string;
+  webSocketDebuggerUrl?: string;
+};
+
+export type NativeCefRuntimeOptions = {
+  executable?: string;
+  url?: string;
+  port?: number;
+  startupTimeoutMs?: number;
+  cwd?: string;
+  userDataDir?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+type PendingCommand = {
+  resolve: (result: any) => void;
+  reject: (error: Error) => void;
+};
+
+type NativeWebSocket = {
+  readyState: number;
+  send(data: string): void;
+  close(): void;
+  addEventListener(type: string, listener: (event: any) => void): void;
+};
+
+const OPEN = 1;
+
+export class NativeCdpConnection {
+  private readonly socket: NativeWebSocket;
+  private readonly pending = new Map<number, PendingCommand>();
+  private nextId = 1;
+  private closed = false;
+  private readonly ready: Promise<void>;
+
+  constructor(
+    webSocketUrl: string,
+    private readonly onEvent?: (message: { method: string; params?: any }) => void,
+  ) {
+    const WebSocketCtor = (globalThis as any).WebSocket;
+    if (typeof WebSocketCtor !== "function") {
+      throw new Error("Native CEF CDP requires a runtime with WebSocket support");
+    }
+    this.socket = new WebSocketCtor(webSocketUrl) as NativeWebSocket;
+    this.ready = new Promise<void>((resolveReady, rejectReady) => {
+      this.socket.addEventListener("open", () => resolveReady());
+      this.socket.addEventListener("error", () => {
+        rejectReady(new Error("Native CEF CDP WebSocket failed to connect"));
+      });
+    });
+    this.socket.addEventListener("message", (event) => this.receive(event.data));
+    this.socket.addEventListener("close", () => this.failPending("Native CEF CDP connection closed"));
+    this.socket.addEventListener("error", () => this.failPending("Native CEF CDP WebSocket error"));
+  }
+
+  async send(method: string, params: Record<string, unknown> = {}) {
+    await this.ready;
+    if (this.closed || this.socket.readyState !== OPEN) {
+      throw new Error("Native CEF CDP connection is closed");
+    }
+    const id = this.nextId++;
+    return new Promise<any>((resolveResult, rejectResult) => {
+      this.pending.set(id, { resolve: resolveResult, reject: rejectResult });
+      this.socket.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async close() {
+    this.closed = true;
+    this.failPending("Native CEF CDP connection closed");
+    if (this.socket.readyState !== 3) this.socket.close();
+  }
+
+  private receive(raw: unknown) {
+    let message: any;
+    try {
+      message = JSON.parse(String(raw));
+    } catch {
+      return;
+    }
+    if (Number.isInteger(message?.id)) {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      this.pending.delete(message.id);
+      if (message.error) pending.reject(new Error(String(message.error.message || "Native CEF CDP error")));
+      else pending.resolve(message.result);
+      return;
+    }
+    if (typeof message?.method === "string") this.onEvent?.(message);
+  }
+
+  private failPending(message: string) {
+    if (this.pending.size === 0) return;
+    const error = new Error(message);
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+}
+
+export class NativeCefRuntime {
+  private process?: ChildProcess;
+  private readonly connections = new Set<NativeCdpConnection>();
+  private port?: number;
+  private versionInfo?: NativeCefVersion;
+
+  constructor(private readonly defaults: NativeCefRuntimeOptions = {}) {}
+
+  isRunning() {
+    return Boolean(this.process && !this.process.killed);
+  }
+
+  getPort() {
+    return this.port;
+  }
+
+  async start(options: NativeCefRuntimeOptions = {}) {
+    if (this.isRunning()) return this.version();
+    if (process.platform !== "darwin") throw new Error("Native CEF currently supports macOS only");
+    const merged = { ...this.defaults, ...options };
+    const port = merged.port ?? 9222;
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      throw new Error(`Invalid Native CEF DevTools port: ${port}`);
+    }
+    const executable = await resolveExecutable(merged.executable);
+    this.port = port;
+    const args = [
+      `--url=${merged.url || "https://www.google.com/"}`,
+      `--agent-devtools-port=${port}`,
+    ];
+    if (merged.userDataDir) args.push(`--user-data-dir=${resolve(merged.userDataDir)}`);
+    this.process = spawn(executable, args, {
+      cwd: merged.cwd,
+      env: { ...process.env, ...merged.env },
+      stdio: "ignore",
+    });
+    this.process.once("exit", () => {
+      this.process = undefined;
+      this.versionInfo = undefined;
+      for (const connection of this.connections) void connection.close();
+      this.connections.clear();
+    });
+    try {
+      this.versionInfo = await this.waitForVersion(merged.startupTimeoutMs ?? 15_000);
+      return this.versionInfo;
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
+  }
+
+  async version() {
+    if (!this.port) throw new Error("Native CEF runtime is not started");
+    if (this.versionInfo) return this.versionInfo;
+    this.versionInfo = await fetchJson<NativeCefVersion>(this.endpoint("/json/version"));
+    return this.versionInfo;
+  }
+
+  async targets() {
+    if (!this.port) throw new Error("Native CEF runtime is not started");
+    return fetchJson<NativeCefTarget[]>(this.endpoint("/json/list"));
+  }
+
+  async connect(targetId?: string) {
+    const targets = await this.targets();
+    const target = targetId
+      ? targets.find((candidate) => candidate.id === targetId)
+      : targets.find((candidate) => candidate.type === "page");
+    if (!target?.webSocketDebuggerUrl) throw new Error(`Native CEF target not found: ${targetId || "page"}`);
+    const connection = new NativeCdpConnection(target.webSocketDebuggerUrl);
+    this.connections.add(connection);
+    return connection;
+  }
+
+  async stop() {
+    for (const connection of this.connections) await connection.close();
+    this.connections.clear();
+    const child = this.process;
+    this.process = undefined;
+    this.versionInfo = undefined;
+    this.port = undefined;
+    if (!child || child.killed) return;
+    await new Promise<void>((resolveStop) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        resolveStop();
+      }, 2_000);
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolveStop();
+      });
+      child.kill("SIGTERM");
+    });
+  }
+
+  private endpoint(path: string) {
+    return `http://127.0.0.1:${this.port}${path}`;
+  }
+
+  private async waitForVersion(timeoutMs: number) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        return await fetchJson<NativeCefVersion>(this.endpoint("/json/version"));
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      }
+    }
+    throw new Error(`Native CEF DevTools did not become ready: ${String(lastError || "timeout")}`);
+  }
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Native CEF endpoint returned HTTP ${response.status}`);
+  return (await response.json()) as T;
+}
+
+async function resolveExecutable(explicit?: string) {
+  const candidates = explicit
+    ? [resolve(explicit)]
+    : [
+        join(process.cwd(), "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),
+        join(process.cwd(), "native/cef-host/build/Release/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),
+      ];
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Try the next known development location.
+    }
+  }
+  throw new Error(`Native CEF executable not found. Run npm run native:cef:build or set executable explicitly.`);
+}

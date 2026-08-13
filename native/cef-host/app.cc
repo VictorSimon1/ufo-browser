@@ -57,6 +57,17 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
     return CEF_RUNTIME_STYLE_CHROME;
   }
 
+  // Chrome Runtime does not create the browser toolbar unless the delegate
+  // explicitly opts into one of the native toolbar variants. CEF's default is
+  // CEF_CTT_NONE, which looks like a plain web window even when the runtime
+  // style is Chrome. Use the full native toolbar to match cefclient/Ego:
+  // tabs, navigation, omnibox, profile menu, and browser commands are all
+  // supplied by Chromium itself.
+  ChromeToolbarType GetChromeToolbarType(
+      CefRefPtr<CefBrowserView> browser_view) override {
+    return CEF_CTT_NORMAL;
+  }
+
  private:
   IMPLEMENT_REFCOUNTING(UfoBrowserViewDelegate);
 };
@@ -83,4 +94,3 @@ void UfoCefApp::OnContextInitialized() {
 CefRefPtr<CefClient> UfoCefApp::GetDefaultClient() {
   return UfoCefHandler::GetInstance();
 }
-

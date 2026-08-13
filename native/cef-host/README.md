@@ -6,8 +6,10 @@ that the existing Agent, Profile, Task Space, and preview behavior remains
 available while the native runtime is evaluated.
 
 The host uses CEF's Chrome runtime and Views framework. The address bar,
-navigation controls, profile menu, dialogs, and browser window are provided by
-Chromium rather than by UFO-Browser HTML/CSS.
+navigation controls, Profile menu, dialogs, tabs, and browser window are
+provided by Chromium rather than by UFO-Browser HTML/CSS. The delegate opts
+into `CEF_CTT_NORMAL`; without that explicit opt-in CEF intentionally creates a
+Chrome-style page window with no toolbar.
 
 ## Build
 
@@ -37,6 +39,11 @@ npm run native:cef:run -- \
   --url=https://example.com \
   --agent-devtools-port=9222
 ```
+
+The host also accepts `--user-data-dir=/absolute/path` for isolated
+development profiles. Production Profile/Space creation will supply this
+directory through the private Agent bridge rather than sharing CEF's default
+cache location.
 
 The port is a temporary prototype transport. It must not be enabled in a
 release build; the production bridge will be a private Unix-socket/CEF

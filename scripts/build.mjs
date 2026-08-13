@@ -61,6 +61,14 @@ await build({
 
 await build({
   ...shared,
+  entryPoints: ["src/main/native-cef-runtime.ts"],
+  outfile: "dist/main/native-cef-runtime.js",
+  platform: "node",
+  format: "esm",
+});
+
+await build({
+  ...shared,
   entryPoints: {
     shell: "src/preload/shell.ts",
     page: "src/preload/page.ts",

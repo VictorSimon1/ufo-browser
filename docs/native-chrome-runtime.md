@@ -1,9 +1,9 @@
 # Native Chrome Runtime migration
 
-UFO-Browser uses a deliberately layered architecture. The existing Electron
-application remains the product path while the native Chrome Runtime is
-introduced behind a separate host. This lets us replace the browser shell
-without throwing away the Agent, Skill, Profile, Cookie, or Task Space work.
+UFO-Browser is migrating to a CEF-first native application. The existing
+Electron application is retained only as a development fallback while the
+native path reaches feature parity. The browser window itself must be CEF's
+Chrome Runtime; Electron must not redraw or embed a fake address bar.
 
 ## What is being replaced
 
@@ -15,7 +15,7 @@ The browser shell is the part that users see around a page:
 - profile menu and browser dialogs;
 - the native Chromium compositor surface.
 
-These controls should come from CEF's Chrome-style Views runtime. Recreating
+These controls come from CEF's Chrome-style Views runtime. Recreating
 them in renderer HTML/CSS is visually close but does not provide the same
 window lifecycle, accessibility tree, popup behavior, input routing, or GPU
 composition as a Chromium browser window.
@@ -36,32 +36,34 @@ The following remains owned by UFO-Browser and is not copied from Ego Lite:
 Ego Lite is used as a behavioral and visual reference. Its compiled framework
 and private implementation are not product dependencies.
 
-## Target process model
+## Target process model (Electron-free product)
 
 ```text
 Agent CLI / Skill
        |
        v
-Node AgentHost (existing UFO protocol)
+UFO Agent Service (Node, standalone)
        |
-       | private Unix socket / validated task-space lease
+       | private Unix socket + validated Task Space lease
        v
 CEF Native Host (C++/Objective-C++)
        |
        v
-Chromium page + CEF DevTools adapter
+CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
 
 During development, the native prototype can expose a localhost DevTools
 port with `--agent-devtools-port`. Release builds must not expose a public
 debugging port; the production adapter will bind the existing private Agent
-transport and validate the Space lease before every operation.
+transport and validate the Space lease before every operation. The standalone
+Agent Service owns no browser UI, so the final product can be Electron-free.
 
 ## Integration order
 
-1. **Native shell prototype** — one CEF Chrome-style window, real navigation,
-   popup handling, title updates, and graceful close.
-2. **Agent bridge** — map the existing Agent API to CEF DevTools targets and
+1. **Native shell prototype** — one CEF Chrome-style window with
+   `GetChromeToolbarType() == CEF_CTT_NORMAL`, real tabs, omnibox, profile
+   menu, browser dialogs, popup handling, title updates, and graceful close.
+2. **Standalone Agent bridge** — map the existing Agent API to CEF DevTools targets and
    preserve the current Skill call shapes.
 3. **Profiles and login state** — create one `CefRequestContext` per Profile
    and write imported cookies through `CefCookieManager`. Existing Chrome
@@ -72,7 +74,8 @@ transport and validate the Space lease before every operation.
 5. **Overview and overlay** — retain low-frequency, change-driven previews and
    place the human-input blocking overlay in an outer native `NSPanel`/`NSView`
    so Agent CDP input and screenshots are never covered.
-6. **Packaging** — build the CEF host, copy the framework/helpers/resources,
+6. **Electron removal and packaging** — build the CEF host plus standalone
+   Agent Service, copy the framework/helpers/resources,
    sign the complete app bundle, and produce the normal drag-to-Applications
    DMG. The install flow then syncs CLI and Skills exactly as the Electron
    installer does today.
@@ -96,9 +99,9 @@ resources with `ibtool`; Command Line Tools alone are insufficient:
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 
-`native/cef-host` is intentionally independent of the Electron build. Until
-the bridge and profile migration are complete, the existing Electron path is
-the only production path and is not changed by this prototype.
+`native/cef-host` is intentionally independent of the Electron build. The
+existing Electron path remains a fallback until the acceptance gates pass;
+it is not the final browser UI.
 
 ## Acceptance gates
 
