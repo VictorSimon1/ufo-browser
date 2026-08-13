@@ -1,9 +1,11 @@
 import { createServer, type Server } from "node:http";
 import { createServer as createNetServer, createConnection } from "node:net";
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
 import { NativeCefRuntime } from "./native-cef-runtime.js";
 import type { NativeCefTaskSpaceManager } from "./native-cef-task-space-manager.js";
+import type { NativeCefProfileService } from "./native-cef-profile-service.js";
 
 export type NativeCefOverviewOptions = {
   manager: NativeCefTaskSpaceManager;
@@ -18,6 +20,9 @@ export type NativeCefOverviewOptions = {
   /** Optional JSON rendezvous file for a native app launcher. */
   infoFile?: string;
   controlSocket?: string;
+  profileService?: NativeCefProfileService;
+  profiles?: { listPublic(): any[]; getDefault(): any };
+  rendererRoot?: string;
 };
 
 export type NativeCefOverviewPresentation = {
@@ -116,8 +121,14 @@ export class NativeCefOverview {
     try {
       const url = new URL(request.url || "/", `http://${this.options.host || "127.0.0.1"}`);
       if (request.method === "GET" && url.pathname === "/") {
+        const html = await this.renderOverviewHtml();
         response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-        response.end(OVERVIEW_HTML);
+        response.end(html);
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/native-overview-shim.js") {
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+        response.end(nativeOverviewShim());
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/spaces") {
@@ -125,7 +136,28 @@ export class NativeCefOverview {
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/profiles") {
-        this.json(response, { profiles: this.options.manager.listProfiles() });
+        const profiles = (this.options.profiles?.listPublic() || this.options.manager.listProfiles()).map((profile: any) => ({
+          ...profile,
+          avatarDataUrl: undefined,
+        }));
+        this.json(response, { profiles });
+        return;
+      }
+      const staticFiles: Record<string, { file: string; type: string }> = {
+        "/overview.js": { file: "overview.js", type: "text/javascript; charset=utf-8" },
+        "/styles.css": { file: "styles.css", type: "text/css; charset=utf-8" },
+        "/app-icon.png": { file: "app-icon.png", type: "image/png" },
+      };
+      if (request.method === "GET" && staticFiles[url.pathname] && this.options.rendererRoot) {
+        const asset = staticFiles[url.pathname];
+        try {
+          const body = await readFile(join(this.options.rendererRoot, asset.file));
+          response.writeHead(200, { "content-type": asset.type, "cache-control": "no-store" });
+          response.end(body);
+        } catch {
+          response.writeHead(404);
+          response.end();
+        }
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/spaces") {
@@ -140,6 +172,36 @@ export class NativeCefOverview {
         this.json(response, { space }, 201);
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/profiles/default") {
+        const body = await readJsonBody(request);
+        await this.options.profileService?.setDefault(String(body?.profileId || ""));
+        this.json(response, { ok: true });
+        return;
+      }
+      const profileMatch = url.pathname.match(/^\/api\/profiles\/([^/]+)\/(remove|sync|clone)$/);
+      if (request.method === "POST" && profileMatch) {
+        const profileId = decodeURIComponent(profileMatch[1]);
+        const action = profileMatch[2];
+        const body = await readJsonBody(request);
+        if (action === "remove") await this.options.profileService?.remove(profileId);
+        else if (action === "sync") await this.options.profileService?.setSync(profileId, body?.enabled === true);
+        else await this.options.profileService?.cloneUfo(profileId, String(body?.name || ""), body?.makeDefault === true, body?.loginSyncEnabled === true);
+        this.json(response, { ok: true });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/chrome/discover") {
+        this.json(response, await this.options.profileService?.discoverChrome());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/chrome/quit") {
+        this.json(response, await this.options.profileService?.quitChrome());
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/chrome/import") {
+        const body = await readJsonBody(request);
+        this.json(response, await this.options.profileService?.importChrome(String(body?.profileDirName || ""), body?.makeDefault === true, body?.allowPartial === true));
+        return;
+      }
       const previewMatch = url.pathname.match(/^\/api\/spaces\/(\d+)\/preview$/);
       if (request.method === "GET" && previewMatch) {
         const spaceId = Number(previewMatch[1]);
@@ -151,6 +213,13 @@ export class NativeCefOverview {
         }
         const value = await this.enqueuePreview(spaceId);
         this.json(response, value ?? { available: false });
+        return;
+      }
+      const renameMatch = url.pathname.match(/^\/api\/spaces\/(\d+)\/rename$/);
+      if (request.method === "POST" && renameMatch) {
+        const body = await readJsonBody(request);
+        const space = await this.options.manager.renameSpace(Number(renameMatch[1]), String(body?.name || ""));
+        this.json(response, { space });
         return;
       }
       const match = url.pathname.match(/^\/api\/spaces\/(\d+)\/(open|focus|close)$/);
@@ -195,6 +264,20 @@ export class NativeCefOverview {
     });
     this.previewQueue = operation.then(() => undefined, () => undefined);
     return operation;
+  }
+
+  private async renderOverviewHtml() {
+    const root = this.options.rendererRoot;
+    if (!root) return OVERVIEW_HTML;
+    try {
+      const html = await readFile(join(root, "overview.html"), "utf8");
+      return html.replace(
+        '<script src="./overview.js"></script>',
+        '<script src="./native-overview-shim.js"></script><script src="./overview.js"></script>',
+      );
+    } catch {
+      return OVERVIEW_HTML;
+    }
   }
 }
 
@@ -242,6 +325,55 @@ async function readJsonBody(request: import("node:http").IncomingMessage) {
 
 function delay(ms: number) {
   return new Promise<void>((resolveDelay) => setTimeout(resolveDelay, ms));
+}
+
+function nativeOverviewShim() {
+  return `(() => {
+    const listeners = new Set();
+    const previewListeners = new Set();
+    const visible = new Set();
+    let previous = "";
+    const json = (url, options) => fetch(url, options).then((response) => response.json());
+    const list = () => json('/api/spaces').then((value) => value.spaces || []);
+    const profiles = () => json('/api/profiles').then((value) => value.profiles || []);
+    const notify = () => list().then((value) => { const next = JSON.stringify(value); if (next !== previous) { previous = next; listeners.forEach((fn) => fn(value)); } });
+    const publishPreviews = () => Promise.all([...visible].map((id) => json('/api/spaces/' + id + '/preview').then((value) => {
+      if (!value || !value.dataUrl) return;
+      const comma = String(value.dataUrl).indexOf(',');
+      if (comma < 0) return;
+      const raw = atob(String(value.dataUrl).slice(comma + 1));
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+      previewListeners.forEach((fn) => fn({ spaceId: id, revision: Date.now(), data: bytes }));
+    }).catch(() => undefined)));
+    setInterval(notify, 4000);
+    setInterval(publishPreviews, 4000);
+    window.xBrowser = {
+      app: { info: () => Promise.resolve({ version: '0.1.7', native: true }) },
+      overview: {
+        list, create: (name, profileId) => json('/api/spaces', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({name:name || 'New Space', profileId}) }),
+        open: (id) => json('/api/spaces/' + id + '/open', { method:'POST' }),
+        close: (id) => json('/api/spaces/' + id + '/close', { method:'POST' }),
+        rename: (id, name) => json('/api/spaces/' + id + '/rename', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({name}) }),
+        setVisible: (cards) => { visible.clear(); (cards || []).forEach((card) => visible.add(Number(card.id))); return publishPreviews(); },
+        onChanged: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+        onPreviewFrame: (fn) => { previewListeners.add(fn); return () => previewListeners.delete(fn); },
+      },
+      profiles: {
+        list: profiles,
+        setDefault: (id) => json('/api/profiles/default', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({profileId:id}) }),
+        remove: (id) => json('/api/profiles/' + encodeURIComponent(id) + '/remove', { method:'POST' }),
+        setSync: (id, enabled) => json('/api/profiles/' + encodeURIComponent(id) + '/sync', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({enabled}) }),
+        cloneUfo: (id, name, makeDefault, loginSyncEnabled) => json('/api/profiles/' + encodeURIComponent(id) + '/clone', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({name, makeDefault, loginSyncEnabled}) }),
+        discoverChrome: () => json('/api/chrome/discover'),
+        quitChrome: () => json('/api/chrome/quit', { method:'POST' }),
+        importChrome: (profileDirName, makeDefault, allowPartial) => json('/api/chrome/import', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({profileDirName, makeDefault, allowPartial}) }),
+        onImportProgress: () => () => {}, onSyncProgress: () => () => {},
+      },
+      onPresentation: (fn) => { fn({ kind: 'overview' }); return () => {}; },
+    };
+    notify();
+  })();`;
 }
 
 const OVERVIEW_HTML = `<!doctype html>

@@ -18,6 +18,7 @@ export type NativeCefTaskSpaceManagerOptions = {
   profiles: BrowserProfileRegistry;
   partitionsRoot: string;
   executable?: string;
+  /** Development-only deterministic base. Omit in packaged Native builds. */
   portBase?: number;
   useMockKeychain?: boolean;
   sourcePartitionsRoot?: string;
@@ -312,7 +313,12 @@ export class NativeCefTaskSpaceManager {
     const runtimeOptions: NativeCefRuntimeOptions = {
       executable: this.options.executable,
       url: url || tab.url,
-      port: (this.options.portBase ?? 9420) + this.runtimePortOffset(runtimeKey),
+      // Development smoke tests may pin a base for repeatability. Packaged
+      // Native runs leave the base unset and receive an ephemeral loopback
+      // port, so no predictable DevTools endpoint is exposed.
+      port: this.options.portBase
+        ? this.options.portBase + this.runtimePortOffset(runtimeKey)
+        : await findFreePort(),
       userDataDir: dataDir,
       // Darwin sockaddr_un paths are limited to roughly 104 bytes. Profile
       // directories can be much deeper than that, so never nest the socket
@@ -372,6 +378,50 @@ export class NativeCefTaskSpaceManager {
     const runtime = this.runtimes.get(this.runtimeKey(space));
     if (!runtime?.isRunning()) throw new Error("native Space runtime is not running");
     return this.createNativeCookieTarget(runtime, space);
+  }
+
+  /**
+   * Create a short-lived CEF target for Profile operations. Profile import and
+   * clone use the same CDP Cookie adapter as a live Space, but must not create
+   * a visible Task Space or keep a renderer alive after the transaction.
+   */
+  async createProfileCookieWriteTarget(profileId: string, partitionId?: string): Promise<CookieWriteTarget> {
+    // Chrome import creates the target partition before the Profile Registry
+    // publish step, so the target may intentionally not exist in the registry
+    // yet. Registered clone targets use the explicit partition id as well.
+    const targetPartition = partitionId || this.options.profiles.getOrThrow(profileId).partitionId;
+    const dataDir = join(this.options.partitionsRoot, targetPartition);
+    await mkdir(dataDir, { recursive: true, mode: 0o700 });
+    const controlSocket = join(
+      this.options.controlSocketsRoot || join(this.options.partitionsRoot, "..", "Control"),
+      `profile-${randomUUID()}.sock`,
+    );
+    const runtime = new NativeCefRuntime({
+      executable: this.options.executable,
+      url: "https://example.com/",
+      port: await findFreePort(),
+      userDataDir: dataDir,
+      controlSocket,
+      useMockKeychain: this.options.useMockKeychain,
+    });
+    await mkdir(dirname(controlSocket), { recursive: true, mode: 0o700 });
+    try {
+      await runtime.start();
+      const target = await this.createCookieTargetForRuntime(runtime, "https://example.com/");
+      const dispose = target.dispose;
+      target.dispose = async () => {
+        await dispose();
+        await runtime.stop();
+      };
+      return target;
+    } catch (error) {
+      await runtime.stop().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  isProfileInUse(profileId: string) {
+    return this.state.spaces.some((space) => space.profileId === profileId);
   }
 
   /** Capture one low-frequency Overview frame through the active CEF page. */
@@ -537,7 +587,11 @@ export class NativeCefTaskSpaceManager {
   }
 
   private async createNativeCookieTarget(runtime: NativeCefRuntime, space: SpaceRecord): Promise<CookieWriteTarget> {
-    const target = await waitForPageTarget(runtime, space.tabs[0]?.url || "", 15_000);
+    return this.createCookieTargetForRuntime(runtime, space.tabs[0]?.url || "");
+  }
+
+  private async createCookieTargetForRuntime(runtime: NativeCefRuntime, expectedUrl: string): Promise<CookieWriteTarget> {
+    const target = await waitForPageTarget(runtime, expectedUrl, 15_000);
     if (!target) throw new Error("Native CEF cookie target did not become ready");
     const connection = await runtime.connect(target.id);
     await connection.send("Network.enable");
@@ -587,6 +641,20 @@ export class NativeCefTaskSpaceManager {
       dispose: () => connection.close(),
     };
   }
+}
+
+async function findFreePort() {
+  const { createServer } = await import("node:net");
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  const port = address && typeof address !== "string" ? address.port : 0;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (!port) throw new Error("unable to allocate Native CEF Profile operation port");
+  return port;
 }
 
 async function waitForPageTarget(runtime: NativeCefRuntime, expectedUrl: string, timeoutMs: number) {

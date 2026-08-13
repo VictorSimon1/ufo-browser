@@ -14,6 +14,7 @@ import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { writeAndVerifyCookies } from "./chrome-import/cookie-writer.js";
 import { NativeCefPresentationCoordinator } from "./native-cef-presentation.js";
 import { NativeCefProfileSync } from "./native-cef-profile-sync.js";
+import { NativeCefProfileService } from "./native-cef-profile-service.js";
 import type { BrowserProfileRecord } from "./profile-registry.js";
 
 // Native CEF is the production browser shell, so it shares the existing UFO
@@ -57,7 +58,9 @@ const manager = new NativeCefTaskSpaceManager({
   profiles,
   partitionsRoot,
   executable: process.env.UFO_CEF_HOST,
-  portBase: Number(process.env.UFO_CEF_PORT_BASE || 9420),
+  portBase: process.env.UFO_CEF_PORT_BASE
+    ? Number(process.env.UFO_CEF_PORT_BASE)
+    : undefined,
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   sourcePartitionsRoot,
   controlSocketsRoot,
@@ -72,6 +75,18 @@ const manager = new NativeCefTaskSpaceManager({
   },
 });
 await manager.initialize();
+const profileService = new NativeCefProfileService({
+  userDataPath,
+  partitionsRoot,
+  sourcePartitionsRoot,
+  profiles,
+  manager,
+  keychainHelper,
+  storageWorker: process.env.UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER ||
+    join(process.cwd(), "dist/main/profile-sync-storage-revision-worker.js"),
+  chromeUserDataPath: process.env.UFO_BROWSER_CHROME_USER_DATA,
+  useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
+});
 profileSync = new NativeCefProfileSync({
   manager,
   profiles,
@@ -97,6 +112,9 @@ const overview = new NativeCefOverview({
   startRuntime: process.env.UFO_BROWSER_NATIVE_OVERVIEW_MODE !== "external",
   infoFile: process.env.UFO_BROWSER_OVERVIEW_INFO_FILE,
   controlSocket: overviewControlSocket,
+  profileService,
+  profiles,
+  rendererRoot: process.env.UFO_BROWSER_NATIVE_RENDERER_ROOT || join(process.cwd(), "dist/renderer"),
 });
 await overview.start();
 const presentation = new NativeCefPresentationCoordinator(manager, overview);

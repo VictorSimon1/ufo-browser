@@ -52,11 +52,13 @@ CEF Native Host (C++/Objective-C++)
 CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
 
-During development, the native prototype can expose a localhost DevTools
-port with `--agent-devtools-port`. Release builds must not expose a public
-debugging port; the production adapter will bind the existing private Agent
-transport and validate the Space lease before every operation. The standalone
-Agent Service owns no browser UI, so the final product can be Electron-free.
+The Agent bridge uses a randomly allocated loopback DevTools port per native
+runtime (never a fixed or user-configurable public endpoint in a packaged
+launch). The Agent Unix socket remains the only externally discoverable UFO
+control surface and validates the Space lease before every operation. A future
+CEF message-bridge can remove the loopback adapter entirely without changing
+the Skill contract. The standalone Agent Service owns no browser UI, so the
+product is Electron-free at runtime.
 
 ## Integration order
 

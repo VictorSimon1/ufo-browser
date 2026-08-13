@@ -60,6 +60,7 @@ static NSString* HostExecutablePath() {
   environment[@"UFO_BROWSER_NATIVE_AGENT_SCRIPT"] = agent;
   environment[@"UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER"] = storageWorker;
   environment[@"UFO_BROWSER_NATIVE_KEYCHAIN_HELPER"] = keychain;
+  environment[@"UFO_BROWSER_NATIVE_RENDERER_ROOT"] = ResourcePath(@"renderer");
 
   NSTask* task = [[NSTask alloc] init];
   task.launchPath = node;

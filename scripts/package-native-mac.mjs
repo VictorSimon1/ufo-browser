@@ -41,6 +41,7 @@ async function main() {
   await cp("dist/main/profile-sync-storage-revision-worker.js", join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js"));
   await cp("dist/bin/ufo-keychain-helper", join(appRoot, "Contents/Resources/ufo-keychain-helper"));
   await cp("dist/agent/ufo-browser.js", join(appRoot, "Contents/Resources/ufo-browser.js"));
+  await cp("dist/renderer", join(appRoot, "Contents/Resources/renderer"), { recursive: true });
   await writeFile(join(appRoot, "Contents/Resources/ufo-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');
   await writeFile(join(appRoot, "Contents/Resources/x-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');
   await cp(process.execPath, join(appRoot, "Contents/Resources/node"));
