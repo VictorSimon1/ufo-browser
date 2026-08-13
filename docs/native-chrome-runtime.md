@@ -188,8 +188,10 @@ npm run start:native
 `native:cef:fetch` downloads the latest stable standard CEF archive into the
 ignored `test/cef-runtime/` directory. Set `UFO_CEF_VERSION` to pin a known
 release, or set `UFO_CEF_ROOT` to use an existing distribution. The current
-validated runtime is CEF 144 / Chromium 144; the fetcher follows the latest
-stable CEF (currently 151 / Chromium 151) without putting binaries in Git.
+validated runtime is CEF 151 / Chromium 151. The build script reconfigures
+automatically when the selected CEF root changes, and
+`npm run native:cef:version:smoke` verifies the running browser version instead
+of relying only on a build-directory name. CEF binaries remain outside Git.
 
 For a drag-installable native package:
 

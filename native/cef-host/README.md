@@ -1,9 +1,9 @@
-# UFO-Browser Native Chrome Host (prototype)
+# UFO-Browser Native Chrome Host
 
-This directory contains the first native-host prototype for the Chrome-style
-browser shell. It is deliberately separate from the Electron product path so
-that the existing Agent, Profile, Task Space, and preview behavior remains
-available while the native runtime is evaluated.
+This directory contains the native Chrome Runtime host used by the Native
+product path. It is deliberately isolated from the legacy Electron fallback so
+the existing Agent, Profile, Task Space, and preview contracts remain stable
+during migration.
 
 The host uses CEF's Chrome runtime and Views framework. The address bar,
 navigation controls, Profile menu, dialogs, tabs, and browser window are

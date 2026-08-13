@@ -1,4 +1,4 @@
-import { access, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -89,7 +89,10 @@ async function configure() {
 }
 
 async function build() {
-  if (!(await exists(join(buildRoot, "build.ninja")))) await configure();
+  const cefRoot = await findCefRoot();
+  if (!(await exists(join(buildRoot, "build.ninja"))) || !(await configuredFor(cefRoot))) {
+    await configure();
+  }
   try {
     await run("cmake", ["--build", buildRoot, "--target", target, "-j", process.env.CMAKE_BUILD_JOBS || "4"]);
   } catch (error) {
@@ -98,6 +101,16 @@ async function build() {
   }
   const builtExecutable = await findBuiltExecutable();
   console.log(`[native:cef] built ${dirname(dirname(dirname(builtExecutable)))}`);
+}
+
+async function configuredFor(cefRoot) {
+  try {
+    const cache = await readFile(join(buildRoot, "CMakeCache.txt"), "utf8");
+    const match = cache.match(/^CEF_ROOT:PATH=(.*)$/m);
+    return Boolean(match && resolve(match[1]) === resolve(cefRoot));
+  } catch {
+    return false;
+  }
 }
 
 async function findBuiltExecutable() {
