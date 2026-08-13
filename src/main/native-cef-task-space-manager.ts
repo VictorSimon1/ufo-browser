@@ -23,6 +23,7 @@ export type NativeCefTaskSpaceManagerOptions = {
   useMockKeychain?: boolean;
   sourcePartitionsRoot?: string;
   controlSocketsRoot?: string;
+  devtoolsSocketsRoot?: string;
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
   onBeforeRuntimeStart?: (spaceId: number, profileId: string, dataDir: string) => Promise<void>;
   onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
@@ -327,6 +328,12 @@ export class NativeCefTaskSpaceManager {
         this.options.controlSocketsRoot || join(this.options.partitionsRoot, "..", "Control"),
         `space-${space.id}.sock`,
       ),
+      devtoolsSocket: process.env.UFO_CEF_PRIVATE_BRIDGE === "1"
+        ? join(
+            this.options.devtoolsSocketsRoot || join(this.options.partitionsRoot, "..", "DevTools"),
+            `space-${space.id}.sock`,
+          )
+        : undefined,
       useMockKeychain: this.options.useMockKeychain,
     };
     const runtime = new NativeCefRuntime(runtimeOptions);
@@ -438,7 +445,7 @@ export class NativeCefTaskSpaceManager {
     const target = targets.find((candidate) =>
       candidate.type === "page" && candidate.id === active?.targetId,
     ) ?? targets.find((candidate) => candidate.type === "page");
-    if (!target?.webSocketDebuggerUrl) throw new Error("native preview page target is unavailable");
+    if (!target || (!target.webSocketDebuggerUrl && !runtime.usesPrivateBridge())) throw new Error("native preview page target is unavailable");
     const connection = await runtime.connect(target.id);
     try {
       const result = await connection.send("Page.captureScreenshot", {
@@ -663,12 +670,12 @@ async function waitForPageTarget(runtime: NativeCefRuntime, expectedUrl: string,
   while (Date.now() < deadline) {
     const target = (await runtime.targets()).find((candidate) => candidate.type === "page");
     lastTarget = target;
-    if (target?.webSocketDebuggerUrl && target.url && target.url !== "about:blank") {
+    if (target && (target.webSocketDebuggerUrl || runtime.usesPrivateBridge()) && target.url && target.url !== "about:blank") {
       if (!expectedUrl || target.url === expectedUrl || target.url.startsWith(expectedUrl)) return target;
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
-  if (lastTarget?.webSocketDebuggerUrl) return lastTarget;
+  if (lastTarget && (lastTarget.webSocketDebuggerUrl || runtime.usesPrivateBridge())) return lastTarget;
   throw new Error("Native CEF page target did not become ready");
 }
 
@@ -694,7 +701,7 @@ async function waitForTarget(runtime: NativeCefRuntime, targetId: string, timeou
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const target = (await runtime.targets()).find((candidate) => candidate.id === targetId);
-    if (target?.webSocketDebuggerUrl) return target;
+    if (target && (target.webSocketDebuggerUrl || runtime.usesPrivateBridge())) return target;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
   throw new Error(`Native CEF target did not become ready: ${targetId}`);

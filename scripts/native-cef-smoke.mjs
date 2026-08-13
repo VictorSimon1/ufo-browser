@@ -12,6 +12,7 @@ const runtime = new NativeCefRuntime({
   userDataDir: process.env.UFO_CEF_SMOKE_USER_DATA_DIR || userDataDir,
   controlSocket,
   useMockKeychain: true,
+  devtoolsSocket: process.env.UFO_CEF_PRIVATE_BRIDGE === "1" ? join(userDataDir, "devtools.sock") : undefined,
 });
 try {
   const version = await runtime.start();

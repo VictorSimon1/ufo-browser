@@ -52,13 +52,15 @@ CEF Native Host (C++/Objective-C++)
 CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
 
-The Agent bridge uses a randomly allocated loopback DevTools port per native
-runtime (never a fixed or user-configurable public endpoint in a packaged
-launch). The Agent Unix socket remains the only externally discoverable UFO
-control surface and validates the Space lease before every operation. A future
-CEF message-bridge can remove the loopback adapter entirely without changing
-the Skill contract. The standalone Agent Service owns no browser UI, so the
-product is Electron-free at runtime.
+The production direction is a per-runtime private Unix-socket CEF DevTools
+bridge. Its browser-level slice is verified for `Browser.getVersion` and
+`Target.getTargets`; it is selected only when explicitly enabled while page and
+OOPIF session parity is completed. The tested Agent path still uses a randomly
+allocated loopback DevTools port per native runtime (never a fixed or
+user-configurable public endpoint in a packaged launch). The Agent Unix socket
+remains the only externally discoverable UFO control surface and validates the
+Space lease before every operation. The standalone Agent Service owns no
+browser UI, so the Native path remains Electron-free at runtime.
 
 ## Integration order
 

@@ -126,6 +126,8 @@ void UfoCefApp::OnContextInitialized() {
   const auto command_line = CefCommandLine::GetGlobalCommandLine();
   const auto control_socket = command_line->GetSwitchValue("control-socket").ToString();
   if (!control_socket.empty()) handler->StartControlSocket(control_socket);
+  const auto devtools_socket = command_line->GetSwitchValue("devtools-socket").ToString();
+  if (!devtools_socket.empty()) handler->StartDevToolsSocket(devtools_socket);
   CefBrowserSettings browser_settings;
   const bool overview = command_line->HasSwitch("overview");
   auto browser_view = CefBrowserView::CreateBrowserView(

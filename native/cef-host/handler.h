@@ -2,8 +2,13 @@
 
 #include <atomic>
 #include <list>
+#include <map>
+#include <set>
 #include <string>
 #include <thread>
+#include <memory>
+#include <mutex>
+#include <vector>
 
 #include "include/cef_client.h"
 #include "include/views/cef_window.h"
@@ -40,6 +45,11 @@ class UfoCefHandler final : public CefClient,
   bool IsAgentConnectionActive() const { return agent_active_; }
   void StartControlSocket(const std::string& path);
   void StopControlSocket();
+  void StartDevToolsSocket(const std::string& path);
+  void StopDevToolsSocket();
+  void PublishDevToolsMessage(const std::string& target_id,
+                              const std::string& message);
+  bool ConsumeDevToolsOuterResult(const std::string& route_id, int id);
   bool IsClosing() const { return closing_; }
 
  private:
@@ -53,6 +63,25 @@ class UfoCefHandler final : public CefClient,
   int control_socket_fd_ = -1;
   std::atomic<bool> control_running_{false};
   std::thread control_thread_;
+
+  struct DevToolsClient;
+  std::string devtools_socket_path_;
+  int devtools_socket_fd_ = -1;
+  std::atomic<bool> devtools_running_{false};
+  std::thread devtools_accept_thread_;
+  std::mutex devtools_clients_mutex_;
+  std::vector<std::shared_ptr<DevToolsClient>> devtools_clients_;
+  std::map<std::string, CefRefPtr<CefRegistration>> devtools_registrations_;
+  std::map<std::string, std::set<int>> devtools_outer_results_;
+  std::map<std::string, int> devtools_target_browsers_;
+  std::mutex devtools_targets_mutex_;
+
+  void HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& client);
+  void DispatchDevToolsMessage(const std::shared_ptr<DevToolsClient>& client,
+                               CefRefPtr<CefDictionaryValue> message,
+                               const std::string& target_id,
+                               const std::string& method);
+  CefRefPtr<CefBrowser> FindDevToolsBrowser(const std::string& target_id);
 
   IMPLEMENT_REFCOUNTING(UfoCefHandler);
 };

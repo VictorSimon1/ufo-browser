@@ -66,6 +66,7 @@
 
 static void ConfigureDevelopmentDevTools(CefRefPtr<CefCommandLine> command_line,
                                           CefSettings* settings) {
+  if (command_line->HasSwitch("devtools-socket")) return;
   if (!command_line->HasSwitch("agent-devtools-port")) return;
   const auto value = command_line->GetSwitchValue("agent-devtools-port");
   char* end = nullptr;

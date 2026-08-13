@@ -32,6 +32,8 @@ export type NativeCefRuntimeOptions = {
   /** Show a Space immediately only for an explicit human-facing launch. */
   showOnStart?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Use the CEF-native DevTools message bridge over a private Unix socket. */
+  devtoolsSocket?: string;
 };
 
 type PendingCommand = {
@@ -44,6 +46,12 @@ type NativeWebSocket = {
   send(data: string): void;
   close(): void;
   addEventListener(type: string, listener: (event: any) => void): void;
+};
+
+export type NativeCdpConnectionLike = {
+  send(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<any>;
+  onEvent(listener: (message: CdpEvent) => void): () => void;
+  close(): Promise<void>;
 };
 
 const OPEN = 1;
@@ -158,12 +166,95 @@ export class NativeCefCdpTransport implements CdpTransport {
   }
 }
 
+/** Standard-CDP JSON over the private CEF Unix-socket bridge. */
+export class NativeCefPrivateConnection implements NativeCdpConnectionLike {
+  private readonly socket: ReturnType<typeof createConnection>;
+  private readonly pending = new Map<number, PendingCommand>();
+  private readonly listeners = new Set<(message: CdpEvent) => void>();
+  private readonly ready: Promise<void>;
+  private buffer = "";
+  private nextId = 1;
+  private closed = false;
+  private defaultSessionId?: string;
+
+  constructor(private readonly socketPath: string, private readonly targetId: string) {
+    this.socket = createConnection(socketPath);
+    this.ready = new Promise<void>((resolveReady, rejectReady) => {
+      this.socket.once("connect", resolveReady);
+      this.socket.once("error", rejectReady);
+    });
+    this.socket.on("connect", () => this.socket.setNoDelay(true));
+    this.socket.setEncoding("utf8");
+    this.socket.on("data", (chunk) => this.receive(String(chunk)));
+    this.socket.on("error", (error) => this.failPending(error instanceof Error ? error : new Error(String(error))));
+    this.socket.on("close", () => this.failPending(new Error("Native CEF private DevTools socket closed")));
+  }
+
+  async send(method: string, params: Record<string, unknown> = {}, sessionId?: string) {
+    await this.ready;
+    if (this.closed) throw new Error("Native CEF private DevTools connection is closed");
+    const id = this.nextId++;
+    return new Promise<any>((resolveResult, rejectResult) => {
+      this.pending.set(id, { resolve: resolveResult, reject: rejectResult });
+      const routedSessionId = sessionId || this.defaultSessionId;
+      this.socket.write(`${JSON.stringify({ id, targetId: this.targetId, method, params, ...(routedSessionId ? { sessionId: routedSessionId } : {}) })}\n`);
+    });
+  }
+
+  setDefaultSessionId(sessionId: string) {
+    this.defaultSessionId = sessionId;
+  }
+
+  private sendWithSession(method: string, params: Record<string, unknown>, sessionId: string) {
+    return this.send(method, params, sessionId);
+  }
+
+  onEvent(listener: (message: CdpEvent) => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  async close() {
+    this.closed = true;
+    this.failPending(new Error("Native CEF private DevTools connection closed"));
+    this.socket.destroy();
+  }
+
+  private receive(chunk: string) {
+    this.buffer += chunk;
+    let newline = 0;
+    while ((newline = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, newline);
+      this.buffer = this.buffer.slice(newline + 1);
+      if (!line) continue;
+      let message: any;
+      try { message = JSON.parse(line); } catch { continue; }
+      if (Number.isInteger(message?.id)) {
+        const pending = this.pending.get(message.id);
+        if (!pending) continue;
+        this.pending.delete(message.id);
+        if (message.error) pending.reject(new Error(String(message.error.message || "Native CEF DevTools error")));
+        else pending.resolve(message.result);
+      } else if (typeof message?.method === "string") {
+        for (const listener of this.listeners) listener(message as CdpEvent);
+      }
+    }
+  }
+
+  private failPending(error: Error) {
+    if (this.pending.size === 0) return;
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+}
+
 export class NativeCefRuntime {
   private process?: ChildProcess;
   private readonly connections = new Set<NativeCdpConnection>();
   private port?: number;
   private versionInfo?: NativeCefVersion;
   private controlSocketPath?: string;
+  private devtoolsSocketPath?: string;
 
   constructor(private readonly defaults: NativeCefRuntimeOptions = {}) {}
 
@@ -175,20 +266,25 @@ export class NativeCefRuntime {
     return this.port;
   }
 
+  usesPrivateBridge() {
+    return Boolean(this.devtoolsSocketPath);
+  }
+
   async start(options: NativeCefRuntimeOptions = {}) {
     if (this.isRunning()) return this.version();
     if (process.platform !== "darwin") throw new Error("Native CEF currently supports macOS only");
     const merged = { ...this.defaults, ...options };
     const port = merged.port ?? 9222;
-    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    if (!merged.devtoolsSocket && (!Number.isInteger(port) || port < 1024 || port > 65535)) {
       throw new Error(`Invalid Native CEF DevTools port: ${port}`);
     }
     const executable = await resolveExecutable(merged.executable);
     this.port = port;
     this.controlSocketPath = merged.controlSocket ? resolve(merged.controlSocket) : undefined;
+    this.devtoolsSocketPath = merged.devtoolsSocket ? resolve(merged.devtoolsSocket) : undefined;
     const args = [
       `--url=${merged.url || "https://www.google.com/"}`,
-      `--agent-devtools-port=${port}`,
+      ...(merged.devtoolsSocket ? [`--devtools-socket=${resolve(merged.devtoolsSocket)}`] : [`--agent-devtools-port=${port}`]),
     ];
     if (merged.userDataDir) args.push(`--user-data-dir=${resolve(merged.userDataDir)}`);
     if (merged.controlSocket) args.push(`--control-socket=${resolve(merged.controlSocket)}`);
@@ -216,18 +312,50 @@ export class NativeCefRuntime {
   }
 
   async version() {
-    if (!this.port) throw new Error("Native CEF runtime is not started");
+    if (!this.port && !this.devtoolsSocketPath) throw new Error("Native CEF runtime is not started");
     if (this.versionInfo) return this.versionInfo;
+    if (this.devtoolsSocketPath) {
+      const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+      try { return (this.versionInfo = await connection.send("Browser.getVersion")); }
+      finally { await connection.close(); }
+    }
     this.versionInfo = await fetchJson<NativeCefVersion>(this.endpoint("/json/version"));
     return this.versionInfo;
   }
 
-  async targets() {
+  async targets(): Promise<NativeCefTarget[]> {
+    if (this.devtoolsSocketPath) {
+      const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+      try {
+        const result = await connection.send("Target.getTargets");
+        return (result?.targetInfos || []).map((target: any) => ({
+          id: target.targetId,
+          type: target.type,
+          title: target.title,
+          url: target.url,
+        }));
+      } finally { await connection.close(); }
+    }
     if (!this.port) throw new Error("Native CEF runtime is not started");
     return fetchJson<NativeCefTarget[]>(this.endpoint("/json/list"));
   }
 
   async connect(targetId?: string) {
+    if (this.devtoolsSocketPath) {
+      const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+      if (targetId) {
+        const attached = await connection.send("Target.attachToTarget", {
+          targetId,
+          flatten: true,
+        });
+        if (!attached?.sessionId) {
+          await connection.close();
+          throw new Error(`Native CEF private target attach failed: ${targetId}`);
+        }
+        connection.setDefaultSessionId(String(attached.sessionId));
+      }
+      return connection;
+    }
     const targets = await this.targets();
     const target = targetId
       ? targets.find((candidate) => candidate.id === targetId)
@@ -239,6 +367,7 @@ export class NativeCefRuntime {
   }
 
   async connectBrowser() {
+    if (this.devtoolsSocketPath) return new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
     const version = await this.version();
     if (!version.webSocketDebuggerUrl) {
       throw new Error("Native CEF browser DevTools target is unavailable");
@@ -256,6 +385,7 @@ export class NativeCefRuntime {
     this.versionInfo = undefined;
     this.port = undefined;
     this.controlSocketPath = undefined;
+    this.devtoolsSocketPath = undefined;
     if (!child || child.killed) return;
     await new Promise<void>((resolveStop) => {
       const timer = setTimeout(() => {
@@ -298,6 +428,22 @@ export class NativeCefRuntime {
   }
 
   private async waitForVersion(timeoutMs: number) {
+    if (this.devtoolsSocketPath) {
+      const deadline = Date.now() + timeoutMs;
+      let lastError: unknown;
+      while (Date.now() < deadline) {
+        try {
+          const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+          const version = await connection.send("Browser.getVersion");
+          await connection.close();
+          return version as NativeCefVersion;
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+        }
+      }
+      throw new Error(`Native CEF private DevTools bridge did not become ready: ${String(lastError || "timeout")}`);
+    }
     const deadline = Date.now() + timeoutMs;
     let lastError: unknown;
     while (Date.now() < deadline) {

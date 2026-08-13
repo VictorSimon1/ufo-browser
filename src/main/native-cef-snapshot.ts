@@ -11,7 +11,7 @@ export class NativeCefSnapshotService {
     const targets = await runtime.targets();
     const target = targets.find((candidate) => candidate.id === active?.targetId) ??
       targets.find((candidate) => candidate.type === "page");
-    if (!target?.webSocketDebuggerUrl) throw new Error("native page target is unavailable");
+    if (!target || (!target.webSocketDebuggerUrl && !runtime.usesPrivateBridge())) throw new Error("native page target is unavailable");
     const connection = await runtime.connect(target.id);
     try {
       await connection.send("Accessibility.enable");

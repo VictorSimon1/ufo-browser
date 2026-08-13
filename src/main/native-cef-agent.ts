@@ -64,6 +64,7 @@ const manager = new NativeCefTaskSpaceManager({
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   sourcePartitionsRoot,
   controlSocketsRoot,
+  devtoolsSocketsRoot: join(userDataPath, "DevTools"),
   onRuntimeReady: async (spaceId) => profileSync?.baselineSpace(spaceId),
   seedCookies: async (profileId, target) => {
     const profile = profiles.getOrThrow(profileId);

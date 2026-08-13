@@ -56,11 +56,13 @@ version returned by the running CEF host.
 
 Replace the development-only loopback DevTools HTTP/WebSocket adapter with a
 per-runtime Unix-socket bridge backed by `CefBrowserHost::SendDevToolsMessage`
-and `CefDevToolsMessageObserver`. The Node side keeps the existing
-`CdpTransport` and multiplexed Agent protocol, so Skill callers do not change.
-During the transition the bridge is selected explicitly and the CDP adapter
-remains a verified fallback until page targets, OOPIF sessions, events, and
-Browser-level commands have parity tests.
+and `CefDevToolsMessageObserver`. The first browser-level slice is now
+implemented and verified for `Browser.getVersion` and `Target.getTargets`.
+The Node side keeps the existing `CdpTransport` and multiplexed Agent protocol,
+so Skill callers do not change. Page target attachment, OOPIF sessions, and
+event parity remain explicitly opt-in until their CEF Chrome Runtime
+`Target.sendMessageToTarget` behavior passes a dedicated suite; the tested
+CDP adapter remains the default during this transition.
 
 ### Phase 3 — Full lifecycle and profile acceptance
 
@@ -84,6 +86,7 @@ npm run native:cef:fetch
 npm run native:cef:configure
 npm run native:cef:build
 npm run native:cef:version:smoke
+npm run native:cef:private:smoke
 npm run native:cef:agent:smoke
 npm run native:cef:app:smoke
 npm run native:cef:bundle:smoke
@@ -92,3 +95,9 @@ npm run native:cef:bundle:smoke
 The version smoke is runtime-based: it asks the actual native host for
 `Browser.getVersion` and rejects a stale CEF build even if compilation
 otherwise succeeds.
+
+The private bridge can be exercised by setting
+`UFO_CEF_PRIVATE_BRIDGE=1` in an isolated development run. The current smoke
+deliberately gates only browser-level commands; the normal Agent path remains
+the default until page-target attachment, OOPIF routing, event subscriptions,
+and screenshot/input commands all pass the parity suite.
