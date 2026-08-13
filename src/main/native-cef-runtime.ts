@@ -28,6 +28,7 @@ export type NativeCefRuntimeOptions = {
   userDataDir?: string;
   controlSocket?: string;
   useMockKeychain?: boolean;
+  overview?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -190,6 +191,7 @@ export class NativeCefRuntime {
     if (merged.userDataDir) args.push(`--user-data-dir=${resolve(merged.userDataDir)}`);
     if (merged.controlSocket) args.push(`--control-socket=${resolve(merged.controlSocket)}`);
     if (merged.useMockKeychain) args.push("--use-mock-keychain");
+    if (merged.overview) args.push("--overview");
     this.process = spawn(executable, args, {
       cwd: merged.cwd,
       env: { ...process.env, ...merged.env },

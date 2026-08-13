@@ -73,6 +73,21 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
   IMPLEMENT_REFCOUNTING(UfoBrowserViewDelegate);
 };
 
+class UfoOverviewBrowserViewDelegate final : public CefBrowserViewDelegate {
+ public:
+  cef_runtime_style_t GetBrowserRuntimeStyle() override {
+    return CEF_RUNTIME_STYLE_CHROME;
+  }
+
+  ChromeToolbarType GetChromeToolbarType(
+      CefRefPtr<CefBrowserView> browser_view) override {
+    return CEF_CTT_NONE;
+  }
+
+ private:
+  IMPLEMENT_REFCOUNTING(UfoOverviewBrowserViewDelegate);
+};
+
 std::string StartupUrl() {
   auto command_line = CefCommandLine::GetGlobalCommandLine();
   const auto url = command_line->GetSwitchValue("url");
@@ -89,9 +104,13 @@ void UfoCefApp::OnContextInitialized() {
   const auto control_socket = command_line->GetSwitchValue("control-socket").ToString();
   if (!control_socket.empty()) handler->StartControlSocket(control_socket);
   CefBrowserSettings browser_settings;
+  const bool overview = command_line->HasSwitch("overview");
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, StartupUrl(), browser_settings, nullptr, nullptr,
-      new UfoBrowserViewDelegate());
+      overview ? static_cast<CefRefPtr<CefBrowserViewDelegate>>(
+          new UfoOverviewBrowserViewDelegate())
+               : static_cast<CefRefPtr<CefBrowserViewDelegate>>(
+          new UfoBrowserViewDelegate()));
   CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(browser_view));
 }
 

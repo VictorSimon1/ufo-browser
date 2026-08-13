@@ -16,4 +16,3 @@ class UfoCefApp final : public CefApp, public CefBrowserProcessHandler {
  private:
   IMPLEMENT_REFCOUNTING(UfoCefApp);
 };
-
