@@ -7,12 +7,27 @@ const runtime = new NativeCefRuntime({
 });
 try {
   const version = await runtime.start();
-  const targets = await runtime.targets();
-  const connection = await runtime.connect();
-  const evaluated = await connection.send("Runtime.evaluate", {
-    expression: "location.href",
-    returnByValue: true,
-  });
+  const deadline = Date.now() + 15_000;
+  let targets = [];
+  while (Date.now() < deadline) {
+    targets = await runtime.targets();
+    const page = targets.find((target) => target.type === "page" && target.url === "https://example.com/");
+    if (page?.webSocketDebuggerUrl) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const page = targets.find((target) => target.type === "page" && target.url === "https://example.com/");
+  if (!page?.webSocketDebuggerUrl) throw new Error("Native CEF example page did not become ready");
+  const connection = await runtime.connect(page.id);
+  let evaluated;
+  const evaluateDeadline = Date.now() + 15_000;
+  while (Date.now() < evaluateDeadline) {
+    evaluated = await connection.send("Runtime.evaluate", {
+      expression: "location.href",
+      returnByValue: true,
+    });
+    if (evaluated?.result?.value === "https://example.com/") break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   await connection.close();
   if (evaluated?.result?.value !== "https://example.com/") {
     throw new Error(`Unexpected native page URL: ${evaluated?.result?.value}`);
