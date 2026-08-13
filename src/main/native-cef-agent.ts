@@ -32,6 +32,7 @@ const stateStore = new BrowserStateStore(join(userDataPath, "browser-state.json"
 const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
 await profiles.initialize();
 const keychainHelper = process.env.UFO_BROWSER_KEYCHAIN_HELPER ||
+  process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER ||
   join(homedir(), "Library/Application Support/UFO-Browser", "ufo-keychain-helper");
 const manager = new NativeCefTaskSpaceManager({
   store: stateStore,
@@ -58,6 +59,8 @@ const overview = new NativeCefOverview({
   port: Number(process.env.UFO_CEF_OVERVIEW_HTTP_PORT || 0),
   devtoolsPort: Number(process.env.UFO_CEF_OVERVIEW_PORT || 0),
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
+  startRuntime: process.env.UFO_BROWSER_NATIVE_OVERVIEW_MODE !== "external",
+  infoFile: process.env.UFO_BROWSER_OVERVIEW_INFO_FILE,
 });
 await overview.start();
 const leases = new SpaceLeaseRegistry();

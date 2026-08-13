@@ -34,6 +34,7 @@ set(CEF_HOST_SRCS
   overlay_mac.mm
 )
 set(CEF_HELPER_SRCS process_helper_mac.cc)
+set(CEF_LAUNCHER_SRCS native-launcher.mm)
 
 set(EXECUTABLE_NAME "${CEF_TARGET}")
 set(PRODUCT_NAME "UFO-Browser Native Chrome")

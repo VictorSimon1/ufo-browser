@@ -1,5 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { NativeCefRuntime } from "./native-cef-runtime.js";
 import type { NativeCefTaskSpaceManager } from "./native-cef-task-space-manager.js";
 
@@ -11,6 +13,10 @@ export type NativeCefOverviewOptions = {
   userDataDir: string;
   devtoolsPort: number;
   useMockKeychain?: boolean;
+  /** Keep the HTTP Overview API alive while another native CEF host renders it. */
+  startRuntime?: boolean;
+  /** Optional JSON rendezvous file for a native app launcher. */
+  infoFile?: string;
 };
 
 /** Electron-free Overview bridge. The page itself is rendered by CEF. */
@@ -36,6 +42,12 @@ export class NativeCefOverview {
     const devtoolsPort = this.options.devtoolsPort > 0
       ? this.options.devtoolsPort
       : await findFreePort();
+    const info = { host, port: address.port, url };
+    if (this.options.infoFile) {
+      await mkdir(dirname(this.options.infoFile), { recursive: true, mode: 0o700 });
+      await writeFile(this.options.infoFile, `${JSON.stringify(info)}\n`, { mode: 0o600 });
+    }
+    if (this.options.startRuntime === false) return info;
     this.runtime = new NativeCefRuntime({
       executable: this.options.executable,
       url,
@@ -57,10 +69,11 @@ export class NativeCefOverview {
     });
     this.server = undefined;
     this.address = undefined;
+    if (this.options.infoFile) await writeFile(this.options.infoFile, "", { mode: 0o600 }).catch(() => undefined);
   }
 
   info() {
-    return this.address && this.runtime
+    return this.address
       ? { ...this.address, url: `http://${this.address.host}:${this.address.port}/` }
       : undefined;
   }

@@ -21,12 +21,12 @@ function optionValue(name) {
 
 const appArgument = optionValue("--app") || process.env.UFO_BROWSER_APP_ROOT;
 const appRoot = appArgument ? resolve(appArgument) : undefined;
-const sourceRoot = appRoot
-  ? join(
-      appRoot,
-      "Contents/Resources/app.asar.unpacked/dist/bin",
-    )
-  : join(root, "dist/bin");
+const sourceRoots = appRoot
+  ? [
+      join(appRoot, "Contents/Resources/app.asar.unpacked/dist/bin"),
+      join(appRoot, "Contents/Resources"),
+    ]
+  : [join(root, "dist/bin")];
 if (appRoot && !appRoot.endsWith(".app")) {
   throw new Error(`--app must point to an App bundle: ${appRoot}`);
 }
@@ -34,10 +34,15 @@ if (appRoot && !appRoot.endsWith(".app")) {
 await mkdir(binRoot, { recursive: true, mode: 0o700 });
 
 for (const name of ["ufo-browser", "x-browser"]) {
-  const source = join(sourceRoot, name);
-  await lstat(source).catch(() => {
-    throw new Error(`CLI executable is missing from source: ${source}`);
-  });
+  let source;
+  for (const candidateRoot of sourceRoots) {
+    const candidate = join(candidateRoot, name);
+    if (await lstat(candidate).then(() => true).catch(() => false)) {
+      source = candidate;
+      break;
+    }
+  }
+  if (!source) throw new Error(`CLI executable is missing from native/electron App bundle: ${name}`);
   const target = join(binRoot, name);
   const state = await lstat(target).catch(() => null);
   if (state?.isSymbolicLink()) {

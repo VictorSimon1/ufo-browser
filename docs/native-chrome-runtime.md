@@ -121,6 +121,21 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    DMG. The install flow then syncs CLI and Skills exactly as the Electron
    installer does today.
 
+   A native launcher/package prototype is now available:
+
+   ```bash
+   npm run package:native:mac
+   ```
+
+   It creates `release-native/UFO-Browser.app` and a drag-install DMG without
+   Electron Builder. The bundle contains the AppKit launcher, standalone Node
+   Agent, CEF host, CEF Framework/Helpers, UFO CLI and Skill. The launcher
+   starts the Agent first, waits for its Overview API rendezvous file, and
+   then starts the native CEF Overview window. This prototype is not yet
+   signed/notarized and still needs production entitlements, helper signing,
+   and post-install CLI/Skill synchronization before replacing the release
+   Electron package.
+
 ## Build and run
 
 CEF binaries are intentionally excluded from Git. Set `UFO_CEF_ROOT` to a
