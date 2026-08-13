@@ -36,6 +36,7 @@ export class NativeCefTaskSpaceManager {
   private state = { version: 1 as const, nextSpaceId: 1, spaces: [] as SpaceRecord[] };
   private readonly runtimes = new Map<string, NativeCefRuntime>();
   private readonly browserConnections = new Map<string, any>();
+  private readonly agentOverlayState = new Map<string, boolean>();
 
   constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {}
 
@@ -308,6 +309,9 @@ export class NativeCefTaskSpaceManager {
     tab.url = target.url || tab.url;
     tab.title = target.title || tab.title;
     this.runtimes.set(runtimeKey, runtime);
+    if (this.agentOverlayState.get(runtimeKey)) {
+      await runtime.control("agent-active-on").catch(() => undefined);
+    }
     await this.save();
     return runtime;
   }
@@ -351,12 +355,22 @@ export class NativeCefTaskSpaceManager {
     return runtime;
   }
 
-  setAgentConnectionActive(_spaceId: number, _active: boolean) {}
+  setAgentConnectionActive(spaceId: number, active: boolean) {
+    const space = this.getSpace(spaceId);
+    if (!space) return;
+    const runtimeKey = this.runtimeKey(space);
+    this.agentOverlayState.set(runtimeKey, active);
+    const runtime = this.runtimes.get(runtimeKey);
+    if (runtime?.isRunning()) {
+      void runtime.control(active ? "agent-active-on" : "agent-active-off").catch(() => undefined);
+    }
+  }
   showAgentPointer(_spaceId: number, _x: number, _y: number) {}
 
   async shutdown() {
     const runtimes = [...this.runtimes.values()];
     this.runtimes.clear();
+    this.agentOverlayState.clear();
     const browsers = [...this.browserConnections.values()];
     this.browserConnections.clear();
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));

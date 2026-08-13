@@ -11,6 +11,7 @@
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "native/cef-host/overlay_mac.h"
 
 namespace {
 UfoCefHandler* g_instance = nullptr;
@@ -24,6 +25,7 @@ UfoCefHandler::UfoCefHandler(bool chrome_style)
 }
 
 UfoCefHandler::~UfoCefHandler() {
+  SetAgentConnectionActive(false);
   StopControlSocket();
   g_instance = nullptr;
 }
@@ -114,7 +116,28 @@ void UfoCefHandler::FocusMainWindow() {
 
 void UfoCefHandler::SetMainWindow(CefRefPtr<CefWindow> window) {
   CEF_REQUIRE_UI_THREAD();
+  if (!window) {
+    if (main_window_ && !main_window_->IsClosed()) {
+      UfoAgentOverlayClear(main_window_->GetWindowHandle());
+    }
+    main_window_ = nullptr;
+    return;
+  }
   main_window_ = window;
+  if (agent_active_ && main_window_) {
+    UfoAgentOverlaySet(main_window_->GetWindowHandle(), true, "Agent controlling");
+  }
+}
+
+void UfoCefHandler::SetAgentConnectionActive(bool active) {
+  if (!CefCurrentlyOn(TID_UI)) {
+    CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::SetAgentConnectionActive, this, active));
+    return;
+  }
+  agent_active_ = active;
+  if (!main_window_ || main_window_->IsClosed()) return;
+  if (active) UfoAgentOverlaySet(main_window_->GetWindowHandle(), true, "Agent controlling");
+  else UfoAgentOverlayClear(main_window_->GetWindowHandle());
 }
 
 void UfoCefHandler::StartControlSocket(const std::string& path) {
@@ -157,6 +180,10 @@ void UfoCefHandler::StartControlSocket(const std::string& path) {
         CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::FocusMainWindow, this));
       } else if (command.rfind("close", 0) == 0) {
         CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::CloseAllBrowsers, this, false));
+      } else if (command.rfind("agent-active-on", 0) == 0) {
+        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::SetAgentConnectionActive, this, true));
+      } else if (command.rfind("agent-active-off", 0) == 0) {
+        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::SetAgentConnectionActive, this, false));
       } else if (command.rfind("status", 0) != 0) {
         response = "error unknown-command\n";
       }

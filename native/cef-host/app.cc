@@ -23,6 +23,8 @@ class UfoWindowDelegate final : public CefWindowDelegate {
   }
 
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
+    if (auto* handler = UfoCefHandler::GetInstance()) handler->SetAgentConnectionActive(false);
+    if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(nullptr);
     browser_view_ = nullptr;
   }
 

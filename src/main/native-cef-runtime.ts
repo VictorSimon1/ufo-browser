@@ -267,7 +267,7 @@ export class NativeCefRuntime {
     });
   }
 
-  async control(command: "show" | "hide" | "focus" | "close" | "status") {
+  async control(command: "show" | "hide" | "focus" | "close" | "status" | "agent-active-on" | "agent-active-off") {
     const path = this.controlSocketPath || this.defaults.controlSocket;
     if (!path) throw new Error("Native CEF control socket is not configured");
     const deadline = Date.now() + 5_000;

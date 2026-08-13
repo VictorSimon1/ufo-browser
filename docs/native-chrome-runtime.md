@@ -106,6 +106,15 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    `hide`, `focus`, `close`, and `status`. It is separate from the CDP port and
    is used by the future native Overview/presentation layer; the Agent still
    talks through the existing UFO Unix socket.
+
+   The first native overlay slice is now implemented. Agent lease acquisition
+   sends `agent-active-on` to the CEF host, which installs a transparent AppKit
+   child panel above the CEF window. The panel draws only a small neutral,
+   lightly pulsing control capsule, consumes human mouse/keyboard events, and
+   does not enter the CEF compositor or page screenshot path. Lease release,
+   handoff, close, and host shutdown send `agent-active-off`/clear and remove
+   the panel. A cold Space is started lazily when an Agent first acquires its
+   lease so the overlay state cannot be skipped on first entry.
 6. **Electron removal and packaging** — build the CEF host plus standalone
    Agent Service, copy the framework/helpers/resources,
    sign the complete app bundle, and produce the normal drag-to-Applications

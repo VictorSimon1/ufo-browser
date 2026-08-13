@@ -15,7 +15,7 @@ const runtime = new NativeCefRuntime({
 });
 try {
   const version = await runtime.start();
-  for (const command of ["status", "hide", "show", "focus"]) {
+  for (const command of ["status", "hide", "show", "focus", "agent-active-on", "agent-active-off"]) {
     const response = await runtime.control(command);
     if (response !== "ok") throw new Error(`Native CEF control ${command} failed: ${response}`);
   }

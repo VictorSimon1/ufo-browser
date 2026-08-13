@@ -36,6 +36,8 @@ class UfoCefHandler final : public CefClient,
   void HideMainWindow();
   void FocusMainWindow();
   void SetMainWindow(CefRefPtr<CefWindow> window);
+  void SetAgentConnectionActive(bool active);
+  bool IsAgentConnectionActive() const { return agent_active_; }
   void StartControlSocket(const std::string& path);
   void StopControlSocket();
   bool IsClosing() const { return closing_; }
@@ -46,6 +48,7 @@ class UfoCefHandler final : public CefClient,
   BrowserList browsers_;
   CefRefPtr<CefWindow> main_window_;
   bool closing_ = false;
+  std::atomic<bool> agent_active_{false};
   std::string control_socket_path_;
   int control_socket_fd_ = -1;
   std::atomic<bool> control_running_{false};

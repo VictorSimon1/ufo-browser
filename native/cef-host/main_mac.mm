@@ -19,6 +19,28 @@
 - (void)setHandlingSendEvent:(BOOL)handlingSendEvent {}
 - (void)sendEvent:(NSEvent*)event {
   CefScopedSendingEvent sendingEventScoper;
+  UfoCefHandler* handler = UfoCefHandler::GetInstance();
+  if (handler && handler->IsAgentConnectionActive()) {
+    NSEventType type = event.type;
+    const BOOL humanInput = type == NSEventTypeLeftMouseDown ||
+                            type == NSEventTypeLeftMouseUp ||
+                            type == NSEventTypeRightMouseDown ||
+                            type == NSEventTypeRightMouseUp ||
+                            type == NSEventTypeOtherMouseDown ||
+                            type == NSEventTypeOtherMouseUp ||
+                            type == NSEventTypeMouseMoved ||
+                            type == NSEventTypeLeftMouseDragged ||
+                            type == NSEventTypeRightMouseDragged ||
+                            type == NSEventTypeOtherMouseDragged ||
+                            type == NSEventTypeScrollWheel ||
+                            type == NSEventTypeKeyDown ||
+                            type == NSEventTypeKeyUp ||
+                            type == NSEventTypeFlagsChanged;
+    // Agent input arrives over CEF DevTools and never enters NSApplication's
+    // event queue. Swallowing these events blocks the human without covering
+    // the CEF surface, so screenshots and CDP clicks remain pixel-accurate.
+    if (humanInput) return;
+  }
   [super sendEvent:event];
 }
 - (void)terminate:(id)sender {
