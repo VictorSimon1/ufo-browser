@@ -50,6 +50,10 @@ so existing imported Profiles and the standard `ufo-browser` CLI socket remain
 compatible with the current product. Set `UFO_BROWSER_NATIVE_USER_DATA` for an
 isolated development instance.
 
+The DMG also bundles the storage-revision Worker next to the Native Agent;
+login-state storage synchronization therefore does not depend on the source
+checkout after installation.
+
 Space hosts start hidden by default and are shown through the private control
 socket only when Overview opens or focuses that Space. Pass `--show-on-start`
 for a standalone human-facing development window. This avoids the cold-start

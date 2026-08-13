@@ -152,6 +152,13 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    resurrected merely because the source profile is unchanged. Encrypted
    Chrome Cookie SQLite files are never copied between runtimes.
 
+   Native storage sync follows the same non-destructive contract as the
+   existing Profile sync service. It runs only before a CEF Space starts, never
+   replaces LevelDB/SQLite data underneath a live renderer, skips a live Google
+   Chrome source profile, establishes a hash-only baseline on first use, and
+   copies later source changes only when the Native target still matches the
+   checkpoint. If both sides changed, the Native/UFO target wins.
+
    Native uses the shared UFO-Browser data root by default so existing
    `profiles.json`, imported Chrome partitions, browser state, and the default
    Agent CLI socket continue to work after switching shells. Development

@@ -78,7 +78,13 @@ profileSync = new NativeCefProfileSync({
   sourcePartitionsRoot,
   checkpointRoot: join(userDataPath, "Profile Sync", "checkpoints"),
   keychainHelper,
+  storageRevisionWorker: process.env.UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER ||
+    join(process.cwd(), "dist/main/profile-sync-storage-revision-worker.js"),
+  storageWorkRoot: join(userDataPath, "Profile Sync", "storage-work"),
 });
+manager.setBeforeRuntimeStartHook(async (spaceId, _profileId, dataDir) =>
+  profileSync?.syncStorageBeforeRuntime(spaceId, dataDir),
+);
 manager.setRuntimeReadyHook(async (spaceId) => profileSync?.baselineSpace(spaceId));
 profileSync.start();
 const overview = new NativeCefOverview({
@@ -137,6 +143,10 @@ function profileSourceRoot(profile: BrowserProfileRecord, fallbackRoot: string) 
     const chromeRoot = process.env.UFO_BROWSER_CHROME_USER_DATA ||
       join(homedir(), "Library", "Application Support", "Google", "Chrome");
     return join(chromeRoot, profile.source.profileDirName);
+  }
+  if (profile.source?.type === "ufo") {
+    const sourceProfile = profiles.getOrThrow(profile.source.profileId);
+    return join(fallbackRoot, sourceProfile.partitionId);
   }
   return join(fallbackRoot, profile.partitionId);
 }

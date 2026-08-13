@@ -134,7 +134,7 @@ export class NativeCefOverview {
           return;
         }
         const value = await this.enqueuePreview(spaceId);
-        this.json(response, value);
+        this.json(response, value ?? { available: false });
         return;
       }
       const match = url.pathname.match(/^\/api\/spaces\/(\d+)\/(open|focus|close)$/);
@@ -172,6 +172,7 @@ export class NativeCefOverview {
       const waitMs = Math.max(0, 4_000 - (Date.now() - this.previewLastCaptureAt));
       if (waitMs > 0) await delay(waitMs);
       const value = await this.options.manager.capturePreview(spaceId);
+      if (!value) return undefined;
       this.previewLastCaptureAt = Date.now();
       this.previewCache.set(spaceId, { capturedAt: this.previewLastCaptureAt, value });
       return value;

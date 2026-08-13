@@ -1,5 +1,17 @@
 #import <Cocoa/Cocoa.h>
 
+#include <signal.h>
+
+@class UfoNativeLauncherDelegate;
+static UfoNativeLauncherDelegate* gLauncherDelegate;
+
+static void HandleTerminationSignal(int signalNumber) {
+  (void)signalNumber;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [NSApp terminate:nil];
+  });
+}
+
 static NSString* ResourcePath(NSString* name) {
   return [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:name];
 }
@@ -17,11 +29,22 @@ static NSString* HostExecutablePath() {
 
 @implementation UfoNativeLauncherDelegate
 
+- (instancetype)init {
+  self = [super init];
+  if (self) gLauncherDelegate = self;
+  return self;
+}
+
+- (void)dealloc {
+  if (gLauncherDelegate == self) gLauncherDelegate = nil;
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
   (void)notification;
   NSString* node = ResourcePath(@"node");
   NSString* script = ResourcePath(@"native-cef-application.js");
   NSString* agent = ResourcePath(@"native-cef-agent.js");
+  NSString* storageWorker = ResourcePath(@"profile-sync-storage-revision-worker.js");
   NSString* host = HostExecutablePath();
   NSString* keychain = ResourcePath(@"ufo-keychain-helper");
   // Keep imported Profiles, browser state, and the standard CLI socket on the
@@ -35,6 +58,7 @@ static NSString* HostExecutablePath() {
   environment[@"UFO_CEF_HOST"] = host;
   environment[@"UFO_BROWSER_NATIVE_USER_DATA"] = userData;
   environment[@"UFO_BROWSER_NATIVE_AGENT_SCRIPT"] = agent;
+  environment[@"UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER"] = storageWorker;
   environment[@"UFO_BROWSER_NATIVE_KEYCHAIN_HELPER"] = keychain;
 
   NSTask* task = [[NSTask alloc] init];
@@ -68,7 +92,18 @@ static NSString* HostExecutablePath() {
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
   (void)sender;
   self.terminating = YES;
-  if (self.childTask && self.childTask.isRunning) [self.childTask terminate];
+  if (self.childTask && self.childTask.isRunning) {
+    [self.childTask terminate];
+    // Give the Node coordinator a bounded grace period to stop CEF hosts and
+    // their GPU/Renderer helpers before the outer App exits. Without this,
+    // SIGTERM can orphan the native Chromium process tree.
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    while (self.childTask.isRunning && [deadline timeIntervalSinceNow] > 0) {
+      [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                               beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    if (self.childTask.isRunning) [self.childTask interrupt];
+  }
   return NSTerminateNow;
 }
 
@@ -76,6 +111,8 @@ static NSString* HostExecutablePath() {
 
 int main(int argc, const char* argv[]) {
   @autoreleasepool {
+    signal(SIGTERM, HandleTerminationSignal);
+    signal(SIGINT, HandleTerminationSignal);
     NSApplication* app = NSApplication.sharedApplication;
     UfoNativeLauncherDelegate* delegate = [UfoNativeLauncherDelegate new];
     app.delegate = delegate;

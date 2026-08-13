@@ -23,6 +23,7 @@ export type NativeCefTaskSpaceManagerOptions = {
   sourcePartitionsRoot?: string;
   controlSocketsRoot?: string;
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
+  onBeforeRuntimeStart?: (spaceId: number, profileId: string, dataDir: string) => Promise<void>;
   onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
 };
 
@@ -57,6 +58,12 @@ export class NativeCefTaskSpaceManager {
     hook: NativeCefTaskSpaceManagerOptions["onRuntimeReady"] | undefined,
   ) {
     this.options.onRuntimeReady = hook;
+  }
+
+  setBeforeRuntimeStartHook(
+    hook: NativeCefTaskSpaceManagerOptions["onBeforeRuntimeStart"] | undefined,
+  ) {
+    this.options.onBeforeRuntimeStart = hook;
   }
 
   async initialize() {
@@ -293,13 +300,14 @@ export class NativeCefTaskSpaceManager {
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     if (space.profileMode === "persistent") {
       const sourceRoot = this.options.sourcePartitionsRoot
-        ? join(this.options.sourcePartitionsRoot, this.options.profiles.getOrThrow(space.profileId).partitionId)
+        ? this.profileSourceRoot(this.options.profiles.getOrThrow(space.profileId))
         : undefined;
       await seedNativeCefProfile({
         sourceRoot,
         targetRoot: dataDir,
         sourceProfileId: space.profileId,
       });
+      await this.options.onBeforeRuntimeStart?.(space.id, space.profileId, dataDir);
     }
     const runtimeOptions: NativeCefRuntimeOptions = {
       executable: this.options.executable,
@@ -369,7 +377,12 @@ export class NativeCefTaskSpaceManager {
   /** Capture one low-frequency Overview frame through the active CEF page. */
   async capturePreview(spaceId: number) {
     const space = this.getSpaceOrThrow(spaceId);
-    const runtime = await this.ensureRuntime(spaceId);
+    // Overview must not turn every cold Space into a live CEF process just to
+    // paint a card. A preview is available once the Space is already running
+    // (opened by a human or used by an Agent); otherwise the card remains a
+    // lightweight placeholder until presentation starts the runtime.
+    const runtime = this.getRuntime(spaceId);
+    if (!runtime?.isRunning()) return undefined;
     const active = this.getActiveTab(spaceId);
     const targets = await runtime.targets();
     const target = targets.find((candidate) =>
@@ -509,6 +522,14 @@ export class NativeCefTaskSpaceManager {
 
   private runtimeDataDirectory(space: SpaceRecord) {
     return isTemporarySpace(space) ? `space-${space.id}` : `profile-${space.profileId}/space-${space.id}`;
+  }
+
+  private profileSourceRoot(profile: ReturnType<BrowserProfileRegistry["getOrThrow"]>) {
+    if (profile.source?.type === "ufo") {
+      const sourceProfile = this.options.profiles.getOrThrow(profile.source.profileId);
+      return join(this.options.sourcePartitionsRoot!, sourceProfile.partitionId);
+    }
+    return join(this.options.sourcePartitionsRoot!, profile.partitionId);
   }
 
   private runtimePortOffset(key: string) {

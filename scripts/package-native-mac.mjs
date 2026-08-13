@@ -38,6 +38,7 @@ async function main() {
   await cp(join(hostApp, "Contents/MacOS/ufo-cef-host"), join(appRoot, "Contents/MacOS/ufo-cef-host"));
   await cp("dist/main/native-cef-agent.js", join(appRoot, "Contents/Resources/native-cef-agent.js"));
   await cp("dist/main/native-cef-application.js", join(appRoot, "Contents/Resources/native-cef-application.js"));
+  await cp("dist/main/profile-sync-storage-revision-worker.js", join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js"));
   await cp("dist/bin/ufo-keychain-helper", join(appRoot, "Contents/Resources/ufo-keychain-helper"));
   await cp("dist/agent/ufo-browser.js", join(appRoot, "Contents/Resources/ufo-browser.js"));
   await writeFile(join(appRoot, "Contents/Resources/ufo-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');

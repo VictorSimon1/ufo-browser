@@ -7,8 +7,10 @@ const root = resolve(new URL("..", import.meta.url).pathname);
 const appRoot = join(root, "release-native/UFO-Browser.app");
 const launcher = join(appRoot, "Contents/MacOS/ufo-browser-native");
 const cli = join(appRoot, "Contents/Resources/ufo-browser");
+const storageWorker = join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js");
 await access(launcher);
 await access(cli);
+await access(storageWorker);
 
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-bundle-smoke-"));
 const app = spawn(launcher, [], {

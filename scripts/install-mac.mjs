@@ -95,6 +95,7 @@ async function verifyInstalledApp(appRoot) {
         "Contents/Resources/node",
         "Contents/Resources/native-cef-agent.js",
         "Contents/Resources/native-cef-application.js",
+        "Contents/Resources/profile-sync-storage-revision-worker.js",
         "Contents/MacOS/ufo-cef-host",
         "Contents/Resources/ufo-browser",
         "Contents/Resources/x-browser",
