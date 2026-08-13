@@ -45,6 +45,10 @@ try {
   const spacesUrl = `http://${info.host}:${info.port}/api/spaces`;
   const before = await fetch(spacesUrl).then((response) => response.json());
   if (!before.spaces?.some((space) => space.id === spaceId)) throw new Error("Space missing from Overview API");
+  const preview = await fetch(`${spacesUrl}/${spaceId}/preview`).then((response) => response.json());
+  if (!String(preview.dataUrl || "").startsWith("data:image/jpeg;base64,")) {
+    throw new Error(`Native Overview preview failed: ${JSON.stringify(preview).slice(0, 500)}`);
+  }
   const open = await fetch(`${spacesUrl}/${spaceId}/open`, { method: "POST" }).then((response) => response.json());
   if (!open.ok) throw new Error(`open Space failed: ${JSON.stringify(open)}`);
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));

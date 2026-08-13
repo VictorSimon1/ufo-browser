@@ -366,6 +366,38 @@ export class NativeCefTaskSpaceManager {
     return this.createNativeCookieTarget(runtime, space);
   }
 
+  /** Capture one low-frequency Overview frame through the active CEF page. */
+  async capturePreview(spaceId: number) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const runtime = await this.ensureRuntime(spaceId);
+    const active = this.getActiveTab(spaceId);
+    const targets = await runtime.targets();
+    const target = targets.find((candidate) =>
+      candidate.type === "page" && candidate.id === active?.targetId,
+    ) ?? targets.find((candidate) => candidate.type === "page");
+    if (!target?.webSocketDebuggerUrl) throw new Error("native preview page target is unavailable");
+    const connection = await runtime.connect(target.id);
+    try {
+      const result = await connection.send("Page.captureScreenshot", {
+        format: "jpeg",
+        quality: 58,
+        captureBeyondViewport: false,
+        fromSurface: true,
+      });
+      const data = String(result?.data || "");
+      if (!data) throw new Error("native preview screenshot is empty");
+      const tab = space.tabs.find((candidate) => candidate.targetId === target.id) ?? active;
+      return {
+        dataUrl: `data:image/jpeg;base64,${data}`,
+        url: target.url || tab?.url || "",
+        title: target.title || tab?.title || "",
+        capturedAt: Date.now(),
+      };
+    } finally {
+      await connection.close();
+    }
+  }
+
   async showSpace(spaceId: number) {
     const runtime = await this.ensureRuntime(spaceId);
     return runtime.control("show").catch(async (error) => {

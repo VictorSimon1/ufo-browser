@@ -30,6 +30,8 @@ export class NativeCefApplication {
   private overview?: ChildProcess;
   private infoPath?: string;
   private overviewPort?: number;
+  private stopPromise?: Promise<void>;
+  private stopping = false;
 
   constructor(private readonly defaults: NativeCefApplicationOptions = {}) {}
 
@@ -63,7 +65,10 @@ export class NativeCefApplication {
     };
     this.infoPath = infoFile;
     this.agent = spawn(process.execPath, [agentScript], { cwd: process.cwd(), env, stdio: "ignore" });
-    this.agent.once("exit", () => { this.agent = undefined; });
+    this.agent.once("exit", () => {
+      this.agent = undefined;
+      if (!this.stopping) void this.stop();
+    });
     const info = await waitForOverviewInfo(infoFile, merged.startupTimeoutMs ?? 15_000, this.agent);
     const port = merged.overviewDevtoolsPort ?? await findFreePort();
     this.overviewPort = port;
@@ -75,7 +80,10 @@ export class NativeCefApplication {
       `--user-data-dir=${join(userDataDir, "OverviewWindow")}`,
       ...(merged.useMockKeychain ? ["--use-mock-keychain"] : []),
     ], { cwd: process.cwd(), env, stdio: "ignore" });
-    this.overview.once("exit", () => { this.overview = undefined; });
+    this.overview.once("exit", () => {
+      this.overview = undefined;
+      if (!this.stopping) void this.stop();
+    });
     await waitForDevtools(port, merged.startupTimeoutMs ?? 15_000, this.overview);
     return this.status();
   }
@@ -91,15 +99,22 @@ export class NativeCefApplication {
   }
 
   async stop() {
-    const overview = this.overview;
-    const agent = this.agent;
-    this.overview = undefined;
-    this.agent = undefined;
-    await terminate(overview);
-    await terminate(agent);
-    if (this.infoPath) await rm(this.infoPath, { force: true }).catch(() => undefined);
-    this.infoPath = undefined;
-    this.overviewPort = undefined;
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = (async () => {
+      this.stopping = true;
+      const overview = this.overview;
+      const agent = this.agent;
+      this.overview = undefined;
+      this.agent = undefined;
+      await terminate(overview);
+      await terminate(agent);
+      if (this.infoPath) await rm(this.infoPath, { force: true }).catch(() => undefined);
+      this.infoPath = undefined;
+      this.overviewPort = undefined;
+      this.stopping = false;
+      this.stopPromise = undefined;
+    })();
+    return this.stopPromise;
   }
 }
 

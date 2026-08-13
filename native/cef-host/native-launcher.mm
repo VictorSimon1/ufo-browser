@@ -1,8 +1,5 @@
 #import <Cocoa/Cocoa.h>
 
-#include <unistd.h>
-#include <signal.h>
-
 static NSString* ResourcePath(NSString* name) {
   return [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:name];
 }
@@ -14,7 +11,8 @@ static NSString* HostExecutablePath() {
 }
 
 @interface UfoNativeLauncherDelegate : NSObject <NSApplicationDelegate>
-@property(nonatomic) pid_t childPid;
+@property(nonatomic, strong) NSTask* childTask;
+@property(nonatomic) BOOL terminating;
 @end
 
 @implementation UfoNativeLauncherDelegate
@@ -28,22 +26,49 @@ static NSString* HostExecutablePath() {
   NSString* keychain = ResourcePath(@"ufo-keychain-helper");
   // Keep imported Profiles, browser state, and the standard CLI socket on the
   // same data root when Native CEF replaces the Electron shell.
-  NSString* userData = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/UFO-Browser"];
-  pid_t pid = fork();
-  if (pid == 0) {
-    setenv("UFO_CEF_HOST", host.UTF8String, 1);
-    setenv("UFO_BROWSER_NATIVE_USER_DATA", userData.UTF8String, 1);
-    setenv("UFO_BROWSER_NATIVE_AGENT_SCRIPT", agent.UTF8String, 1);
-    setenv("UFO_BROWSER_NATIVE_KEYCHAIN_HELPER", keychain.UTF8String, 1);
-    execl(node.UTF8String, node.UTF8String, script.UTF8String, (char*)nullptr);
-    _exit(127);
+  NSString* userData = NSProcessInfo.processInfo.environment[@"UFO_BROWSER_NATIVE_USER_DATA"];
+  if (!userData.length) {
+    userData = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/UFO-Browser"];
   }
-  self.childPid = pid;
+  NSMutableDictionary* environment =
+      [[[NSProcessInfo processInfo] environment] mutableCopy];
+  environment[@"UFO_CEF_HOST"] = host;
+  environment[@"UFO_BROWSER_NATIVE_USER_DATA"] = userData;
+  environment[@"UFO_BROWSER_NATIVE_AGENT_SCRIPT"] = agent;
+  environment[@"UFO_BROWSER_NATIVE_KEYCHAIN_HELPER"] = keychain;
+
+  NSTask* task = [[NSTask alloc] init];
+  task.launchPath = node;
+  task.arguments = @[script];
+  task.currentDirectoryPath = [NSBundle mainBundle].bundlePath;
+  task.environment = environment;
+  __weak UfoNativeLauncherDelegate* weakSelf = self;
+  task.terminationHandler = ^(NSTask* terminatedTask) {
+    (void)terminatedTask;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      UfoNativeLauncherDelegate* strongSelf = weakSelf;
+      if (!strongSelf || strongSelf.terminating) return;
+      // The Native coordinator owns the Overview and Agent lifecycle. If it
+      // stops (including a user closing the Overview window), terminate the
+      // outer App too so a later launch starts cleanly instead of leaving a
+      // blank shell behind.
+      strongSelf.terminating = YES;
+      [NSApp terminate:nil];
+    });
+  };
+  self.childTask = task;
+  NSError* launchError = nil;
+  if (![task launchAndReturnError:&launchError]) {
+    NSLog(@"UFO Native launcher failed to start Agent: %@", launchError);
+    self.terminating = YES;
+    [NSApp terminate:nil];
+  }
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
   (void)sender;
-  if (self.childPid > 0) kill(self.childPid, SIGTERM);
+  self.terminating = YES;
+  if (self.childTask && self.childTask.isRunning) [self.childTask terminate];
   return NSTerminateNow;
 }
 

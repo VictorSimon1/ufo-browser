@@ -52,6 +52,7 @@
     "native:cef:app": "npm run native:cef:build && npm run build && node dist/main/native-cef-application.js",
     "native:cef:app:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-application-smoke.mjs",
     "native:cef:presentation:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-presentation-smoke.mjs",
+    "native:cef:bundle:smoke": "npm run package:native:mac && node scripts/native-cef-bundle-smoke.mjs",
     "package:native:mac": "npm run build && npm run native:cef:build && node scripts/package-native-mac.mjs",
     "verify:skill-sync": "node --test scripts/sync-agent-skills.test.mjs",
     "dist:mac": "node scripts/package-mac.mjs --dir",
