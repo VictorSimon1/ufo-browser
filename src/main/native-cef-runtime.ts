@@ -226,6 +226,16 @@ export class NativeCefRuntime {
     return connection;
   }
 
+  async connectBrowser() {
+    const version = await this.version();
+    if (!version.webSocketDebuggerUrl) {
+      throw new Error("Native CEF browser DevTools target is unavailable");
+    }
+    const connection = new NativeCdpConnection(version.webSocketDebuggerUrl);
+    this.connections.add(connection);
+    return connection;
+  }
+
   async stop() {
     for (const connection of this.connections) await connection.close();
     this.connections.clear();

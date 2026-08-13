@@ -79,10 +79,16 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    `snapshotText`, screenshot capture, navigation, and completion. This is
    intentionally a vertical slice; multi-Space Overview and profile import are
    the next integration gates.
-3. **Profiles and login state** — create one `CefRequestContext` per Profile
-   and write imported cookies through `CefCookieManager`. Existing Chrome
-   decryption, compatibility preflight, rollback, and redacted reporting stay
-   in the Node service; only the final Chromium write adapter changes.
+3. **Profiles and login state** — the current native vertical slice gives each
+   Space a private CEF user-data directory, which avoids Chromium profile-lock
+   races while preserving full browser persistence within that Space. The
+   next profile gate will seed that directory from the selected UFO Profile
+   and route Cookie/storage deltas through CEF's `CefCookieManager`. Existing
+   Chrome decryption, compatibility preflight, rollback, and redacted
+   reporting stay in the Node service; only the final Chromium write adapter
+   changes. A shared persistent Profile runtime will be added only after the
+   RequestContext/target lifecycle is implemented, rather than launching two
+   CEF processes against one locked directory.
 4. **Task Spaces** — map each Space to a request context and a browser target;
    keep only the active Space as a live compositor surface.
 5. **Overview and overlay** — retain low-frequency, change-driven previews and

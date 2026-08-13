@@ -224,8 +224,9 @@ export class AgentServer {
       case "listTabs": {
         const { spaceId } = this.assertAgentControl(connection);
         const space = this.manager.getSpaceOrThrow(spaceId);
+        const tabs = await (this.manager as any).refreshTabs?.(spaceId) ?? space.tabs;
         return {
-          tabs: space.tabs.map((tab: any) => ({
+          tabs: tabs.map((tab: any) => ({
             ...tab,
             type: "page",
             active: tab.targetId === space.activeTabId,

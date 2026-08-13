@@ -54,11 +54,25 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
       const targets = await runtime.targets();
       return { targetInfos: targets.map((target) => ({ targetId: target.id, type: target.type, title: target.title, url: target.url, attached: false })) };
     }
+    if (method === "Target.createTarget") {
+      const tab = await this.manager.createTab(spaceId, String(params.url || "about:blank"));
+      if (!tab) throw new Error("Native CEF did not create a tab record");
+      return { targetId: tab.targetId };
+    }
+    if (method === "Target.activateTarget") {
+      await this.manager.activateTab(spaceId, String(params.targetId || ""));
+      return {};
+    }
+    if (method === "Target.closeTarget") {
+      await this.manager.closeTab(spaceId, String(params.targetId || ""));
+      return { success: true };
+    }
     if (method === "Target.attachToTarget") {
       const targetId = String(params.targetId || "");
-      const target = (await runtime.targets()).find((candidate) => candidate.id === targetId) ?? (await runtime.targets()).find((candidate) => candidate.type === "page");
+      const target = (await runtime.targets()).find((candidate) => candidate.id === targetId);
       if (!target?.webSocketDebuggerUrl) throw new Error(`target not found: ${targetId}`);
       const connection = await runtime.connect(target.id);
+      await waitForConnectionUrl(connection, target.url);
       const synthetic = `ufo-cef-${randomUUID()}`;
       const unsubscribe = connection.onEvent((event: any) => {
         this.emit(connectionId, JSON.stringify({ method: event.method, params: event.params, sessionId: synthetic }));
@@ -82,5 +96,18 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
 
   private emit(connectionId: string, payload: string) {
     this.senders.get(connectionId)?.(payload);
+  }
+}
+
+async function waitForConnectionUrl(connection: any, expectedUrl: string, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await connection.send("Runtime.evaluate", {
+      expression: "location.href",
+      returnByValue: true,
+    }).catch(() => undefined);
+    const url = result?.result?.value;
+    if (typeof url === "string" && url !== "about:blank" && (!expectedUrl || url === expectedUrl || url.startsWith(expectedUrl))) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
 }

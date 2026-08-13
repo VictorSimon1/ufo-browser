@@ -7,7 +7,10 @@ export class NativeCefSnapshotService {
 
   async snapshot(spaceId: number, options: any = {}) {
     const runtime = await this.manager.ensureRuntime(spaceId);
-    const target = (await runtime.targets()).find((candidate) => candidate.type === "page");
+    const active = this.manager.getActiveTab(spaceId);
+    const targets = await runtime.targets();
+    const target = targets.find((candidate) => candidate.id === active?.targetId) ??
+      targets.find((candidate) => candidate.type === "page");
     if (!target?.webSocketDebuggerUrl) throw new Error("native page target is unavailable");
     const connection = await runtime.connect(target.id);
     try {

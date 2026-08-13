@@ -29,7 +29,8 @@ export type NativeCefTaskSpaceManagerOptions = {
  */
 export class NativeCefTaskSpaceManager {
   private state = { version: 1 as const, nextSpaceId: 1, spaces: [] as SpaceRecord[] };
-  private readonly runtimes = new Map<number, NativeCefRuntime>();
+  private readonly runtimes = new Map<string, NativeCefRuntime>();
+  private readonly browserConnections = new Map<string, any>();
 
   constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {}
 
@@ -141,7 +142,7 @@ export class NativeCefTaskSpaceManager {
   async createAgentTab(spaceId: number, url = "https://www.google.com/") {
     const space = this.getSpaceOrThrow(spaceId);
     const tab = space.tabs[0];
-    if (space.tabs.length !== 1 || tab.url !== "https://www.google.com/" || this.runtimes.has(spaceId)) {
+    if (space.tabs.length !== 1 || tab.url !== "https://www.google.com/" || this.runtimes.has(this.runtimeKey(space))) {
       return this.createTab(spaceId, url);
     }
     tab.url = url;
@@ -154,23 +155,92 @@ export class NativeCefTaskSpaceManager {
 
   async createTab(spaceId: number, url = "https://www.google.com/") {
     const space = this.getSpaceOrThrow(spaceId);
-    if (this.runtimes.has(spaceId)) {
-      throw new Error("Native CEF vertical slice currently supports one Agent target per Space");
-    }
-    const tab = this.newTab(url);
+    const runtime = await this.ensureRuntime(spaceId);
+    const browser = await this.ensureBrowserConnection(spaceId, runtime);
+    const created = await browser.send("Target.createTarget", { url });
+    if (!created?.targetId) throw new Error("Native CEF did not create a tab target");
+    const target = await waitForTarget(runtime, created.targetId, 15_000);
+    await waitForRendererNavigation(runtime, target.id, url, 15_000);
+    const tab = this.newTab(target.url || url);
+    tab.targetId = target.id;
+    tab.title = target.title || "";
     space.tabs.push(tab);
     space.activeTabId = tab.targetId;
     space.updatedAt = Date.now();
     await this.save();
-    await this.ensureRuntime(spaceId, url);
+    await browser.send("Target.activateTarget", { targetId: tab.targetId }).catch(() => undefined);
     return structuredClone(space.tabs.at(-1));
+  }
+
+  async activateTab(spaceId: number, targetId: string) {
+    const space = this.getSpaceOrThrow(spaceId);
+    if (!space.tabs.some((tab) => tab.targetId === targetId)) throw new Error(`tab not found: ${targetId}`);
+    const runtime = await this.ensureRuntime(spaceId);
+    const browser = await this.ensureBrowserConnection(spaceId, runtime);
+    await browser.send("Target.activateTarget", { targetId });
+    space.activeTabId = targetId;
+    space.updatedAt = Date.now();
+    await this.save();
+    return structuredClone(space);
+  }
+
+  async closeTab(spaceId: number, targetId: string) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const index = space.tabs.findIndex((tab) => tab.targetId === targetId);
+    if (index < 0) throw new Error(`tab not found: ${targetId}`);
+    const runtime = await this.ensureRuntime(spaceId);
+    const browser = await this.ensureBrowserConnection(spaceId, runtime);
+    await browser.send("Target.closeTarget", { targetId }).catch(() => undefined);
+    space.tabs.splice(index, 1);
+    if (space.tabs.length === 0) {
+      const replacement = this.newTab("https://www.google.com/");
+      const created = await browser.send("Target.createTarget", { url: replacement.url });
+      replacement.targetId = created.targetId;
+      await waitForTarget(runtime, replacement.targetId, 15_000);
+      space.tabs.push(replacement);
+    }
+    if (!space.tabs.some((tab) => tab.targetId === space.activeTabId)) {
+      space.activeTabId = space.tabs[Math.min(index, space.tabs.length - 1)].targetId;
+    }
+    space.updatedAt = Date.now();
+    await this.save();
+  }
+
+  async refreshTabs(spaceId: number) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const runtime = await this.ensureRuntime(spaceId);
+    const targets = (await runtime.targets()).filter((target) => target.type === "page");
+    const known = new Map(space.tabs.map((tab) => [tab.targetId, tab]));
+    const liveIds = new Set(targets.map((target) => target.id));
+    for (const target of targets) {
+      const tab = known.get(target.id);
+      if (tab) {
+        tab.url = target.url || tab.url;
+        tab.title = target.title || tab.title;
+      }
+    }
+    space.tabs = space.tabs.filter((tab) => liveIds.has(tab.targetId));
+    if (space.tabs.length === 0 && targets.length > 0) {
+      const target = targets[0];
+      space.tabs = [{ targetId: target.id, url: target.url, title: target.title, createdAt: Date.now() }];
+    }
+    const active = targets.find((target) => target.id === space.activeTabId);
+    if (active) space.activeTabId = active.id;
+    await this.save();
+    return structuredClone(space.tabs);
   }
 
   async closeSpace(spaceId: number) {
     const index = this.state.spaces.findIndex((space) => space.id === spaceId);
     if (index < 0) return false;
-    const runtime = this.runtimes.get(spaceId);
-    this.runtimes.delete(spaceId);
+    const space = this.state.spaces[index];
+    const runtimeKey = this.runtimeKey(space);
+    const runtime = this.runtimes.get(runtimeKey);
+    const browser = this.browserConnections.get(runtimeKey);
+    for (const tab of space.tabs) await browser?.send("Target.closeTarget", { targetId: tab.targetId }).catch(() => undefined);
+    this.runtimes.delete(runtimeKey);
+    this.browserConnections.delete(runtimeKey);
+    await browser?.close().catch(() => undefined);
     await runtime?.stop().catch(() => undefined);
     this.state.spaces.splice(index, 1);
     await this.save();
@@ -178,17 +248,18 @@ export class NativeCefTaskSpaceManager {
   }
 
   async ensureRuntime(spaceId: number, url?: string) {
-    const existing = this.runtimes.get(spaceId);
-    if (existing?.isRunning()) return existing;
     const space = this.getSpaceOrThrow(spaceId);
+    const runtimeKey = this.runtimeKey(space);
+    const existing = this.runtimes.get(runtimeKey);
+    if (existing?.isRunning()) return existing;
     const tab = space.tabs.find((candidate) => candidate.targetId === space.activeTabId) ?? space.tabs[0];
     if (!tab) throw new Error("native Space has no active tab");
-    const dataDir = join(this.options.partitionsRoot, `space-${spaceId}`);
+    const dataDir = join(this.options.partitionsRoot, this.runtimeDataDirectory(space));
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     const runtimeOptions: NativeCefRuntimeOptions = {
       executable: this.options.executable,
       url: url || tab.url,
-      port: (this.options.portBase ?? 9420) + spaceId,
+      port: (this.options.portBase ?? 9420) + this.runtimePortOffset(runtimeKey),
       userDataDir: dataDir,
     };
     const runtime = new NativeCefRuntime(runtimeOptions);
@@ -204,13 +275,14 @@ export class NativeCefTaskSpaceManager {
     if (space.activeTabId === previousTargetId) space.activeTabId = target.id;
     tab.url = target.url || tab.url;
     tab.title = target.title || tab.title;
-    this.runtimes.set(spaceId, runtime);
+    this.runtimes.set(runtimeKey, runtime);
     await this.save();
     return runtime;
   }
 
   getRuntime(spaceId: number) {
-    return this.runtimes.get(spaceId);
+    const space = this.getSpaceOrThrow(spaceId);
+    return this.runtimes.get(this.runtimeKey(space));
   }
 
   getActiveTab(spaceId: number) {
@@ -231,7 +303,10 @@ export class NativeCefTaskSpaceManager {
   async shutdown() {
     const runtimes = [...this.runtimes.values()];
     this.runtimes.clear();
+    const browsers = [...this.browserConnections.values()];
+    this.browserConnections.clear();
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));
+    await Promise.all(browsers.map((browser) => browser.close().catch(() => undefined)));
   }
 
   private newTab(url: string): TabRecord {
@@ -240,6 +315,28 @@ export class NativeCefTaskSpaceManager {
 
   private save() {
     return this.options.store.save(this.state);
+  }
+
+  private async ensureBrowserConnection(spaceId: number, runtime: NativeCefRuntime) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const key = this.runtimeKey(space);
+    const existing = this.browserConnections.get(key);
+    if (existing) return existing;
+    const browser = await runtime.connectBrowser();
+    this.browserConnections.set(key, browser);
+    return browser;
+  }
+
+  private runtimeKey(space: SpaceRecord) {
+    return `space-${space.id}`;
+  }
+
+  private runtimeDataDirectory(space: SpaceRecord) {
+    return isTemporarySpace(space) ? `space-${space.id}` : `profile-${space.profileId}/space-${space.id}`;
+  }
+
+  private runtimePortOffset(key: string) {
+    return Number(key.replace(/\D/g, "")) || 1;
   }
 }
 
@@ -274,4 +371,14 @@ async function waitForRendererNavigation(runtime: NativeCefRuntime, targetId: st
   } finally {
     await connection.close();
   }
+}
+
+async function waitForTarget(runtime: NativeCefRuntime, targetId: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const target = (await runtime.targets()).find((candidate) => candidate.id === targetId);
+    if (target?.webSocketDebuggerUrl) return target;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  throw new Error(`Native CEF target did not become ready: ${targetId}`);
 }
