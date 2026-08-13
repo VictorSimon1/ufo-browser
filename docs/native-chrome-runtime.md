@@ -146,6 +146,20 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    deeply nested directory. Run `npm run native:cef:presentation:smoke` for the
    create/open/close/return lifecycle gate.
 
+   Native Profile Cookie sync is also connected to the CEF Agent. A running
+   persistent Space gets an independent Cookie checkpoint and receives source
+   deltas through CEF CDP. A UFO-side logout remains a divergence and is not
+   resurrected merely because the source profile is unchanged. Encrypted
+   Chrome Cookie SQLite files are never copied between runtimes.
+
+   The packaged CEF host lives at `Contents/MacOS/ufo-cef-host`, beside the
+   AppKit launcher. This is intentional: CEF's generated executable rpath is
+   relative to `Contents/MacOS`, so moving the host into `Resources` would
+   break Framework loading after a drag-install. The launcher starts the
+   standalone Agent with the bundled Node runtime, then the Agent starts the
+   CEF Overview and Space hosts. No Electron process is required by the native
+   bundle.
+
 ## Build and run
 
 CEF binaries are intentionally excluded from Git. Set `UFO_CEF_ROOT` to a

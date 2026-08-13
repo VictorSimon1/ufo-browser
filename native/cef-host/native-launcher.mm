@@ -7,6 +7,12 @@ static NSString* ResourcePath(NSString* name) {
   return [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:name];
 }
 
+static NSString* HostExecutablePath() {
+  // The CEF host must remain in Contents/MacOS so its @rpath resolves to the
+  // app's Contents/Frameworks directory after a DMG drag-install.
+  return [[NSBundle mainBundle].bundlePath stringByAppendingPathComponent:@"Contents/MacOS/ufo-cef-host"];
+}
+
 @interface UfoNativeLauncherDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic) pid_t childPid;
 @end
@@ -18,7 +24,7 @@ static NSString* ResourcePath(NSString* name) {
   NSString* node = ResourcePath(@"node");
   NSString* script = ResourcePath(@"native-cef-application.js");
   NSString* agent = ResourcePath(@"native-cef-agent.js");
-  NSString* host = ResourcePath(@"ufo-cef-host");
+  NSString* host = HostExecutablePath();
   NSString* keychain = ResourcePath(@"ufo-keychain-helper");
   NSString* userData = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/UFO-Browser-Native"];
   pid_t pid = fork();

@@ -13,6 +13,8 @@ import { readChromeCookies } from "./chrome-import/cookies.js";
 import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { writeAndVerifyCookies } from "./chrome-import/cookie-writer.js";
 import { NativeCefPresentationCoordinator } from "./native-cef-presentation.js";
+import { NativeCefProfileSync } from "./native-cef-profile-sync.js";
+import type { BrowserProfileRecord } from "./profile-registry.js";
 
 const userDataPath = resolve(
   process.env.UFO_BROWSER_NATIVE_USER_DATA ||
@@ -40,6 +42,7 @@ const sourcePartitionsRoot = resolve(
 const stateStore = new BrowserStateStore(join(userDataPath, "browser-state.json"));
 const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
 await profiles.initialize();
+let profileSync: NativeCefProfileSync | undefined;
 const keychainHelper = process.env.UFO_BROWSER_KEYCHAIN_HELPER ||
   process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER ||
   join(homedir(), "Library/Application Support/UFO-Browser", "ufo-keychain-helper");
@@ -52,9 +55,10 @@ const manager = new NativeCefTaskSpaceManager({
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   sourcePartitionsRoot,
   controlSocketsRoot,
+  onRuntimeReady: async (spaceId) => profileSync?.baselineSpace(spaceId),
   seedCookies: async (profileId, target) => {
     const profile = profiles.getOrThrow(profileId);
-    const sourceRoot = join(sourcePartitionsRoot, profile.partitionId);
+    const sourceRoot = profileSourceRoot(profile, sourcePartitionsRoot);
     const cookiePath = await firstFile(join(sourceRoot, "Network", "Cookies"), join(sourceRoot, "Cookies"));
     if (!cookiePath) return;
     const result = await readChromeCookies(cookiePath, new MacKeychainProvider(keychainHelper));
@@ -62,6 +66,15 @@ const manager = new NativeCefTaskSpaceManager({
   },
 });
 await manager.initialize();
+profileSync = new NativeCefProfileSync({
+  manager,
+  profiles,
+  sourcePartitionsRoot,
+  checkpointRoot: join(userDataPath, "Profile Sync", "checkpoints"),
+  keychainHelper,
+});
+manager.setRuntimeReadyHook(async (spaceId) => profileSync?.baselineSpace(spaceId));
+profileSync.start();
 const overview = new NativeCefOverview({
   manager,
   executable: process.env.UFO_CEF_HOST,
@@ -92,6 +105,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   await server.close().catch(() => undefined);
+  await profileSync?.close().catch(() => undefined);
   await manager.shutdown().catch(() => undefined);
   await overview.stop().catch(() => undefined);
   await manager.flushState().catch(() => undefined);
@@ -110,4 +124,13 @@ async function firstFile(...paths: string[]) {
     }
   }
   return undefined;
+}
+
+function profileSourceRoot(profile: BrowserProfileRecord, fallbackRoot: string) {
+  if (profile.source?.type === "chrome") {
+    const chromeRoot = process.env.UFO_BROWSER_CHROME_USER_DATA ||
+      join(homedir(), "Library", "Application Support", "Google", "Chrome");
+    return join(chromeRoot, profile.source.profileDirName);
+  }
+  return join(fallbackRoot, profile.partitionId);
 }

@@ -84,23 +84,42 @@ async function stopInstalledApp() {
 }
 
 async function verifyInstalledApp(appRoot) {
-  const required = [
-    "Contents/MacOS/UFO-Browser",
-    "Contents/Resources/app.asar",
-    "Contents/Resources/app.asar.unpacked/dist/bin/ufo-browser",
-    "Contents/Resources/app.asar.unpacked/dist/bin/x-browser",
-    "Contents/Resources/skills/ufo-browser/SKILL.md",
-    "Contents/Resources/skills/ufo-browser/agents/openai.yaml",
-  ];
+  const plistPath = join(appRoot, "Contents/Info.plist");
+  const bundleId = (await run("/usr/libexec/PlistBuddy", [
+    "-c", "Print :CFBundleIdentifier", plistPath,
+  ], { stdio: ["ignore", "pipe", "pipe"] })).trim();
+  const native = bundleId === "com.ufobrowser.app.native";
+  const required = native
+    ? [
+        "Contents/MacOS/ufo-browser-native",
+        "Contents/Resources/node",
+        "Contents/Resources/native-cef-agent.js",
+        "Contents/Resources/native-cef-application.js",
+        "Contents/MacOS/ufo-cef-host",
+        "Contents/Resources/ufo-browser",
+        "Contents/Resources/x-browser",
+        "Contents/Resources/skills/ufo-browser/SKILL.md",
+        "Contents/Resources/skills/ufo-browser/agents/openai.yaml",
+        "Contents/Frameworks/Chromium Embedded Framework.framework/Versions/A/Chromium Embedded Framework",
+      ]
+    : [
+        "Contents/MacOS/UFO-Browser",
+        "Contents/Resources/app.asar",
+        "Contents/Resources/app.asar.unpacked/dist/bin/ufo-browser",
+        "Contents/Resources/app.asar.unpacked/dist/bin/x-browser",
+        "Contents/Resources/skills/ufo-browser/SKILL.md",
+        "Contents/Resources/skills/ufo-browser/agents/openai.yaml",
+      ];
   for (const relative of required) await access(join(appRoot, relative));
   const plist = await run("/usr/libexec/PlistBuddy", [
     "-c",
     "Print :CFBundleShortVersionString",
-    join(appRoot, "Contents/Info.plist"),
+    plistPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
   const version = plist.trim();
   if (!version) throw new Error("Installed App does not contain a readable version");
-  console.log(`Installed App verified: ${appRoot} (v${version})`);
+  console.log(`Installed ${native ? "Native CEF" : "Electron"} App verified: ${appRoot} (v${version})`);
+  return native;
 }
 
 async function main() {
@@ -134,7 +153,7 @@ async function main() {
       if (await pathExists(backupApp) && !(await pathExists(destination))) await rename(backupApp, destination);
       throw error;
     }
-    await verifyInstalledApp(destination);
+    const native = await verifyInstalledApp(destination);
     await run(process.execPath, ["scripts/install-local-cli.mjs", "--app", destination, "--force"]);
     await run(process.execPath, ["scripts/sync-agent-skills.mjs", "--source", join(destination, "Contents/Resources/skills/ufo-browser")]);
     console.log(`CLI and Agent Skills synchronized from ${destination}`);

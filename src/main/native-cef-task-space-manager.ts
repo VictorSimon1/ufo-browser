@@ -23,6 +23,7 @@ export type NativeCefTaskSpaceManagerOptions = {
   sourcePartitionsRoot?: string;
   controlSocketsRoot?: string;
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
+  onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
 };
 
 export type NativeCefPresentationHooks = {
@@ -49,6 +50,13 @@ export class NativeCefTaskSpaceManager {
 
   setPresentationHooks(hooks: NativeCefPresentationHooks | undefined) {
     this.presentationHooks = hooks;
+  }
+
+  /** Register the profile/runtime hook after dependent services are created. */
+  setRuntimeReadyHook(
+    hook: NativeCefTaskSpaceManagerOptions["onRuntimeReady"] | undefined,
+  ) {
+    this.options.onRuntimeReady = hook;
   }
 
   async initialize() {
@@ -334,12 +342,28 @@ export class NativeCefTaskSpaceManager {
       await runtime.control("agent-active-on").catch(() => undefined);
     }
     await this.save();
+    if (space.profileMode === "persistent") {
+      await this.options.onRuntimeReady?.(space.id, space.profileId, runtime);
+    }
     return runtime;
   }
 
   getRuntime(spaceId: number) {
     const space = this.getSpaceOrThrow(spaceId);
     return this.runtimes.get(this.runtimeKey(space));
+  }
+
+  listRunningSpaces(profileId?: string) {
+    return this.state.spaces
+      .filter((space) => (!profileId || space.profileId === profileId) && this.runtimes.get(this.runtimeKey(space))?.isRunning())
+      .map((space) => structuredClone(space));
+  }
+
+  async createCookieWriteTarget(spaceId: number): Promise<CookieWriteTarget> {
+    const space = this.getSpaceOrThrow(spaceId);
+    const runtime = this.runtimes.get(this.runtimeKey(space));
+    if (!runtime?.isRunning()) throw new Error("native Space runtime is not running");
+    return this.createNativeCookieTarget(runtime, space);
   }
 
   async showSpace(spaceId: number) {

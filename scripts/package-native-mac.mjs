@@ -32,12 +32,16 @@ async function main() {
   await mkdir(join(appRoot, "Contents/MacOS"), { recursive: true });
   await mkdir(join(appRoot, "Contents/Resources"), { recursive: true });
   await cp(frameworkRoot, join(appRoot, "Contents/Frameworks"), { recursive: true });
-  await cp(join(hostApp, "Contents/MacOS/ufo-cef-host"), join(appRoot, "Contents/Resources/ufo-cef-host"));
+  // Keep the CEF executable under Contents/MacOS. Its generated rpath is
+  // @executable_path/../Frameworks; moving it to Resources would make the
+  // installed DMG unable to locate Chromium Embedded Framework.framework.
+  await cp(join(hostApp, "Contents/MacOS/ufo-cef-host"), join(appRoot, "Contents/MacOS/ufo-cef-host"));
   await cp("dist/main/native-cef-agent.js", join(appRoot, "Contents/Resources/native-cef-agent.js"));
   await cp("dist/main/native-cef-application.js", join(appRoot, "Contents/Resources/native-cef-application.js"));
   await cp("dist/bin/ufo-keychain-helper", join(appRoot, "Contents/Resources/ufo-keychain-helper"));
   await cp("dist/agent/ufo-browser.js", join(appRoot, "Contents/Resources/ufo-browser.js"));
   await writeFile(join(appRoot, "Contents/Resources/ufo-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');
+  await writeFile(join(appRoot, "Contents/Resources/x-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');
   await cp(process.execPath, join(appRoot, "Contents/Resources/node"));
   await cp("skills/ufo-browser", join(appRoot, "Contents/Resources/skills/ufo-browser"), { recursive: true });
   await cp("resources/icon.icns", join(appRoot, "Contents/Resources/icon.icns"));
@@ -46,8 +50,9 @@ async function main() {
   await writeFile(join(appRoot, "Contents/Resources/native-launch.json"), `${JSON.stringify({ version, product: "UFO-Browser", cef: true })}\n`);
   await writeFile(join(appRoot, "Contents/Info.plist"), plist());
   await chmod(join(appRoot, "Contents/Resources/node"), 0o755);
-  await chmod(join(appRoot, "Contents/Resources/ufo-cef-host"), 0o755);
+  await chmod(join(appRoot, "Contents/MacOS/ufo-cef-host"), 0o755);
   await chmod(join(appRoot, "Contents/Resources/ufo-browser"), 0o755);
+  await chmod(join(appRoot, "Contents/Resources/x-browser"), 0o755);
   const dmg = join(outputRoot, `UFO-Browser-${version}-native.dmg`);
   await run("/usr/bin/hdiutil", ["create", "-volname", `UFO-Browser ${version}`, "-srcfolder", appRoot, "-ov", "-format", "UDZO", dmg]);
   console.log(`Native app: ${appRoot}`);
