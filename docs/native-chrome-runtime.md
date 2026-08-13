@@ -1,8 +1,8 @@
-# Native Chrome Runtime migration
+# Native Chrome Runtime
 
-UFO-Browser is migrating to a CEF-first native application. The existing
-Electron application is retained only as a development fallback while the
-native path reaches feature parity. The browser window itself must be CEF's
+UFO-Browser's product runtime is CEF-first. The existing Electron application
+is retained only as a development fallback for legacy tests and migration
+rollback. The browser window itself is CEF's
 Chrome Runtime; Electron must not redraw or embed a fake address bar.
 
 ## What is being replaced
@@ -172,6 +172,34 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    bundle.
 
 ## Build and run
+
+The native path does not require Electron at runtime. To fetch the latest
+stable CEF distribution for the current Mac architecture and build it:
+
+```bash
+npm run native:cef:fetch
+npm run native:cef:configure
+npm run native:cef:build
+npm run start:native
+```
+
+`native:cef:fetch` downloads the latest stable standard CEF archive into the
+ignored `test/cef-runtime/` directory. Set `UFO_CEF_VERSION` to pin a known
+release, or set `UFO_CEF_ROOT` to use an existing distribution. The current
+validated runtime is CEF 144 / Chromium 144; the fetcher follows the latest
+stable CEF (currently 151 / Chromium 151) without putting binaries in Git.
+
+For a drag-installable native package:
+
+```bash
+npm run package:native
+```
+
+This produces `release-native/UFO-Browser-<version>-native.dmg`. The bundle
+contains the CEF framework, native Chrome host, standalone Node Agent, CLI,
+and Skill. Installing it does not start Electron; the existing
+`install:mac` flow detects the native bundle and synchronizes the CLI and
+Skills from it.
 
 CEF binaries are intentionally excluded from Git. Set `UFO_CEF_ROOT` to a
 matching distribution, or use the local comparison fixture under

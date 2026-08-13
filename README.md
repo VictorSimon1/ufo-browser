@@ -223,3 +223,4 @@ The primary executable and Skill name are now `ufo-browser`. A legacy `x-browser
 ## Development notes
 
 The detailed architecture, protected contracts, implementation history, and verification evidence are maintained in [goal.md](goal.md).
+# UFO-Browser

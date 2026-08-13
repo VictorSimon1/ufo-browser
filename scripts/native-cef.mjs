@@ -39,7 +39,11 @@ async function findCefRoot() {
   if (candidates.length === 0) {
     fail("No macOS CEF binary distribution found under test/cef-runtime. Set UFO_CEF_ROOT explicitly.");
   }
-  return candidates.at(-1);
+  const requested = process.env.UFO_CEF_VERSION;
+  const matching = requested
+    ? candidates.find((candidate) => candidate.includes(`cef_binary_${requested}_`))
+    : undefined;
+  return matching || candidates.at(-1);
 }
 
 function run(command, args, options = {}) {
