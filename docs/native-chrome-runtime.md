@@ -53,14 +53,16 @@ CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
 
 The production direction is a per-runtime private Unix-socket CEF DevTools
-bridge. Its browser-level slice is verified for `Browser.getVersion` and
-`Target.getTargets`; it is selected only when explicitly enabled while page and
-OOPIF session parity is completed. The tested Agent path still uses a randomly
-allocated loopback DevTools port per native runtime (never a fixed or
-user-configurable public endpoint in a packaged launch). The Agent Unix socket
-remains the only externally discoverable UFO control surface and validates the
-Space lease before every operation. The standalone Agent Service owns no
-browser UI, so the Native path remains Electron-free at runtime.
+bridge. Its browser-level and page-level slices are verified for
+`Browser.getVersion`, `Target.getTargets`, flattened `Target.attachToTarget`,
+`Runtime.evaluate`, `Page.enable`, navigation readiness, and screenshots. The
+bridge remains opt-in while OOPIF, popup, and long-running event parity are
+completed. The tested Agent path may use a randomly allocated loopback DevTools
+port per native runtime; packaged Native launches do not expose a fixed or
+user-configurable endpoint. The Agent Unix socket remains the only externally
+discoverable UFO control surface and validates the Space lease before every
+operation. The standalone Agent Service owns no browser UI, so the Native path
+is Electron-free at runtime.
 
 ## Integration order
 
@@ -225,8 +227,13 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 
 `native/cef-host` is intentionally independent of the Electron build. The
-existing Electron path remains a fallback until the acceptance gates pass;
-it is not the final browser UI.
+private bridge forwards Chrome Runtime's flattened `sessionId` envelope
+directly; wrapping page commands in legacy `Target.sendMessageToTarget` caused
+acknowledged commands to hang on newer CEF Chrome Runtime builds. The native
+private smoke covers page evaluation, Page.enable, navigation readiness, and
+screenshots. The existing Electron path remains a migration fallback for
+legacy tests until the acceptance gates pass; it is not used by the Native DMG
+runtime and is not the final browser UI.
 
 ## Acceptance gates
 
