@@ -16,17 +16,20 @@ import { NativeCefPresentationCoordinator } from "./native-cef-presentation.js";
 import { NativeCefProfileSync } from "./native-cef-profile-sync.js";
 import type { BrowserProfileRecord } from "./profile-registry.js";
 
+// Native CEF is the production browser shell, so it shares the existing UFO
+// Profile registry, imported partitions, and default Agent socket. Tests and
+// side-by-side development can override this root with an environment var.
 const userDataPath = resolve(
   process.env.UFO_BROWSER_NATIVE_USER_DATA ||
     process.env.X_BROWSER_NATIVE_USER_DATA ||
-    join(homedir(), "Library/Application Support/UFO-Browser-Native"),
+    join(homedir(), "Library/Application Support/UFO-Browser"),
 );
 const socketPath = resolve(
   process.env.UFO_BROWSER_SOCKET ||
     process.env.X_BROWSER_SOCKET ||
     join(userDataPath, "ufo-browser.sock"),
 );
-const partitionsRoot = join(userDataPath, "Spaces");
+const partitionsRoot = join(userDataPath, "Native Spaces");
 const controlSocketsRoot = resolve(
   process.env.UFO_BROWSER_CONTROL_SOCKETS ||
     join(process.env.TMPDIR || "/tmp", `ufo-browser-${process.pid}`),
@@ -36,11 +39,14 @@ const overviewControlSocket = resolve(
     join(controlSocketsRoot, "overview.sock"),
 );
 const sourcePartitionsRoot = resolve(
-  process.env.UFO_BROWSER_SOURCE_PARTITIONS ||
-    join(homedir(), "Library/Application Support/UFO-Browser", "Partitions"),
+  process.env.UFO_BROWSER_SOURCE_PARTITIONS || join(userDataPath, "Partitions"),
 );
-const stateStore = new BrowserStateStore(join(userDataPath, "browser-state.json"));
-const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
+const stateStore = new BrowserStateStore(
+  process.env.UFO_BROWSER_NATIVE_STATE_PATH || join(userDataPath, "browser-state.json"),
+);
+const profiles = new BrowserProfileRegistry(
+  process.env.UFO_BROWSER_NATIVE_PROFILES_PATH || join(userDataPath, "profiles.json"),
+);
 await profiles.initialize();
 let profileSync: NativeCefProfileSync | undefined;
 const keychainHelper = process.env.UFO_BROWSER_KEYCHAIN_HELPER ||

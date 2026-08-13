@@ -26,7 +26,9 @@ static NSString* HostExecutablePath() {
   NSString* agent = ResourcePath(@"native-cef-agent.js");
   NSString* host = HostExecutablePath();
   NSString* keychain = ResourcePath(@"ufo-keychain-helper");
-  NSString* userData = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/UFO-Browser-Native"];
+  // Keep imported Profiles, browser state, and the standard CLI socket on the
+  // same data root when Native CEF replaces the Electron shell.
+  NSString* userData = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/UFO-Browser"];
   pid_t pid = fork();
   if (pid == 0) {
     setenv("UFO_CEF_HOST", host.UTF8String, 1);

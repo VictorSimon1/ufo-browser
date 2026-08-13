@@ -8,18 +8,34 @@
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_helpers.h"
 #include "native/cef-host/handler.h"
+#include "native/cef-host/overlay_mac.h"
 
 namespace {
 
 class UfoWindowDelegate final : public CefWindowDelegate {
  public:
-  explicit UfoWindowDelegate(CefRefPtr<CefBrowserView> browser_view)
-      : browser_view_(browser_view) {}
+  explicit UfoWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
+                             bool present_on_start = false)
+      : browser_view_(browser_view), present_on_start_(present_on_start) {}
 
   void OnWindowCreated(CefRefPtr<CefWindow> window) override {
     window->AddChildView(browser_view_);
     if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(window);
-    window->Show();
+    // Overview is the only surface that should appear on cold start. Space
+    // runtimes are warm/background browser windows and are shown explicitly
+    // by the Presentation Coordinator, avoiding a visible flash or focus
+    // steal while an Agent is bootstrapping a Space.
+    auto command_line = CefCommandLine::GetGlobalCommandLine();
+    if (present_on_start_ || command_line->HasSwitch("overview") ||
+        command_line->HasSwitch("show-on-start")) {
+      window->Show();
+      UfoCefWindowSetPresented(window->GetWindowHandle(), true);
+    } else {
+      // Do not Hide/orderOut a Space. CEF may stop producing compositor frames
+      // for a fully hidden Views window, which makes Agent screenshots stall.
+      window->Show();
+      UfoCefWindowSetPresented(window->GetWindowHandle(), false);
+    }
   }
 
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
@@ -43,6 +59,7 @@ class UfoWindowDelegate final : public CefWindowDelegate {
 
  private:
   CefRefPtr<CefBrowserView> browser_view_;
+  bool present_on_start_ = false;
 
   IMPLEMENT_REFCOUNTING(UfoWindowDelegate);
 };
@@ -52,7 +69,11 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
   bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view,
                                  CefRefPtr<CefBrowserView> popup_browser_view,
                                  bool is_devtools) override {
-    CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(popup_browser_view));
+    // Browser popups/dialogs are real Chrome windows and should be visible to
+    // a human immediately. Agent-created popup targets remain controllable
+    // through CDP even if their page later receives the outer Agent overlay.
+    CefWindow::CreateTopLevelWindow(
+        new UfoWindowDelegate(popup_browser_view, true));
     return true;
   }
 

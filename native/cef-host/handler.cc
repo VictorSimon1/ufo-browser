@@ -92,6 +92,9 @@ void UfoCefHandler::ShowMainWindow() {
     return;
   }
   if (main_window_ && !main_window_->IsClosed()) main_window_->Show();
+  if (main_window_ && !main_window_->IsClosed()) {
+    UfoCefWindowSetPresented(main_window_->GetWindowHandle(), true);
+  }
 }
 
 void UfoCefHandler::HideMainWindow() {
@@ -99,7 +102,9 @@ void UfoCefHandler::HideMainWindow() {
     CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::HideMainWindow, this));
     return;
   }
-  if (main_window_ && !main_window_->IsClosed()) main_window_->Hide();
+  if (main_window_ && !main_window_->IsClosed()) {
+    UfoCefWindowSetPresented(main_window_->GetWindowHandle(), false);
+  }
 }
 
 void UfoCefHandler::FocusMainWindow() {
@@ -109,6 +114,7 @@ void UfoCefHandler::FocusMainWindow() {
   }
   if (main_window_ && !main_window_->IsClosed()) {
     main_window_->Show();
+    UfoCefWindowSetPresented(main_window_->GetWindowHandle(), true);
     main_window_->Activate();
     main_window_->BringToTop();
   }

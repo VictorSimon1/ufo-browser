@@ -41,7 +41,7 @@ export class NativeCefApplication {
     if (this.isRunning()) return this.status();
     if (process.platform !== "darwin") throw new Error("Native CEF currently supports macOS only");
     const merged = { ...this.defaults, ...options };
-    const userDataDir = resolve(merged.userDataDir || join(homedir(), "Library/Application Support/UFO-Browser-Native"));
+    const userDataDir = resolve(merged.userDataDir || join(homedir(), "Library/Application Support/UFO-Browser"));
     await mkdir(userDataDir, { recursive: true, mode: 0o700 });
     const infoFile = resolve(merged.infoFile || join(userDataDir, "overview.json"));
     await rm(infoFile, { force: true });

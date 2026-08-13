@@ -110,6 +110,35 @@ void PositionOverlay() {
   [gPanel setFrame:frame display:YES];
 }
 
+void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
+  NSView* view = (NSView*)cef_view_handle;
+  if (!view) return;
+  [view retain];
+  void (^update)(void) = ^{
+    NSWindow* host = view.window;
+    if (!host) {
+      [view release];
+      return;
+    }
+    // Keep the window ordered and backed by Chromium even when not presented
+    // to a human. This is deliberately separate from the Agent overlay panel.
+    host.alphaValue = presented ? 1.0 : 0.0;
+    host.ignoresMouseEvents = !presented;
+    if (gPanel && gHostWindow == host) {
+      gPanel.alphaValue = presented ? 1.0 : 0.0;
+      gPanel.ignoresMouseEvents = !presented;
+    }
+    if (presented) {
+      [host orderFrontRegardless];
+    } else {
+      [host orderFront:nil];
+    }
+    [view release];
+  };
+  if (NSThread.isMainThread) update();
+  else dispatch_async(dispatch_get_main_queue(), update);
+}
+
 void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
   NSView* retainedCefView = [(NSView*)cef_view_handle retain];
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -138,6 +167,7 @@ void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
     gPanel.hostWindow = host;
     gPanel.opaque = NO;
     gPanel.backgroundColor = NSColor.clearColor;
+    gPanel.alphaValue = host.alphaValue > 0.01 ? 1.0 : 0.0;
     gPanel.hasShadow = NO;
     gPanel.ignoresMouseEvents = NO;
     gPanel.hidesOnDeactivate = NO;

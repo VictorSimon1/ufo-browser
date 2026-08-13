@@ -108,6 +108,9 @@ async function runHost() {
     fail(`Native host is not built. Run \"npm run native:cef:build\" first.`),
   );
   const args = process.argv.slice(3);
+  if (!args.some((arg) => arg === "--overview" || arg === "--show-on-start")) {
+    args.push("--show-on-start");
+  }
   await run(executable, args);
 }
 

@@ -152,7 +152,11 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    resurrected merely because the source profile is unchanged. Encrypted
    Chrome Cookie SQLite files are never copied between runtimes.
 
-   The packaged CEF host lives at `Contents/MacOS/ufo-cef-host`, beside the
+   Native uses the shared UFO-Browser data root by default so existing
+   `profiles.json`, imported Chrome partitions, browser state, and the default
+   Agent CLI socket continue to work after switching shells. Development
+   smoke tests set `UFO_BROWSER_NATIVE_USER_DATA` to an isolated temporary
+   root. The packaged CEF host lives at `Contents/MacOS/ufo-cef-host`, beside the
    AppKit launcher. This is intentional: CEF's generated executable rpath is
    relative to `Contents/MacOS`, so moving the host into `Resources` would
    break Framework loading after a drag-install. The launcher starts the

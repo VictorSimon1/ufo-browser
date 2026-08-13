@@ -29,6 +29,8 @@ export type NativeCefRuntimeOptions = {
   controlSocket?: string;
   useMockKeychain?: boolean;
   overview?: boolean;
+  /** Show a Space immediately only for an explicit human-facing launch. */
+  showOnStart?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -192,6 +194,7 @@ export class NativeCefRuntime {
     if (merged.controlSocket) args.push(`--control-socket=${resolve(merged.controlSocket)}`);
     if (merged.useMockKeychain) args.push("--use-mock-keychain");
     if (merged.overview) args.push("--overview");
+    if (merged.showOnStart) args.push("--show-on-start");
     this.process = spawn(executable, args, {
       cwd: merged.cwd,
       env: { ...process.env, ...merged.env },

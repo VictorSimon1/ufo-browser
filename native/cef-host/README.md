@@ -45,6 +45,17 @@ development profiles. Production Profile/Space creation will supply this
 directory through the private Agent bridge rather than sharing CEF's default
 cache location.
 
+The packaged Native app defaults to `~/Library/Application Support/UFO-Browser`
+so existing imported Profiles and the standard `ufo-browser` CLI socket remain
+compatible with the current product. Set `UFO_BROWSER_NATIVE_USER_DATA` for an
+isolated development instance.
+
+Space hosts start hidden by default and are shown through the private control
+socket only when Overview opens or focuses that Space. Pass `--show-on-start`
+for a standalone human-facing development window. This avoids the cold-start
+flash and focus steal that would otherwise occur before the Presentation
+Coordinator applies Space visibility.
+
 The port is a temporary prototype transport. It must not be enabled in a
 release build; the production bridge will be a private Unix-socket/CEF
 DevTools adapter with the same UFO Agent API and lease checks.
