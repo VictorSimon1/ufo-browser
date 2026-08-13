@@ -16,3 +16,13 @@ test("NativeCefRuntime rejects invalid DevTools ports before spawning", async ()
   });
   await assert.rejects(() => runtime.start(), /Invalid Native CEF DevTools port/);
 });
+
+test("NativeCefRuntime adds development-only control and mock keychain switches", async () => {
+  const runtime = new NativeCefRuntime({
+    executable: "/definitely/missing/ufo-cef-host",
+    port: 9333,
+    controlSocket: "/tmp/ufo-control.sock",
+    useMockKeychain: true,
+  });
+  await assert.rejects(() => runtime.start(), /Native CEF executable not found/);
+});

@@ -1,12 +1,24 @@
 import { NativeCefRuntime } from "../dist/main/native-cef-runtime.js";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+const userDataDir = await mkdtemp(join(tmpdir(), "ufo-native-cef-smoke-"));
+const controlSocket = join(userDataDir, "control.sock");
 
 const runtime = new NativeCefRuntime({
   url: "https://example.com",
   port: Number(process.env.UFO_CEF_SMOKE_PORT || 9333),
-  userDataDir: process.env.UFO_CEF_SMOKE_USER_DATA_DIR,
+  userDataDir: process.env.UFO_CEF_SMOKE_USER_DATA_DIR || userDataDir,
+  controlSocket,
+  useMockKeychain: true,
 });
 try {
   const version = await runtime.start();
+  for (const command of ["status", "hide", "show", "focus"]) {
+    const response = await runtime.control(command);
+    if (response !== "ok") throw new Error(`Native CEF control ${command} failed: ${response}`);
+  }
   const deadline = Date.now() + 15_000;
   let targets = [];
   while (Date.now() < deadline) {

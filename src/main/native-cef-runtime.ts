@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { createConnection } from "node:net";
 import type { CdpEvent, CdpTransport } from "./cdp-transport.js";
 
 export type NativeCefTarget = {
@@ -25,6 +26,8 @@ export type NativeCefRuntimeOptions = {
   startupTimeoutMs?: number;
   cwd?: string;
   userDataDir?: string;
+  controlSocket?: string;
+  useMockKeychain?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -157,6 +160,7 @@ export class NativeCefRuntime {
   private readonly connections = new Set<NativeCdpConnection>();
   private port?: number;
   private versionInfo?: NativeCefVersion;
+  private controlSocketPath?: string;
 
   constructor(private readonly defaults: NativeCefRuntimeOptions = {}) {}
 
@@ -178,11 +182,14 @@ export class NativeCefRuntime {
     }
     const executable = await resolveExecutable(merged.executable);
     this.port = port;
+    this.controlSocketPath = merged.controlSocket ? resolve(merged.controlSocket) : undefined;
     const args = [
       `--url=${merged.url || "https://www.google.com/"}`,
       `--agent-devtools-port=${port}`,
     ];
     if (merged.userDataDir) args.push(`--user-data-dir=${resolve(merged.userDataDir)}`);
+    if (merged.controlSocket) args.push(`--control-socket=${resolve(merged.controlSocket)}`);
+    if (merged.useMockKeychain) args.push("--use-mock-keychain");
     this.process = spawn(executable, args, {
       cwd: merged.cwd,
       env: { ...process.env, ...merged.env },
@@ -243,6 +250,7 @@ export class NativeCefRuntime {
     this.process = undefined;
     this.versionInfo = undefined;
     this.port = undefined;
+    this.controlSocketPath = undefined;
     if (!child || child.killed) return;
     await new Promise<void>((resolveStop) => {
       const timer = setTimeout(() => {
@@ -255,6 +263,22 @@ export class NativeCefRuntime {
       });
       child.kill("SIGTERM");
     });
+  }
+
+  async control(command: "show" | "hide" | "focus" | "close" | "status") {
+    const path = this.controlSocketPath || this.defaults.controlSocket;
+    if (!path) throw new Error("Native CEF control socket is not configured");
+    const deadline = Date.now() + 5_000;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        return await sendControlCommand(path, command);
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      }
+    }
+    throw new Error(`Native CEF control socket unavailable: ${String(lastError || path)}`);
   }
 
   private endpoint(path: string) {
@@ -280,6 +304,18 @@ async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Native CEF endpoint returned HTTP ${response.status}`);
   return (await response.json()) as T;
+}
+
+function sendControlCommand(path: string, command: string) {
+  return new Promise<string>((resolveResponse, reject) => {
+    const socket = createConnection(path);
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { response += chunk; });
+    socket.once("error", reject);
+    socket.once("close", () => resolveResponse(response.trim()));
+    socket.once("connect", () => socket.end(`${command}\n`));
+  });
 }
 
 async function resolveExecutable(explicit?: string) {

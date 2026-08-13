@@ -18,6 +18,7 @@ class UfoWindowDelegate final : public CefWindowDelegate {
 
   void OnWindowCreated(CefRefPtr<CefWindow> window) override {
     window->AddChildView(browser_view_);
+    if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(window);
     window->Show();
   }
 
@@ -84,6 +85,9 @@ void UfoCefApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
 
   auto handler = CefRefPtr<UfoCefHandler>(new UfoCefHandler(true));
+  const auto command_line = CefCommandLine::GetGlobalCommandLine();
+  const auto control_socket = command_line->GetSwitchValue("control-socket").ToString();
+  if (!control_socket.empty()) handler->StartControlSocket(control_socket);
   CefBrowserSettings browser_settings;
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, StartupUrl(), browser_settings, nullptr, nullptr,

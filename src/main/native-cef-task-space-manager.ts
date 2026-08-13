@@ -10,6 +10,7 @@ import {
   TEMPORARY_PROFILE_ID,
 } from "./temporary-profile.js";
 import { NativeCefRuntime, type NativeCefRuntimeOptions } from "./native-cef-runtime.js";
+import { seedNativeCefProfile } from "./native-cef-profile-seed.js";
 
 export type NativeCefTaskSpaceManagerOptions = {
   store: BrowserStateStore;
@@ -17,6 +18,8 @@ export type NativeCefTaskSpaceManagerOptions = {
   partitionsRoot: string;
   executable?: string;
   portBase?: number;
+  useMockKeychain?: boolean;
+  sourcePartitionsRoot?: string;
 };
 
 /**
@@ -256,11 +259,23 @@ export class NativeCefTaskSpaceManager {
     if (!tab) throw new Error("native Space has no active tab");
     const dataDir = join(this.options.partitionsRoot, this.runtimeDataDirectory(space));
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
+    if (space.profileMode === "persistent") {
+      const sourceRoot = this.options.sourcePartitionsRoot
+        ? join(this.options.sourcePartitionsRoot, this.options.profiles.getOrThrow(space.profileId).partitionId)
+        : undefined;
+      await seedNativeCefProfile({
+        sourceRoot,
+        targetRoot: dataDir,
+        sourceProfileId: space.profileId,
+      });
+    }
     const runtimeOptions: NativeCefRuntimeOptions = {
       executable: this.options.executable,
       url: url || tab.url,
       port: (this.options.portBase ?? 9420) + this.runtimePortOffset(runtimeKey),
       userDataDir: dataDir,
+      controlSocket: join(dataDir, "control.sock"),
+      useMockKeychain: this.options.useMockKeychain,
     };
     const runtime = new NativeCefRuntime(runtimeOptions);
     await runtime.start();
@@ -283,6 +298,21 @@ export class NativeCefTaskSpaceManager {
   getRuntime(spaceId: number) {
     const space = this.getSpaceOrThrow(spaceId);
     return this.runtimes.get(this.runtimeKey(space));
+  }
+
+  async showSpace(spaceId: number) {
+    const runtime = await this.ensureRuntime(spaceId);
+    return runtime.control("show");
+  }
+
+  async hideSpace(spaceId: number) {
+    const runtime = await this.ensureRuntime(spaceId);
+    return runtime.control("hide");
+  }
+
+  async focusSpace(spaceId: number) {
+    const runtime = await this.ensureRuntime(spaceId);
+    return runtime.control("focus");
   }
 
   getActiveTab(spaceId: number) {

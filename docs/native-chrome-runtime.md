@@ -86,14 +86,26 @@ Agent Service owns no browser UI, so the final product can be Electron-free.
    and route Cookie/storage deltas through CEF's `CefCookieManager`. Existing
    Chrome decryption, compatibility preflight, rollback, and redacted
    reporting stay in the Node service; only the final Chromium write adapter
-   changes. A shared persistent Profile runtime will be added only after the
-   RequestContext/target lifecycle is implemented, rather than launching two
-   CEF processes against one locked directory.
+   changes. Native Spaces now seed a fresh persistent CEF directory once from
+   the selected UFO Profile. The seed allowlists Chromium login/storage
+   datasets and Cookie databases, skips password/history/extension data and
+   singleton locks, and writes `.ufo-profile-seed.json` so an active native
+   Space is never overwritten on a later launch. A shared persistent Profile
+   runtime will be added only after the RequestContext/target lifecycle is
+   implemented, rather than launching two CEF processes against one locked
+   directory. Development smoke runs may set `UFO_CEF_USE_MOCK_KEYCHAIN=1`;
+   release builds must use the signed macOS Keychain path instead of shipping
+   the mock switch.
 4. **Task Spaces** — map each Space to a request context and a browser target;
    keep only the active Space as a live compositor surface.
 5. **Overview and overlay** — retain low-frequency, change-driven previews and
    place the human-input blocking overlay in an outer native `NSPanel`/`NSView`
    so Agent CDP input and screenshots are never covered.
+
+   The native host now has a private per-Space control socket for `show`,
+   `hide`, `focus`, `close`, and `status`. It is separate from the CDP port and
+   is used by the future native Overview/presentation layer; the Agent still
+   talks through the existing UFO Unix socket.
 6. **Electron removal and packaging** — build the CEF host plus standalone
    Agent Service, copy the framework/helpers/resources,
    sign the complete app bundle, and produce the normal drag-to-Applications

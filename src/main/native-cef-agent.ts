@@ -19,6 +19,10 @@ const socketPath = resolve(
     join(userDataPath, "ufo-browser.sock"),
 );
 const partitionsRoot = join(userDataPath, "Spaces");
+const sourcePartitionsRoot = resolve(
+  process.env.UFO_BROWSER_SOURCE_PARTITIONS ||
+    join(homedir(), "Library/Application Support/UFO-Browser", "Partitions"),
+);
 const stateStore = new BrowserStateStore(join(userDataPath, "browser-state.json"));
 const profiles = new BrowserProfileRegistry(join(userDataPath, "profiles.json"));
 await profiles.initialize();
@@ -28,6 +32,8 @@ const manager = new NativeCefTaskSpaceManager({
   partitionsRoot,
   executable: process.env.UFO_CEF_HOST,
   portBase: Number(process.env.UFO_CEF_PORT_BASE || 9420),
+  useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
+  sourcePartitionsRoot,
 });
 await manager.initialize();
 const leases = new SpaceLeaseRegistry();
@@ -48,4 +54,3 @@ async function shutdown() {
 process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
 process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
 process.once("exit", () => { void manager.shutdown(); });
-
