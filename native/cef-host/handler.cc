@@ -377,28 +377,15 @@ void UfoCefHandler::DispatchDevToolsMessage(
         auto forwarded = CefDictionaryValue::Create();
         CefDictionaryValue::KeyList keys;
         message->GetKeys(keys);
-        const auto session_id = message->GetString("sessionId");
-        const int id = message->GetInt("id");
-        if (!session_id.empty()) {
-          auto inner = CefDictionaryValue::Create();
-          for (const auto& key : keys) {
-            if (key == "targetId" || key == "sessionId") continue;
-            inner->SetValue(key, message->GetValue(key));
-          }
-          auto inner_root = CefValue::Create();
-          inner_root->SetDictionary(inner);
-          forwarded->SetInt("id", id + 1000000);
-          forwarded->SetString("method", "Target.sendMessageToTarget");
-          auto target_params = CefDictionaryValue::Create();
-          target_params->SetString("targetId", target_id);
-          target_params->SetString("message", JsonString(inner_root));
-          forwarded->SetDictionary("params", target_params);
-          handler->devtools_outer_results_[client->route_id].insert(id + 1000000);
-        } else {
-          for (const auto& key : keys) {
-            if (key == "targetId") continue;
-            forwarded->SetValue(key, message->GetValue(key));
-          }
+        // CEF's browser-level DevTools endpoint understands the standard
+        // flattened Target session envelope. Forward the sessionId directly
+        // instead of wrapping page commands in Target.sendMessageToTarget.
+        // The latter is a legacy, non-flattened route and Chrome Runtime 151
+        // accepts the outer acknowledgement but never delivers the nested
+        // page result, which makes Runtime/Page commands hang indefinitely.
+        for (const auto& key : keys) {
+          if (key == "targetId") continue;
+          forwarded->SetValue(key, message->GetValue(key));
         }
         auto root = CefValue::Create();
         root->SetDictionary(forwarded);

@@ -353,6 +353,7 @@ export class NativeCefRuntime {
           throw new Error(`Native CEF private target attach failed: ${targetId}`);
         }
         connection.setDefaultSessionId(String(attached.sessionId));
+        await waitForPrivatePage(connection, 15_000);
       }
       return connection;
     }
@@ -456,6 +457,20 @@ export class NativeCefRuntime {
     }
     throw new Error(`Native CEF DevTools did not become ready: ${String(lastError || "timeout")}`);
   }
+}
+
+async function waitForPrivatePage(connection: NativeCefPrivateConnection, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await connection.send("Runtime.evaluate", {
+      expression: "location.href",
+      returnByValue: true,
+    }).catch(() => undefined);
+    const url = result?.result?.value;
+    if (typeof url === "string" && url !== "about:blank") return url;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  throw new Error("Native CEF private page did not finish its initial navigation");
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

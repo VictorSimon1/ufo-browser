@@ -20,10 +20,36 @@ try {
   const targets = await runtime.targets();
   const page = targets.find((target) => target.type === "page");
   if (!page) throw new Error(`Private CEF bridge returned no page target: ${JSON.stringify(targets)}`);
-  // Browser-level transport is production-safe and verified here. Page/OOPIF
-  // session forwarding remains opt-in until CEF Chrome Runtime's
-  // Target.sendMessageToTarget semantics have a complete parity suite.
-  console.log(JSON.stringify({ privateSocket: socket, browser: version.Browser, target: page.id, browserLevel: true }));
+  const connection = await runtime.connect(page.id);
+  const pageUrl = await connection.send("Runtime.evaluate", {
+    expression: "location.href",
+    returnByValue: true,
+  });
+  await connection.send("Page.enable");
+  const title = await connection.send("Runtime.evaluate", {
+    expression: "document.title",
+    returnByValue: true,
+  });
+  const screenshot = await connection.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: false,
+    fromSurface: true,
+  });
+  if (!String(title?.result?.value || "").includes("Example Domain")) {
+    throw new Error(`Private CEF page Runtime.evaluate failed: ${JSON.stringify(title)}`);
+  }
+  if (!screenshot?.data) throw new Error("Private CEF page screenshot was empty");
+  await connection.close();
+  console.log(JSON.stringify({
+    privateSocket: socket,
+    browser: version.Browser,
+    target: page.id,
+    browserLevel: true,
+    pageLevel: true,
+    pageUrl: pageUrl?.result?.value,
+    title: title?.result?.value,
+    screenshot: true,
+  }));
 } finally {
   await runtime.stop();
 }

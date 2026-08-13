@@ -338,6 +338,13 @@ export class NativeCefTaskSpaceManager {
     };
     const runtime = new NativeCefRuntime(runtimeOptions);
     if (runtimeOptions.controlSocket) await mkdir(dirname(runtimeOptions.controlSocket), { recursive: true, mode: 0o700 });
+    // The private CEF DevTools bridge is a per-Space Unix socket. Create its
+    // short-lived parent before launching CEF; otherwise the host cannot bind
+    // the socket and the Agent reports a misleading ENOENT while bootstrapping
+    // the first Space.
+    if (runtimeOptions.devtoolsSocket) {
+      await mkdir(dirname(runtimeOptions.devtoolsSocket), { recursive: true, mode: 0o700 });
+    }
     await runtime.start();
     if (space.profileMode === "persistent" && this.options.seedCookies) {
       const target = await this.createNativeCookieTarget(runtime, space);
