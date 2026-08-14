@@ -58,9 +58,11 @@ bridge. Its browser-level and page-level slices are verified for
 `Runtime.evaluate`, `Page.enable`, navigation readiness, and screenshots. The
 bridge is now the default for Native Task Spaces. Set
 `UFO_CEF_PRIVATE_BRIDGE=0` only for legacy diagnostics that explicitly need the
-temporary loopback DevTools HTTP endpoint. OOPIF, popup, and screenshot paths
-are covered by Native smoke tests; long-running event parity and
-platform-specific download edge cases remain acceptance gates. Packaged Native
+temporary loopback DevTools HTTP endpoint. OOPIF, popup, download, and
+screenshot paths are covered by Native smoke tests. Page events now flow
+through the same flattened synthetic sessions used by the Agent; console,
+page-error, and Network request delivery are covered by a Native event smoke.
+Packaged Native
 launches do not expose a fixed or user-configurable endpoint. The Agent Unix
 socket remains the only externally discoverable UFO control surface and
 validates the Space lease before every operation. The standalone Agent Service
@@ -243,6 +245,9 @@ runtime and is not the final browser UI.
   destroyed-window exception.
 - Agent Skill calls produce the same observable results through the CEF bridge
   as they do through the current Electron implementation.
+- Native Agent popup, download, and page-event behavior matches the existing
+  Skill facade, including `page.waitForEvent("popup")`,
+  `page.waitForEvent("download")`, console, pageerror, and request events.
 - Profile isolation and imported login state survive restart.
 - Agent control overlay blocks humans but does not affect CDP screenshots or
   input.
