@@ -17,11 +17,14 @@ bool UfoAgentOverlayIsActiveForWindow(void* cef_view_handle);
 bool UfoAgentOverlayHasActionsForWindow(void* cef_view_handle);
 bool UfoAgentOverlayOwnsWindow(void* ns_window);
 
-// Keep a native CEF window in the compositor while making it invisible to a
-// human. Unlike Hide/orderOut, alpha=0 preserves CEF screenshot production and
-// DevTools input for background Agent Spaces.
+// Presentation and compositor scheduling are separate. A non-presented window
+// is transparent and ignores human events; Agent-owned windows may stay
+// compositor-awake, while ordinary warm background windows can be ordered out
+// until an on-demand preview or presentation wakes them again.
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented);
 bool UfoCefWindowIsPresented(void* cef_view_handle);
+void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake);
+bool UfoCefWindowIsCompositorAwake(void* cef_view_handle);
 
 // Add the small native Spaces button used by human-facing Chrome shells. It
 // sends presentation commands to UFO over a private Unix socket and is never

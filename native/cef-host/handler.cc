@@ -269,7 +269,10 @@ void UfoCefHandler::ShowMainWindow() {
     CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::ShowMainWindow, this));
     return;
   }
-  if (main_window_ && !main_window_->IsClosed()) main_window_->Show();
+  if (main_window_ && !main_window_->IsClosed()) {
+    UfoCefWindowSetCompositorAwake(main_window_->GetWindowHandle(), true);
+    main_window_->Show();
+  }
   if (main_window_ && !main_window_->IsClosed()) {
     SetVisibleSpace(0);
     UfoCefWindowSetPresented(main_window_->GetWindowHandle(), true);
@@ -283,6 +286,7 @@ void UfoCefHandler::HideMainWindow() {
   }
   if (main_window_ && !main_window_->IsClosed()) {
     UfoCefWindowSetPresented(main_window_->GetWindowHandle(), false);
+    UfoCefWindowSetCompositorAwake(main_window_->GetWindowHandle(), false);
   }
 }
 
@@ -292,6 +296,7 @@ void UfoCefHandler::FocusMainWindow() {
     return;
   }
   if (main_window_ && !main_window_->IsClosed()) {
+    UfoCefWindowSetCompositorAwake(main_window_->GetWindowHandle(), true);
     SetVisibleSpace(0);
     main_window_->Show();
     UfoCefWindowSetPresented(main_window_->GetWindowHandle(), true);
@@ -388,7 +393,22 @@ void UfoCefHandler::SetSpaceAgentConnectionActive(int space_id, bool active) {
   if (space_id <= 0) return;
   if (active) agent_active_spaces_.insert(space_id);
   else agent_active_spaces_.erase(space_id);
+  SetSpaceCompositorAwake(space_id, active || visible_space_id_ == space_id);
   if (visible_space_id_ == space_id) SetVisibleSpace(space_id);
+}
+
+void UfoCefHandler::SetSpaceCompositorAwake(int space_id, bool awake) {
+  CEF_REQUIRE_UI_THREAD();
+  const auto window = space_windows_.find(space_id);
+  if (window == space_windows_.end() || !window->second ||
+      window->second->IsClosed()) {
+    return;
+  }
+  if (!awake && (visible_space_id_ == space_id ||
+                 agent_active_spaces_.contains(space_id))) {
+    return;
+  }
+  UfoCefWindowSetCompositorAwake(window->second->GetWindowHandle(), awake);
 }
 
 void UfoCefHandler::SetVisibleSpace(int space_id) {
@@ -524,6 +544,8 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       int presented_count = 0;
       auto presented_spaces = CefListValue::Create();
       auto active_spaces = CefListValue::Create();
+      auto awake_spaces = CefListValue::Create();
+      auto sleeping_spaces = CefListValue::Create();
       int chrome_controls_space_id = 0;
       const bool overview_presented =
           main_window_ && !main_window_->IsClosed() &&
@@ -533,6 +555,10 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
         if (agent_active_spaces_.contains(candidate_id)) {
           active_spaces->SetInt(active_spaces->GetSize(), candidate_id);
         }
+        const bool compositor_awake = window && !window->IsClosed() &&
+            UfoCefWindowIsCompositorAwake(window->GetWindowHandle());
+        auto compositor_list = compositor_awake ? awake_spaces : sleeping_spaces;
+        compositor_list->SetInt(compositor_list->GetSize(), candidate_id);
         if (!window || window->IsClosed() ||
             !UfoCefWindowIsPresented(window->GetWindowHandle())) {
           continue;
@@ -554,6 +580,8 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
                            (main_window_ ? 1 : 0));
       response->SetList("presentedSpaceIds", presented_spaces);
       response->SetList("agentActiveSpaceIds", active_spaces);
+      response->SetList("awakeSpaceIds", awake_spaces);
+      response->SetList("sleepingSpaceIds", sleeping_spaces);
       bool overlay_presented = false;
       bool overlay_actions_available = false;
       if (visible_space_id_ > 0) {
@@ -651,6 +679,7 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     }
     auto window = it->second;
     if (operation == "show-space") {
+      SetSpaceCompositorAwake(space_id, true);
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), true);
       SetVisibleSpace(space_id);
@@ -659,9 +688,11 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     if (operation == "hide-space") {
       UfoCefWindowSetPresented(window->GetWindowHandle(), false);
       if (visible_space_id_ == space_id) SetVisibleSpace(0);
+      SetSpaceCompositorAwake(space_id, false);
       return "ok";
     }
     if (operation == "focus-space") {
+      SetSpaceCompositorAwake(space_id, true);
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), true);
       window->Activate();
@@ -689,6 +720,14 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       return "ok";
     }
     if (operation == "status-space") return "ok";
+    if (operation == "wake-space") {
+      SetSpaceCompositorAwake(space_id, true);
+      return "ok";
+    }
+    if (operation == "sleep-space") {
+      SetSpaceCompositorAwake(space_id, false);
+      return "ok";
+    }
   }
   return "error unknown-command";
 }

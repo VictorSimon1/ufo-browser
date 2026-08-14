@@ -120,6 +120,7 @@ class UfoCefHandler final : public CefClient,
   int GetBrowserSpaceId(CefRefPtr<CefBrowser> browser);
   std::string HandleControlCommandOnUi(const std::string& command);
   void SetVisibleSpace(int space_id);
+  void SetSpaceCompositorAwake(int space_id, bool awake);
 
   IMPLEMENT_REFCOUNTING(UfoCefHandler);
 };

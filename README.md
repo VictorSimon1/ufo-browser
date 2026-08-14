@@ -19,7 +19,8 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **One-time Spaces** — the built-in Temporary Profile creates a fresh memory-backed Chromium Session for every human or Agent Space; Cookie, LocalStorage, IndexedDB, Service Worker, cache, and permission state are never shared, closing clears the Session, and App restart never restores it.
 - **One-click Chrome login import and opt-in sync** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile, then incrementally follow that Profile without modifying Chrome or reviving a UFO logout.
 - **No visible automation cursor** — Agent input never moves the macOS pointer and does not rely on OS-level keyboard or mouse automation.
-- **Bounded background rendering** — hidden Agent pages use a shared compositor surface only when required, then park again to reduce GPU usage.
+- **One UFO browser host** — Overview and every Space are scheduled inside one shared UFO CEF main process; Spaces never launch separate browser Hosts.
+- **Bounded background rendering** — ordinary warm background Spaces park their native compositor without losing page state; Agent-owned Spaces stay awake only while automation requires them.
 - **Live Overview** — persistent 3:2 Space previews update with page activity while using adaptive capture cadence and caching.
 - **Ego-compatible Agent API** — the JavaScript helper surface supports the familiar Task Space, snapshot, input, wait, fetch, screenshot, and CDP workflows.
 
@@ -43,10 +44,11 @@ The visible browser page and Agent control layer are separate native views. The 
 
 ## Performance model
 
-UFO-Browser avoids keeping every background page at foreground rendering priority.
+UFO-Browser avoids keeping every background page at foreground rendering priority while preserving one shared browser Host.
 
-- Overview capture uses bounded concurrency, adaptive frame cadence, preview signatures, and a small revision cache.
-- Background Agent pages attach to an invisible compositor surface only for input, screenshots, waits, screencasts, or challenge execution.
+- Overview capture uses one global low-frequency queue, adaptive frame cadence, preview signatures, and a small revision cache.
+- A preview wakes one selected warm Space, captures it, and parks its native window again; a hidden Overview cannot wake Spaces through stale polling.
+- Agent-owned background Spaces stay compositor-awake for input, screenshots, waits, screencasts, and challenge execution, while remaining invisible and non-interactive to people.
 - Completed, handed-off, or disconnected Spaces release their active compositor allocation immediately.
 - Hidden renderers retain page state while Chromium's native background throttling limits unnecessary animation and timer work.
 - Agent status animations use compositor-friendly opacity and transform changes instead of full-page blur effects.

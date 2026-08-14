@@ -101,9 +101,33 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
   const reopenedPresentation = await presentationStatus(controlSocket);
   if (reopenedPresentation.visibleSpaceId !== spaceId ||
-      reopenedPresentation.chromeControlsSpaceId !== spaceId) {
+      reopenedPresentation.chromeControlsSpaceId !== spaceId ||
+      !reopenedPresentation.awakeSpaceIds?.includes(spaceId) ||
+      !reopenedPresentation.sleepingSpaceIds?.includes(createdSpaceId)) {
     throw new Error(`Chrome controls did not return to the first warm Space: ${JSON.stringify(reopenedPresentation)}`);
   }
+  const showOverview = await sendSocket(presentationSocket, "show-overview");
+  if (showOverview !== "ok") throw new Error(`show Overview failed: ${showOverview}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  const overviewBeforePreview = await presentationStatus(controlSocket);
+  if (!overviewBeforePreview.overviewPresented ||
+      overviewBeforePreview.visibleSpaceId !== 0 ||
+      !overviewBeforePreview.sleepingSpaceIds?.includes(createdSpaceId)) {
+    throw new Error(`Overview did not preserve the sleeping background Space: ${JSON.stringify(overviewBeforePreview)}`);
+  }
+  const backgroundPreview = await fetch(`${spacesUrl}/${createdSpaceId}/preview`).then((response) => response.json());
+  if (!String(backgroundPreview.dataUrl || "").startsWith("data:image/jpeg;base64,")) {
+    throw new Error(`Sleeping Space did not wake for preview capture: ${JSON.stringify(backgroundPreview).slice(0, 500)}`);
+  }
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 350));
+  const afterPreviewSleep = await presentationStatus(controlSocket);
+  if (!afterPreviewSleep.sleepingSpaceIds?.includes(createdSpaceId) ||
+      !afterPreviewSleep.awakeSpaceIds?.includes(spaceId)) {
+    throw new Error(`Background compositor did not return to sleep: ${JSON.stringify(afterPreviewSleep)}`);
+  }
+  const reopenAgentSpace = await fetch(`${spacesUrl}/${spaceId}/open`, { method: "POST" }).then((response) => response.json());
+  if (!reopenAgentSpace.ok) throw new Error(`reopen Agent Space failed: ${JSON.stringify(reopenAgentSpace)}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
   // A native red-button close is blocked while the Agent still owns the
   // Space, even though titlebar dragging remains available.
   const blockedClose = await sendSocket(controlSocket, JSON.stringify({
@@ -167,6 +191,8 @@ try {
     backgroundClosePreservesControls: true,
     agentOwnedNativeCloseBlocked: true,
     nativeCloseUsesSpaceStateMachine: true,
+    backgroundCompositorSleeps: true,
+    previewWakesOneSpaceOnDemand: true,
   }));
 } finally {
   if (cli && cli.exitCode === null) cli.kill("SIGTERM");
@@ -189,6 +215,8 @@ function sendSocket(path, command) {
     socket.once("close", () => {
       resolveStatus(response.trim());
     });
-    socket.once("connect", () => socket.end(`${command}\n`));
+    // Match the native AppKit controls: keep the client writable side open
+    // until UFO has processed the command and closed the response stream.
+    socket.once("connect", () => socket.write(`${command}\n`));
   });
 }

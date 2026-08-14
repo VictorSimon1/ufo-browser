@@ -351,6 +351,7 @@ static NSWindow* gSpaceControllerHostWindow;
 static id gSpaceControllerMoveObserver;
 static id gSpaceControllerResizeObserver;
 static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* gChromeControlsMetadata;
+static NSMapTable<NSWindow*, NSNumber*>* gCompositorAwakeState;
 
 static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* ChromeControlsMetadata() {
   if (!gChromeControlsMetadata) {
@@ -370,6 +371,17 @@ static UfoChromeControlsMetadata* MetadataForHost(NSWindow* host, BOOL create) {
     [ChromeControlsMetadata() setObject:metadata forKey:host];
   }
   return metadata;
+}
+
+static NSMapTable<NSWindow*, NSNumber*>* CompositorAwakeState() {
+  if (!gCompositorAwakeState) {
+    gCompositorAwakeState = [[NSMapTable alloc]
+        initWithKeyOptions:NSPointerFunctionsWeakMemory |
+                           NSPointerFunctionsObjectPersonality
+              valueOptions:NSPointerFunctionsStrongMemory
+                  capacity:0];
+  }
+  return gCompositorAwakeState;
 }
 
 void RemoveOverlay() {
@@ -622,6 +634,49 @@ bool UfoCefWindowIsPresented(void* cef_view_handle) {
   if (!view || !view.window) return false;
   NSWindow* host = view.window;
   return host.isVisible && host.alphaValue > 0.5 && !host.ignoresMouseEvents;
+}
+
+void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake) {
+  NSView* view = (NSView*)cef_view_handle;
+  if (!view) return;
+  [view retain];
+  void (^update)(void) = ^{
+    NSWindow* host = view.window;
+    if (!host) {
+      [view release];
+      return;
+    }
+    if (awake) {
+      [CompositorAwakeState() setObject:@YES forKey:host];
+      // Keep the background surface transparent/non-interactive. Ordering it
+      // without activation is sufficient for Chromium to resume producing a
+      // compositor frame for Agent input or a low-frequency Overview capture.
+      [host orderFront:nil];
+      [view release];
+      return;
+    }
+    [CompositorAwakeState() setObject:@NO forKey:host];
+    // Let the presentation cross-fade finish before ordering the window out.
+    // Re-check state at the deadline so a rapid reopen/Agent claim cannot be
+    // hidden by an older delayed sleep request.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 static_cast<int64_t>(0.22 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+      const bool still_sleeping =
+          ![[CompositorAwakeState() objectForKey:host] boolValue];
+      if (still_sleeping && host.ignoresMouseEvents && host.alphaValue < 0.1) {
+        [host orderOut:nil];
+      }
+      [view release];
+    });
+  };
+  if (NSThread.isMainThread) update();
+  else dispatch_async(dispatch_get_main_queue(), update);
+}
+
+bool UfoCefWindowIsCompositorAwake(void* cef_view_handle) {
+  NSView* view = (NSView*)cef_view_handle;
+  return view && view.window && view.window.isVisible;
 }
 
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {

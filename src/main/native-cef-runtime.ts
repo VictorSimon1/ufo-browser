@@ -518,7 +518,7 @@ export class NativeCefRuntime {
     });
   }
 
-  async control(command: "show" | "hide" | "focus" | "close" | "status" | "agent-active-on" | "agent-active-off") {
+  async control(command: "show" | "hide" | "focus" | "close" | "status" | "wake" | "sleep" | "agent-active-on" | "agent-active-off") {
     return this.sendControlPayload(command);
   }
 
@@ -543,6 +543,8 @@ export class NativeCefRuntime {
       | "focus-space"
       | "close-space"
       | "status-space"
+      | "wake-space"
+      | "sleep-space"
       | "create-space-tab"
       | "agent-active-space-on"
       | "agent-active-space-off",
@@ -835,7 +837,7 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
   }
 
   override async control(
-    command: "show" | "hide" | "focus" | "close" | "status" | "agent-active-on" | "agent-active-off",
+    command: "show" | "hide" | "focus" | "close" | "status" | "wake" | "sleep" | "agent-active-on" | "agent-active-off",
   ) {
     const routed = {
       show: "show-space",
@@ -843,6 +845,8 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
       focus: "focus-space",
       close: "close-space",
       status: "status-space",
+      wake: "wake-space",
+      sleep: "sleep-space",
       "agent-active-on": "agent-active-space-on",
       "agent-active-off": "agent-active-space-off",
     } as const;

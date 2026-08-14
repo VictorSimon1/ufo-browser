@@ -66,10 +66,12 @@ class UfoWindowDelegate final : public CefWindowDelegate {
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), true);
     } else {
-      // Do not Hide/orderOut a Space. CEF may stop producing compositor frames
-      // for a fully hidden Views window, which makes Agent screenshots stall.
+      // Create the Chrome surface once inside this shared Host, then park its
+      // native window until presentation, Agent ownership, or one queued
+      // Overview capture explicitly wakes it.
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), false);
+      UfoCefWindowSetCompositorAwake(window->GetWindowHandle(), false);
     }
     // In the shared-host product the process itself starts in Overview mode,
     // but Space windows created later still require their native controls.

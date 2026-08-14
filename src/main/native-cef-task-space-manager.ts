@@ -532,14 +532,21 @@ export class NativeCefTaskSpaceManager {
     // lightweight placeholder until presentation starts the runtime.
     const runtime = this.getRuntime(spaceId);
     if (!runtime?.isRunning()) return undefined;
-    const active = this.getActiveTab(spaceId);
-    const targets = await runtime.targets();
-    const target = targets.find((candidate) =>
-      candidate.type === "page" && candidate.id === active?.targetId,
-    ) ?? targets.find((candidate) => candidate.type === "page");
-    if (!target || (!target.webSocketDebuggerUrl && !runtime.usesPrivateBridge())) throw new Error("native preview page target is unavailable");
-    const connection = await runtime.connect(target.id);
+    // Human-owned background Spaces are ordered out between captures to keep
+    // their native Chromium compositor idle. Wake only the one Space selected
+    // by the global preview queue; the Host refuses to sleep a presented or
+    // Agent-owned Space, so this is safe for active automation.
+    await runtime.control("wake").catch(() => undefined);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    let connection: Awaited<ReturnType<NativeCefRuntime["connect"]>> | undefined;
     try {
+      const active = this.getActiveTab(spaceId);
+      const targets = await runtime.targets();
+      const target = targets.find((candidate) =>
+        candidate.type === "page" && candidate.id === active?.targetId,
+      ) ?? targets.find((candidate) => candidate.type === "page");
+      if (!target || (!target.webSocketDebuggerUrl && !runtime.usesPrivateBridge())) throw new Error("native preview page target is unavailable");
+      connection = await runtime.connect(target.id);
       const result = await connection.send("Page.captureScreenshot", {
         format: "jpeg",
         quality: 58,
@@ -556,7 +563,8 @@ export class NativeCefTaskSpaceManager {
         capturedAt: Date.now(),
       };
     } finally {
-      await connection.close();
+      await connection?.close();
+      await runtime.control("sleep").catch(() => undefined);
     }
   }
 

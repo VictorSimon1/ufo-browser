@@ -47,9 +47,10 @@ process. CEF Chrome Runtime permits only one Chrome-style BrowserView per
 `CefWindow` (`Cannot add multiple Chrome style BrowserViews`), so isolated
 Space RequestContexts are held by separate internal native windows inside that
 single Host. UFO's Presentation Coordinator guarantees that exactly one of
-those managed surfaces is presented to the human; the others remain
-compositor-backed for Agent screenshots and input without accepting human
-events.
+those managed surfaces is presented to the human. Agent-owned background
+Spaces stay compositor-awake for uninterrupted CDP input and screenshots;
+ordinary warm background Spaces keep their Chromium state but are ordered out
+at the AppKit layer so their windowed compositor can sleep.
 
 Ego Lite is used as a behavioral and visual reference. Its compiled framework
 and private implementation are not product dependencies.
@@ -135,8 +136,10 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    directory. Development smoke runs may set `UFO_CEF_USE_MOCK_KEYCHAIN=1`;
    release builds must use the signed macOS Keychain path instead of shipping
    the mock switch.
-4. **Task Spaces** — map each Space to a request context and a browser target;
-   keep only the active Space as a live compositor surface.
+4. **Task Spaces** — map each Space to a request context and browser target in
+   the one shared UFO Host. Keep the presented Space and Agent-owned Spaces
+   compositor-awake; park ordinary warm background Space windows without
+   destroying their tabs, RequestContexts, or page state.
 5. **Overview and overlay** — retain low-frequency, change-driven previews and
    place the human-input blocking overlay in an outer native `NSPanel`/`NSView`
    so Agent CDP input and screenshots are never covered.
@@ -187,14 +190,20 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    CEF window show itself independently. Opening a Space makes it the only
    human-presented surface and disables human input on Overview and all other
    running Space windows; closing the visible Space returns to and focuses
-   Overview. Background Spaces keep their Chromium state and compositor for
-   Agent work but remain transparent and non-interactive to the human. Cold
+   Overview. An Agent-owned background Space remains transparent,
+   non-interactive, and compositor-awake so automation never stalls. A normal
+   warm background Space is `orderOut`-parked after the transition, preserving
+   its Chromium state while allowing the native compositor to sleep. Overview
+   previews use one global low-frequency queue: it wakes exactly the selected
+   warm Space, captures one JPEG, and parks it again. Hidden Overview requests
+   receive only the cached frame and cannot wake background Spaces. Cold
    Spaces are still started only when opened or used by an Agent. Control
    sockets live in a short per-Agent temporary directory to
    stay below macOS `sockaddr_un` path limits even when Profile data lives in a
    deeply nested directory. Run `npm run native:cef:presentation:smoke` for the
-   create/open/close/return lifecycle gate, including the assertion that the
-   presented-window count never exceeds one.
+   create/open/close/return lifecycle gate, including assertions that the
+   presented-window count never exceeds one and background compositors return
+   to sleep after an on-demand preview.
 
    Native titlebar controls follow the same presentation state. Each Space
    window records its own Space name, Profile name, and presentation socket,

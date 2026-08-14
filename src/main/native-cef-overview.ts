@@ -40,6 +40,7 @@ export class NativeCefOverview {
   private readonly previewCache = new Map<number, { capturedAt: number; value: any }>();
   private previewQueue = Promise.resolve();
   private previewLastCaptureAt = 0;
+  private windowVisible = true;
 
   constructor(private readonly options: NativeCefOverviewOptions) {}
 
@@ -82,6 +83,7 @@ export class NativeCefOverview {
   }
 
   async stop() {
+    this.windowVisible = false;
     await this.runtime?.stop().catch(() => undefined);
     this.runtime = undefined;
     await new Promise<void>((resolve) => {
@@ -100,14 +102,17 @@ export class NativeCefOverview {
   }
 
   async showWindow() {
+    this.windowVisible = true;
     return this.control("show");
   }
 
   async hideWindow() {
+    this.windowVisible = false;
     return this.control("hide");
   }
 
   async focusWindow() {
+    this.windowVisible = true;
     return this.control("focus");
   }
 
@@ -206,6 +211,14 @@ export class NativeCefOverview {
       if (request.method === "GET" && previewMatch) {
         const spaceId = Number(previewMatch[1]);
         const cached = this.previewCache.get(spaceId);
+        // The hidden Overview renderer may still have a throttled interval in
+        // flight during a Space transition. Never let that stale request wake
+        // a background compositor; return the last frame until Overview is
+        // presented again.
+        if (!this.windowVisible) {
+          this.json(response, cached?.value ?? { available: false });
+          return;
+        }
         const now = Date.now();
         if (cached && now - cached.capturedAt < 4_000) {
           this.json(response, cached.value);
@@ -254,8 +267,12 @@ export class NativeCefOverview {
 
   private enqueuePreview(spaceId: number) {
     const operation = this.previewQueue.then(async () => {
+      // Requests already queued before a presentation transition must not
+      // wake Spaces after Overview has been hidden.
+      if (!this.windowVisible) return this.previewCache.get(spaceId)?.value;
       const waitMs = Math.max(0, 4_000 - (Date.now() - this.previewLastCaptureAt));
       if (waitMs > 0) await delay(waitMs);
+      if (!this.windowVisible) return this.previewCache.get(spaceId)?.value;
       const value = await this.options.manager.capturePreview(spaceId);
       if (!value) return undefined;
       this.previewLastCaptureAt = Date.now();
