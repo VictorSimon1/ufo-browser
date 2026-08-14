@@ -187,7 +187,16 @@ export class NativeCefPrivateConnection implements NativeCdpConnectionLike {
   private closed = false;
   private defaultSessionId?: string;
 
-  constructor(private readonly socketPath: string, private readonly targetId: string) {
+  constructor(
+    private readonly socketPath: string,
+    private readonly targetId: string,
+    /**
+     * Bridge-only browser route used when multiple isolated BrowserViews live
+     * in one UFO CEF host process. This value is removed by the native bridge
+     * before the CDP message is forwarded to Chromium.
+     */
+    private readonly browserRoute?: string,
+  ) {
     this.socket = createConnection(socketPath);
     this.ready = new Promise<void>((resolveReady, rejectReady) => {
       this.socket.once("connect", resolveReady);
@@ -207,7 +216,14 @@ export class NativeCefPrivateConnection implements NativeCdpConnectionLike {
     return new Promise<any>((resolveResult, rejectResult) => {
       this.pending.set(id, { resolve: resolveResult, reject: rejectResult });
       const routedSessionId = sessionId || this.defaultSessionId;
-      this.socket.write(`${JSON.stringify({ id, targetId: this.targetId, method, params, ...(routedSessionId ? { sessionId: routedSessionId } : {}) })}\n`);
+      this.socket.write(`${JSON.stringify({
+        id,
+        targetId: this.targetId,
+        ...(this.browserRoute ? { browserRoute: this.browserRoute } : {}),
+        method,
+        params,
+        ...(routedSessionId ? { sessionId: routedSessionId } : {}),
+      })}\n`);
     });
   }
 
@@ -356,9 +372,13 @@ export class NativeCefRuntime {
     return fetchJson<NativeCefTarget[]>(this.endpoint("/json/list"));
   }
 
-  async connect(targetId?: string) {
+  async connect(targetId?: string, browserRoute?: string) {
     if (this.devtoolsSocketPath) {
-      const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+      const connection = new NativeCefPrivateConnection(
+        this.devtoolsSocketPath,
+        "browser",
+        browserRoute,
+      );
       if (targetId) {
         const target = (await this.targets()).find((candidate) => candidate.id === targetId);
         const attached = await attachPrivateTarget(connection, targetId);
@@ -385,16 +405,26 @@ export class NativeCefRuntime {
   }
 
   /** Attach without waiting for document navigation; used for volatile OOPIF targets. */
-  async connectRaw(targetId: string) {
-    if (!this.devtoolsSocketPath) return this.connect(targetId);
-    const connection = new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+  async connectRaw(targetId: string, browserRoute?: string) {
+    if (!this.devtoolsSocketPath) return this.connect(targetId, browserRoute);
+    const connection = new NativeCefPrivateConnection(
+      this.devtoolsSocketPath,
+      "browser",
+      browserRoute,
+    );
     const attached = await attachPrivateTarget(connection, targetId);
     connection.setDefaultSessionId(String(attached.sessionId));
     return connection;
   }
 
-  async connectBrowser() {
-    if (this.devtoolsSocketPath) return new NativeCefPrivateConnection(this.devtoolsSocketPath, "browser");
+  async connectBrowser(browserRoute?: string) {
+    if (this.devtoolsSocketPath) {
+      return new NativeCefPrivateConnection(
+        this.devtoolsSocketPath,
+        "browser",
+        browserRoute,
+      );
+    }
     const version = await this.version();
     if (!version.webSocketDebuggerUrl) {
       throw new Error("Native CEF browser DevTools target is unavailable");

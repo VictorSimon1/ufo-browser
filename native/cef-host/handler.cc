@@ -94,6 +94,7 @@ struct UfoCefHandler::DevToolsClient {
   std::mutex write_mutex;
   std::string route_id;
   std::string target_id;
+  std::string browser_route;
 };
 
 UfoCefHandler::UfoCefHandler(bool chrome_style)
@@ -345,10 +346,14 @@ void UfoCefHandler::HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& 
       if (!parsed || !parsed->GetDictionary()) continue;
       auto dictionary = parsed->GetDictionary();
       const std::string target_id = dictionary->GetString("targetId").ToString();
+      const std::string browser_route =
+          dictionary->GetString("browserRoute").ToString();
       const std::string method = dictionary->GetString("method").ToString();
       if (method.empty() || target_id.empty()) continue;
       client->target_id = target_id;
-      DispatchDevToolsMessage(client, dictionary, target_id, method);
+      client->browser_route = browser_route;
+      DispatchDevToolsMessage(client, dictionary, target_id, browser_route,
+                              method);
     }
   }
   ::shutdown(client->fd, SHUT_RDWR);
@@ -359,14 +364,16 @@ void UfoCefHandler::DispatchDevToolsMessage(
     const std::shared_ptr<DevToolsClient>& client,
     CefRefPtr<CefDictionaryValue> message,
     const std::string& target_id,
+    const std::string& browser_route,
     const std::string& method) {
   CefPostTask(TID_UI, base::BindOnce(
       [](UfoCefHandler* handler, std::shared_ptr<DevToolsClient> client,
          CefRefPtr<CefDictionaryValue> message, std::string target_id,
-         std::string method) {
-        auto browser = handler->FindDevToolsBrowser(target_id);
+         std::string browser_route, std::string method) {
+        auto browser = handler->FindDevToolsBrowser(target_id, browser_route);
         if (!browser) {
-          LOG(ERROR) << "Private DevTools target not found: " << target_id;
+          LOG(ERROR) << "Private DevTools target not found: " << target_id
+                     << " route=" << browser_route;
           return;
         }
         auto observer = CefRefPtr<UfoDevToolsObserver>(
@@ -388,7 +395,7 @@ void UfoCefHandler::DispatchDevToolsMessage(
         // accepts the outer acknowledgement but never delivers the nested
         // page result, which makes Runtime/Page commands hang indefinitely.
         for (const auto& key : keys) {
-          if (key == "targetId") continue;
+          if (key == "targetId" || key == "browserRoute") continue;
           forwarded->SetValue(key, message->GetValue(key));
         }
         auto root = CefValue::Create();
@@ -396,11 +403,24 @@ void UfoCefHandler::DispatchDevToolsMessage(
         const auto encoded = JsonString(root);
         browser->GetHost()->SendDevToolsMessage(encoded.data(), encoded.size());
         LOG(INFO) << "Private DevTools method " << method << " target=" << target_id;
-      }, base::Unretained(this), client, message, target_id, method));
+      }, base::Unretained(this), client, message, target_id, browser_route,
+      method));
 }
 
-CefRefPtr<CefBrowser> UfoCefHandler::FindDevToolsBrowser(const std::string& target_id) {
+CefRefPtr<CefBrowser> UfoCefHandler::FindDevToolsBrowser(
+    const std::string& target_id,
+    const std::string& browser_route) {
   CEF_REQUIRE_UI_THREAD();
+  if (browser_route.rfind("browser:", 0) == 0) {
+    const int routed_identifier = std::atoi(browser_route.c_str() + 8);
+    for (const auto& browser : browsers_) {
+      if (browser->GetIdentifier() == routed_identifier) return browser;
+    }
+    return nullptr;
+  }
+  if (browser_route == "browser" && !browsers_.empty()) {
+    return browsers_.front();
+  }
   if (target_id == "browser" && !browsers_.empty()) return browsers_.front();
   const int identifier = std::atoi(target_id.c_str());
   for (const auto& browser : browsers_) {

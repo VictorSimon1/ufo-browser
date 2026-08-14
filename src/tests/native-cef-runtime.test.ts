@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildNativeCefArgs, NativeCefRuntime } from "../main/native-cef-runtime.js";
+import { createServer } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  buildNativeCefArgs,
+  NativeCefPrivateConnection,
+  NativeCefRuntime,
+} from "../main/native-cef-runtime.js";
 
 test("NativeCefRuntime starts with a deterministic development port", async () => {
   const runtime = new NativeCefRuntime({ port: 9333 });
@@ -51,4 +59,36 @@ test("Native Overview stays a management page without browser chrome", () => {
   });
   assert.ok(args.includes("--overview"));
   assert.ok(!args.includes("--chrome-shell"));
+});
+
+test("private CEF bridge carries an explicit shared-host browser route", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-private-route-"));
+  const socketPath = join(root, "devtools.sock");
+  let received: any;
+  const server = createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.once("data", (chunk) => {
+      received = JSON.parse(String(chunk).trim());
+      socket.end(`${JSON.stringify({ id: received.id, result: { ok: true } })}\n`);
+    });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    const connection = new NativeCefPrivateConnection(
+      socketPath,
+      "browser",
+      "browser:42",
+    );
+    assert.deepEqual(await connection.send("Browser.getVersion"), { ok: true });
+    await connection.close();
+    assert.equal(received.targetId, "browser");
+    assert.equal(received.browserRoute, "browser:42");
+    assert.equal(received.method, "Browser.getVersion");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
 });

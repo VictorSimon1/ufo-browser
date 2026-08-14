@@ -82,8 +82,10 @@ class UfoCefHandler final : public CefClient,
   void DispatchDevToolsMessage(const std::shared_ptr<DevToolsClient>& client,
                                CefRefPtr<CefDictionaryValue> message,
                                const std::string& target_id,
+                               const std::string& browser_route,
                                const std::string& method);
-  CefRefPtr<CefBrowser> FindDevToolsBrowser(const std::string& target_id);
+  CefRefPtr<CefBrowser> FindDevToolsBrowser(const std::string& target_id,
+                                            const std::string& browser_route);
 
   IMPLEMENT_REFCOUNTING(UfoCefHandler);
 };
