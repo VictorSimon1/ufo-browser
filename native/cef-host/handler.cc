@@ -2,6 +2,8 @@
 
 #include <cstring>
 #include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <sstream>
 #include <utility>
 #include <sys/socket.h>
@@ -241,6 +243,20 @@ void UfoCefHandler::RegisterBrowserSpace(CefRefPtr<CefBrowser> browser,
   space_browsers_[space_id] = browser->GetIdentifier();
 }
 
+void UfoCefHandler::RegisterSpaceWindow(int space_id,
+                                        CefRefPtr<CefWindow> window) {
+  CEF_REQUIRE_UI_THREAD();
+  if (space_id <= 0) return;
+  if (window) space_windows_[space_id] = window;
+  else space_windows_.erase(space_id);
+}
+
+void UfoCefHandler::SetSharedSpaceFactory(
+    std::function<std::string(const std::string&)> factory) {
+  CEF_REQUIRE_UI_THREAD();
+  shared_space_factory_ = std::move(factory);
+}
+
 void UfoCefHandler::SetAgentConnectionActive(bool active) {
   if (!CefCurrentlyOn(TID_UI)) {
     CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::SetAgentConnectionActive, this, active));
@@ -280,29 +296,115 @@ void UfoCefHandler::StartControlSocket(const std::string& path) {
         if (control_running_) continue;
         break;
       }
-      char buffer[256]{};
-      const ssize_t count = ::read(client, buffer, sizeof(buffer) - 1);
-      const std::string command(buffer, count > 0 ? static_cast<size_t>(count) : 0);
-      std::string response = "ok\n";
-      if (command.rfind("show", 0) == 0) {
-        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::ShowMainWindow, this));
-      } else if (command.rfind("hide", 0) == 0) {
-        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::HideMainWindow, this));
-      } else if (command.rfind("focus", 0) == 0) {
-        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::FocusMainWindow, this));
-      } else if (command.rfind("close", 0) == 0) {
-        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::CloseAllBrowsers, this, false));
-      } else if (command.rfind("agent-active-on", 0) == 0) {
-        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::SetAgentConnectionActive, this, true));
-      } else if (command.rfind("agent-active-off", 0) == 0) {
-        CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::SetAgentConnectionActive, this, false));
-      } else if (command.rfind("status", 0) != 0) {
-        response = "error unknown-command\n";
+      std::string command;
+      char buffer[4096];
+      while (command.size() < 64 * 1024) {
+        const ssize_t count = ::read(client, buffer, sizeof(buffer));
+        if (count <= 0) break;
+        command.append(buffer, static_cast<size_t>(count));
+        if (command.find('\n') != std::string::npos) break;
       }
+      if (const auto newline = command.find('\n'); newline != std::string::npos) {
+        command.resize(newline);
+      }
+      struct SharedResult {
+        std::mutex mutex;
+        std::condition_variable ready;
+        bool complete = false;
+        std::string response;
+      };
+      auto result = std::make_shared<SharedResult>();
+      CefPostTask(TID_UI, base::BindOnce(
+          [](UfoCefHandler* handler, std::shared_ptr<SharedResult> result,
+             std::string command) {
+            const auto response = handler->HandleControlCommandOnUi(command);
+            {
+              std::lock_guard<std::mutex> lock(result->mutex);
+              result->response = response;
+              result->complete = true;
+            }
+            result->ready.notify_one();
+          },
+          base::Unretained(this), result, command));
+      std::unique_lock<std::mutex> lock(result->mutex);
+      if (!result->ready.wait_for(lock, std::chrono::seconds(10),
+                                  [&result] { return result->complete; })) {
+        result->response = "error control-timeout";
+      }
+      const std::string response = result->response + "\n";
       ::write(client, response.data(), response.size());
       ::close(client);
     }
   });
+}
+
+std::string UfoCefHandler::HandleControlCommandOnUi(
+    const std::string& command) {
+  CEF_REQUIRE_UI_THREAD();
+  if (command == "show") {
+    ShowMainWindow();
+    return "ok";
+  }
+  if (command == "hide") {
+    HideMainWindow();
+    return "ok";
+  }
+  if (command == "focus") {
+    FocusMainWindow();
+    return "ok";
+  }
+  if (command == "close") {
+    CloseAllBrowsers(false);
+    return "ok";
+  }
+  if (command == "agent-active-on") {
+    SetAgentConnectionActive(true);
+    return "ok";
+  }
+  if (command == "agent-active-off") {
+    SetAgentConnectionActive(false);
+    return "ok";
+  }
+  if (command == "status") return "ok";
+  if (!command.empty() && command.front() == '{') {
+    auto parsed = CefParseJSON(command, JSON_PARSER_RFC);
+    auto root = parsed ? parsed->GetDictionary() : nullptr;
+    if (!root) return "error invalid-json";
+    const auto operation = root->GetString("command").ToString();
+    if (operation == "create-space") {
+      return shared_space_factory_ ? shared_space_factory_(command)
+                                   : "error shared-host-disabled";
+    }
+    const int space_id = root->GetInt("spaceId");
+    const auto it = space_windows_.find(space_id);
+    if (space_id <= 0 || it == space_windows_.end() || !it->second ||
+        it->second->IsClosed()) {
+      return "error space-not-found";
+    }
+    auto window = it->second;
+    if (operation == "show-space") {
+      window->Show();
+      UfoCefWindowSetPresented(window->GetWindowHandle(), true);
+      return "ok";
+    }
+    if (operation == "hide-space") {
+      UfoCefWindowSetPresented(window->GetWindowHandle(), false);
+      return "ok";
+    }
+    if (operation == "focus-space") {
+      window->Show();
+      UfoCefWindowSetPresented(window->GetWindowHandle(), true);
+      window->Activate();
+      window->BringToTop();
+      return "ok";
+    }
+    if (operation == "close-space") {
+      window->Close();
+      return "ok";
+    }
+    if (operation == "status-space") return "ok";
+  }
+  return "error unknown-command";
 }
 
 void UfoCefHandler::StartDevToolsSocket(const std::string& path) {

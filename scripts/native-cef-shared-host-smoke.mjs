@@ -18,12 +18,15 @@ const controlSocket = join(userDataDir, "control.sock");
 const manifestPath = join(userDataDir, "spaces.json");
 const spaceAData = join(userDataDir, "Spaces", "101");
 const spaceBData = join(userDataDir, "Spaces", "202");
+const spaceCData = join(userDataDir, "Spaces", "303");
 await mkdir(spaceAData, { recursive: true });
 await mkdir(spaceBData, { recursive: true });
+await mkdir(spaceCData, { recursive: true });
 
 const web = createServer((request, response) => {
   const label = request.url === "/space-a" ? "Space A"
-    : request.url === "/space-b" ? "Space B"
+      : request.url === "/space-b" ? "Space B"
+        : request.url === "/space-c" ? "Space C"
       : "Overview";
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   response.end(`<!doctype html><title>${label}</title><h1>${label}</h1>`);
@@ -99,14 +102,29 @@ async function connectSpace(spaceId, expectedPath) {
 
 try {
   await runtime.start({ startupTimeoutMs: 20_000 });
+  const dynamic = await runtime.createSharedSpace({
+    id: 303,
+    name: "Shared C",
+    profileName: "Profile C",
+    url: `${origin}/space-c`,
+    cachePath: spaceCData,
+    visible: false,
+  });
+  if (dynamic.browserRoute !== "space:303") {
+    throw new Error(`dynamic shared Space returned the wrong route: ${JSON.stringify(dynamic)}`);
+  }
   const first = await connectSpace(101, "/space-a");
   const second = await connectSpace(202, "/space-b");
+  const third = await connectSpace(303, "/space-c");
   try {
     await first.connection.send("Runtime.evaluate", {
       expression: "localStorage.setItem('ufo-shared-host', 'space-a')",
     });
     await second.connection.send("Runtime.evaluate", {
       expression: "localStorage.setItem('ufo-shared-host', 'space-b')",
+    });
+    await third.connection.send("Runtime.evaluate", {
+      expression: "localStorage.setItem('ufo-shared-host', 'space-c')",
     });
     const firstValue = await first.connection.send("Runtime.evaluate", {
       expression: "localStorage.getItem('ufo-shared-host')",
@@ -116,23 +134,33 @@ try {
       expression: "localStorage.getItem('ufo-shared-host')",
       returnByValue: true,
     });
+    const thirdValue = await third.connection.send("Runtime.evaluate", {
+      expression: "localStorage.getItem('ufo-shared-host')",
+      returnByValue: true,
+    });
     if (firstValue?.result?.value !== "space-a") {
       throw new Error(`Space A context leaked: ${JSON.stringify(firstValue)}`);
     }
     if (secondValue?.result?.value !== "space-b") {
       throw new Error(`Space B context leaked: ${JSON.stringify(secondValue)}`);
     }
+    if (thirdValue?.result?.value !== "space-c") {
+      throw new Error(`Space C context leaked: ${JSON.stringify(thirdValue)}`);
+    }
+    await runtime.controlSharedSpace(303, "status-space");
     console.log(JSON.stringify({
       oneHostProcess: true,
       spaces: [
         { id: 101, target: first.target.targetId, value: firstValue.result.value },
         { id: 202, target: second.target.targetId, value: secondValue.result.value },
+        { id: 303, target: third.target.targetId, value: thirdValue.result.value },
       ],
       isolatedRequestContexts: true,
     }));
   } finally {
     await first.connection.close();
     await second.connection.close();
+    await third.connection.close();
   }
 } finally {
   await runtime.stop();

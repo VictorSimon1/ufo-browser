@@ -42,6 +42,7 @@ class UfoWindowDelegate final : public CefWindowDelegate {
     window->AddChildView(browser_view_);
     if (auto* handler = UfoCefHandler::GetInstance()) {
       if (main_window_) handler->SetMainWindow(window);
+      if (space_id_ > 0) handler->RegisterSpaceWindow(space_id_, window);
       if (space_id_ > 0 && browser_view_->GetBrowser()) {
         handler->RegisterBrowserSpace(browser_view_->GetBrowser(), space_id_);
       }
@@ -115,6 +116,11 @@ class UfoWindowDelegate final : public CefWindowDelegate {
     if (main_window_) {
       if (auto* handler = UfoCefHandler::GetInstance()) {
         handler->SetMainWindow(nullptr);
+      }
+    }
+    if (space_id_ > 0) {
+      if (auto* handler = UfoCefHandler::GetInstance()) {
+        handler->RegisterSpaceWindow(space_id_, nullptr);
       }
     }
     browser_view_ = nullptr;
@@ -203,14 +209,14 @@ std::string StartupUrl() {
   return url.empty() ? "https://www.google.com/" : url.ToString();
 }
 
-void CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
+bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
                        CefRefPtr<CefDictionaryValue> spec,
                        const std::string& presentation_socket) {
-  if (!spec) return;
+  if (!spec) return false;
   const int space_id = spec->GetInt("id");
   const auto url = spec->GetString("url").ToString();
   const auto cache_path = spec->GetString("cachePath").ToString();
-  if (space_id <= 0 || url.empty() || cache_path.empty()) return;
+  if (space_id <= 0 || url.empty() || cache_path.empty()) return false;
 
   CefRequestContextSettings context_settings;
   const auto canonical_cache = std::filesystem::weakly_canonical(
@@ -219,7 +225,7 @@ void CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   context_settings.persist_session_cookies = true;
   auto request_context =
       CefRequestContext::CreateContext(context_settings, nullptr);
-  if (!request_context) return;
+  if (!request_context) return false;
 
   CefBrowserSettings browser_settings;
   auto browser_view = CefBrowserView::CreateBrowserView(
@@ -234,6 +240,7 @@ void CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
       spec->GetString("name").ToString(),
       spec->GetString("profileName").ToString(),
       presentation_socket));
+  return true;
 }
 
 void CreateSharedManifestSpaces(CefRefPtr<UfoCefHandler> handler,
@@ -252,9 +259,26 @@ void CreateSharedManifestSpaces(CefRefPtr<UfoCefHandler> handler,
   const auto presentation_socket =
       command_line->GetSwitchValue("presentation-socket").ToString();
   for (size_t index = 0; index < spaces->GetSize(); ++index) {
-    CreateSharedSpace(handler, spaces->GetDictionary(index),
-                      presentation_socket);
+    (void)CreateSharedSpace(handler, spaces->GetDictionary(index),
+                            presentation_socket);
   }
+}
+
+std::string CreateSharedSpaceFromCommand(
+    CefRefPtr<UfoCefHandler> handler,
+    const std::string& presentation_socket,
+    const std::string& command) {
+  auto parsed = CefParseJSON(command, JSON_PARSER_RFC);
+  auto root = parsed ? parsed->GetDictionary() : nullptr;
+  auto spec = root ? root->GetDictionary("space") : nullptr;
+  if (!spec) return "error invalid-space";
+  const int space_id = spec->GetInt("id");
+  if (!CreateSharedSpace(handler, spec, presentation_socket)) {
+    return "error create-space-failed";
+  }
+  return std::string("{\"ok\":true,\"spaceId\":") +
+      std::to_string(space_id) + ",\"browserRoute\":\"space:" +
+      std::to_string(space_id) + "\"}";
 }
 
 }  // namespace
@@ -276,6 +300,14 @@ void UfoCefApp::OnContextInitialized() {
   if (!control_socket.empty()) handler->StartControlSocket(control_socket);
   const auto devtools_socket = command_line->GetSwitchValue("devtools-socket").ToString();
   if (!devtools_socket.empty()) handler->StartDevToolsSocket(devtools_socket);
+  const auto presentation_socket =
+      command_line->GetSwitchValue("presentation-socket").ToString();
+  auto* handler_raw = handler.get();
+  handler->SetSharedSpaceFactory(
+      [handler_raw, presentation_socket](const std::string& command) {
+        return CreateSharedSpaceFromCommand(handler_raw, presentation_socket,
+                                            command);
+      });
   CefBrowserSettings browser_settings;
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, StartupUrl(), browser_settings, nullptr, nullptr,

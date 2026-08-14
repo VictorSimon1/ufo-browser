@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <list>
 #include <map>
 #include <set>
@@ -42,6 +43,9 @@ class UfoCefHandler final : public CefClient,
   void FocusMainWindow();
   void SetMainWindow(CefRefPtr<CefWindow> window);
   void RegisterBrowserSpace(CefRefPtr<CefBrowser> browser, int space_id);
+  void RegisterSpaceWindow(int space_id, CefRefPtr<CefWindow> window);
+  void SetSharedSpaceFactory(
+      std::function<std::string(const std::string&)> factory);
   void SetAgentConnectionActive(bool active);
   bool IsAgentConnectionActive() const { return agent_active_; }
   void StartControlSocket(const std::string& path);
@@ -79,6 +83,8 @@ class UfoCefHandler final : public CefClient,
   std::map<std::string, int> devtools_target_browsers_;
   std::map<int, int> browser_spaces_;
   std::map<int, int> space_browsers_;
+  std::map<int, CefRefPtr<CefWindow>> space_windows_;
+  std::function<std::string(const std::string&)> shared_space_factory_;
   std::mutex devtools_targets_mutex_;
 
   void HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& client);
@@ -89,6 +95,7 @@ class UfoCefHandler final : public CefClient,
                                const std::string& method);
   CefRefPtr<CefBrowser> FindDevToolsBrowser(const std::string& target_id,
                                             const std::string& browser_route);
+  std::string HandleControlCommandOnUi(const std::string& command);
 
   IMPLEMENT_REFCOUNTING(UfoCefHandler);
 };

@@ -48,6 +48,15 @@ export type NativeCefRuntimeOptions = {
   devtoolsSocket?: string;
 };
 
+export type NativeCefSharedSpaceSpec = {
+  id: number;
+  url: string;
+  cachePath: string;
+  name?: string;
+  profileName?: string;
+  visible?: boolean;
+};
+
 type PendingCommand = {
   resolve: (result: any) => void;
   reject: (error: Error) => void;
@@ -460,13 +469,39 @@ export class NativeCefRuntime {
   }
 
   async control(command: "show" | "hide" | "focus" | "close" | "status" | "agent-active-on" | "agent-active-off") {
+    return this.sendControlPayload(command);
+  }
+
+  async createSharedSpace(space: NativeCefSharedSpaceSpec) {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "create-space",
+      space,
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    const result = JSON.parse(response);
+    if (!result?.ok || result.spaceId !== space.id) {
+      throw new Error(`Native CEF shared Space creation failed: ${response}`);
+    }
+    return result as { ok: true; spaceId: number; browserRoute: string };
+  }
+
+  async controlSharedSpace(
+    spaceId: number,
+    command: "show-space" | "hide-space" | "focus-space" | "close-space" | "status-space",
+  ) {
+    const response = await this.sendControlPayload(JSON.stringify({ command, spaceId }));
+    if (response.startsWith("error ")) throw new Error(response);
+    return response;
+  }
+
+  private async sendControlPayload(payload: string) {
     const path = this.controlSocketPath || this.defaults.controlSocket;
     if (!path) throw new Error("Native CEF control socket is not configured");
     const deadline = Date.now() + 5_000;
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
-        return await sendControlCommand(path, command);
+        return await sendControlCommand(path, payload);
       } catch (error) {
         lastError = error;
         await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
