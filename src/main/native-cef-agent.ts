@@ -10,12 +10,12 @@ import { BrowserStateStore } from "./state-store.js";
 import { SpaceLeaseRegistry } from "./space-lease.js";
 import { NativeCefOverview } from "./native-cef-overview.js";
 import { readChromeCookies } from "./chrome-import/cookies.js";
-import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { writeAndVerifyCookies } from "./chrome-import/cookie-writer.js";
 import { NativeCefPresentationCoordinator } from "./native-cef-presentation.js";
 import { NativeCefProfileSync } from "./native-cef-profile-sync.js";
 import { NativeCefProfileService } from "./native-cef-profile-service.js";
 import type { BrowserProfileRecord } from "./profile-registry.js";
+import { createNativeKeychain } from "./native-cef-keychain.js";
 
 // Native CEF is the production browser shell, so it shares the existing UFO
 // Profile registry, imported partitions, and default Agent socket. Tests and
@@ -77,7 +77,10 @@ const manager = new NativeCefTaskSpaceManager({
     const sourceRoot = profileSourceRoot(profile, sourcePartitionsRoot);
     const cookiePath = await firstFile(join(sourceRoot, "Network", "Cookies"), join(sourceRoot, "Cookies"));
     if (!cookiePath) return;
-    const result = await readChromeCookies(cookiePath, new MacKeychainProvider(keychainHelper));
+    const result = await readChromeCookies(
+      cookiePath,
+      createNativeKeychain(keychainHelper),
+    );
     await writeAndVerifyCookies(target, result.cookies);
   },
 });
@@ -100,6 +103,7 @@ profileSync = new NativeCefProfileSync({
   sourcePartitionsRoot,
   checkpointRoot: join(userDataPath, "Profile Sync", "checkpoints"),
   keychainHelper,
+  useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   storageRevisionWorker: process.env.UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER ||
     join(process.cwd(), "dist/main/profile-sync-storage-revision-worker.js"),
   storageWorkRoot: join(userDataPath, "Profile Sync", "storage-work"),

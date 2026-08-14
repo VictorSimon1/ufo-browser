@@ -2,12 +2,12 @@ import { join } from "node:path";
 import { ChromeLoginImportService } from "./chrome-import/service.js";
 import { createChromeStableSourceAdapter } from "./chrome-import/discovery.js";
 import { readChromeCookies } from "./chrome-import/cookies.js";
-import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { inspectChromeStorageSnapshot } from "./chrome-import/storage-preflight.js";
 import { ProfileCloneService } from "./profile-clone/service.js";
 import { ProfileAvatarStore } from "./profile-avatar-store.js";
 import type { BrowserProfileRegistry } from "./profile-registry.js";
 import type { NativeCefTaskSpaceManager } from "./native-cef-task-space-manager.js";
+import { createNativeKeychain } from "./native-cef-keychain.js";
 
 /** Profile operations shared by the Native CEF Overview and Agent service. */
 export class NativeCefProfileService {
@@ -25,7 +25,7 @@ export class NativeCefProfileService {
     chromeUserDataPath?: string;
     useMockKeychain?: boolean;
   }) {
-    const keychain = new MacKeychainProvider(options.keychainHelper);
+    const keychain = createNativeKeychain(options.keychainHelper, options.useMockKeychain);
     const sourceAdapter = createChromeStableSourceAdapter(options.chromeUserDataPath);
     this.chromeImport = new ChromeLoginImportService({
       userDataPath: options.userDataPath,

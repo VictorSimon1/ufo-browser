@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readChromeCookies } from "./chrome-import/cookies.js";
-import { MacKeychainProvider } from "./chrome-import/keychain.js";
 import { detectChromeRunning } from "./chrome-import/discovery.js";
 import { CHROME_STORAGE_PATHS } from "./chrome-import/storage-preflight.js";
 import type { BrowserProfileRegistry } from "./profile-registry.js";
@@ -11,6 +10,7 @@ import { diffProfileCookies } from "./profile-sync/cookie-diff.js";
 import { applyProfileCookieDiff, readProfileCookies } from "./profile-sync/cookie-target.js";
 import { createStorageRevisionWorker } from "./profile-sync/storage-revision-worker-reader.js";
 import { replaceProfileStorageDataset } from "./profile-sync/storage-copy.js";
+import { createNativeKeychain } from "./native-cef-keychain.js";
 
 export type NativeCefProfileSyncOptions = {
   manager: NativeCefTaskSpaceManager;
@@ -18,6 +18,7 @@ export type NativeCefProfileSyncOptions = {
   sourcePartitionsRoot: string;
   checkpointRoot: string;
   keychainHelper: string;
+  useMockKeychain?: boolean;
   storageRevisionWorker?: string;
   storageWorkRoot?: string;
   chromeUserDataRoot?: string;
@@ -74,7 +75,10 @@ export class NativeCefProfileSync {
     const sourceRoot = this.sourceRoot(profile);
     const cookiePath = await firstFile(join(sourceRoot, "Network", "Cookies"), join(sourceRoot, "Cookies"));
     if (!cookiePath) return;
-    const source = await readChromeCookies(cookiePath, new MacKeychainProvider(this.options.keychainHelper));
+    const source = await readChromeCookies(
+      cookiePath,
+      createNativeKeychain(this.options.keychainHelper, this.options.useMockKeychain),
+    );
     const target = await this.options.manager.createCookieWriteTarget(spaceId);
     try {
       const targetCookies = await readProfileCookies(target);
@@ -103,7 +107,10 @@ export class NativeCefProfileSync {
     const sourceRoot = this.sourceRoot(profile);
     const cookiePath = await firstFile(join(sourceRoot, "Network", "Cookies"), join(sourceRoot, "Cookies"));
     if (!cookiePath) return;
-    const source = await readChromeCookies(cookiePath, new MacKeychainProvider(this.options.keychainHelper));
+    const source = await readChromeCookies(
+      cookiePath,
+      createNativeKeychain(this.options.keychainHelper, this.options.useMockKeychain),
+    );
     const target = await this.options.manager.createCookieWriteTarget(spaceId);
     try {
       const diff = diffProfileCookies(source.cookies, await readProfileCookies(target), undefined);
