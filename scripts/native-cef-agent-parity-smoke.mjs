@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { access, mkdtemp } from "node:fs/promises";
+import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -22,8 +22,17 @@ const fixture = createServer((request, response) => {
     response.end("<!doctype html><title>Popup Child</title><button>Popup action</button>");
     return;
   }
+  if (request.url === "/download") {
+    response.writeHead(200, {
+      "content-type": "text/plain",
+      "content-disposition": "attachment; filename=agent-native-download.txt",
+    });
+    response.end("agent native download\n");
+    return;
+  }
   response.end(`<!doctype html><title>Parity Main</title>
     <button id=open onclick="window.open('/popup','named-popup')">Open popup</button>
+    <a id=download href="/download">Download</a>
     <iframe title="cross-origin child" src="http://localhost:${port}/child"></iframe>`);
 });
 await new Promise((resolveListen) => fixture.listen(0, "127.0.0.1", () => {
@@ -72,7 +81,12 @@ const task = await bootstrapTaskSpace({ name: 'native parity' })
 await openOrReuseTab('http://127.0.0.1:${port}/main', { wait: true, timeout: 20000 })
 const snapshot = await snapshotRaw({ includeActionMarks: true })
 const before = await listTabs()
-await js("void window.open('http://127.0.0.1:${port}/popup', 'native-agent-popup'); true")
+const popupEval = await js("void window.open('http://127.0.0.1:${port}/popup', 'native-agent-popup'); true")
+const popupTargets = await cdp('Target.getTargets')
+const pendingDownload = page.waitForEvent('download', { timeout: 10000 })
+await click('#download', { label: 'download fixture' })
+const download = await pendingDownload
+const downloadPath = await download.path()
 const popupDeadline = Date.now() + 10000
 let after = []
 while (Date.now() < popupDeadline) {
@@ -80,7 +94,8 @@ while (Date.now() < popupDeadline) {
   if (after.some((tab) => !before.some((item) => item.targetId === tab.targetId))) break
   await new Promise((resolve) => setTimeout(resolve, 100))
 }
-cliLog(JSON.stringify({ snapshot, before, after }))
+cliLog(JSON.stringify({ snapshot, before, after, popupEval, popupTargets,
+  download: { suggestedFilename: download.suggestedFilename(), url: download.url(), path: downloadPath } }))
 `);
 const code = await new Promise((resolveCode, rejectCode) => {
   cli.once("error", rejectCode);
@@ -93,9 +108,16 @@ const result = JSON.parse(stdout.trim().split("\n").at(-1));
 assert.match(result.snapshot.content, /iframe/);
 assert.match(result.snapshot.content, /Frame action/);
 assert.ok(result.snapshot.refs.some((ref) => ref.frameId), "iframe refs must preserve frameId");
+assert.ok(result.after.some((tab) => !result.before.some((item) => item.targetId === tab.targetId)),
+  `popup target was not exposed through listTabs: ${JSON.stringify(result.after)}`);
+assert.equal(result.download.suggestedFilename, "agent-native-download.txt");
+assert.equal(result.download.url, `http://127.0.0.1:${port}/download`);
+assert.equal(await readFile(result.download.path, "utf8"), "agent native download\n");
 console.log(JSON.stringify({
   snapshotHasIframe: true,
   iframeRef: result.snapshot.refs.find((ref) => ref.frameId)?.frameId,
+  popupVisible: true,
+  download: { suggestedFilename: result.download.suggestedFilename, url: result.download.url },
 }));
 agent.kill("SIGTERM");
 fixture.close();

@@ -51,6 +51,10 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
   private async dispatch(connectionId: string, spaceId: number, generation: number, method: string, params: any, sessionId?: string) {
     const runtime = await this.manager.ensureRuntime(spaceId);
     if (method === "Browser.getVersion") return runtime.version();
+    if (method === "Browser.setDownloadBehavior") {
+      const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
+      return browser.send(method, params);
+    }
     if (method === "Target.getTargets") {
       const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
       const result = await browser.send("Target.getTargets");
@@ -58,7 +62,12 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
       // query and must return immediately even while the durable Space state
       // store is flushing a popup/title update; serializing the save here can
       // otherwise make listTabs appear to hang after window.open().
-      void this.manager.refreshTabsFromTargetInfos(spaceId, result?.targetInfos ?? []).catch(() => undefined);
+      // Keep the in-memory tab projection current before returning the RPC.
+      // The reconcile itself never waits on durable state I/O; this makes a
+      // popup visible to listTabs immediately while save() remains queued in
+      // the background. Previously listTabs could observe a stale Space after
+      // window.open() because every refresh was fire-and-forget.
+      await this.manager.refreshTabsFromTargetInfos(spaceId, result?.targetInfos ?? []);
       return { targetInfos: result?.targetInfos ?? [] };
     }
     if (method === "Target.createTarget") {

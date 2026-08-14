@@ -56,6 +56,7 @@
     "native:cef:agent:smoke": "npm run build && node scripts/native-cef-agent-smoke.mjs",
     "native:cef:agent:parity:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-agent-parity-smoke.mjs",
     "native:cef:popup:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-popup-smoke.mjs",
+    "native:cef:download:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-download-smoke.mjs",
     "native:cef:app": "npm run native:cef:build && npm run build && node dist/main/native-cef-application.js",
     "native:cef:app:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-application-smoke.mjs",
     "native:cef:presentation:smoke": "npm run build && npm run native:cef:build && node scripts/native-cef-presentation-smoke.mjs",
