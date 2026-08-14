@@ -48,7 +48,8 @@ SET_EXECUTABLE_TARGET_PROPERTIES(${CEF_TARGET})
 target_include_directories(${CEF_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 target_link_libraries(${CEF_TARGET} libcef_dll_wrapper ${CEF_STANDARD_LIBS})
 find_library(COCOA_LIBRARY Cocoa REQUIRED)
-target_link_libraries(${CEF_TARGET} ${COCOA_LIBRARY})
+find_library(QUARTZCORE_LIBRARY QuartzCore REQUIRED)
+target_link_libraries(${CEF_TARGET} ${COCOA_LIBRARY} ${QUARTZCORE_LIBRARY})
 set_target_properties(${CEF_TARGET} PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/mac/Info.plist.in"
 )

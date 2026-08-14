@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
 
 #include <cmath>
 #include <cstring>
@@ -245,22 +246,29 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
     }
     // Keep the window ordered and backed by Chromium even when not presented
     // to a human. This is deliberately separate from the Agent overlay panel.
-    host.alphaValue = presented ? 1.0 : 0.0;
+    // A short AppKit cross-fade removes the hard flash when Overview and a
+    // native Chrome Space exchange presentation, without animating the page
+    // or changing the compositor surface used for Agent screenshots.
     host.ignoresMouseEvents = !presented;
-    if (gPanel && gHostWindow == host) {
-      gPanel.alphaValue = presented ? 1.0 : 0.0;
-      gPanel.ignoresMouseEvents = !presented;
-    }
-    if (gShellPanel && gShellHostWindow == host) {
-      gShellPanel.alphaValue = presented ? 1.0 : 0.0;
-      gShellPanel.ignoresMouseEvents = !presented;
-      PositionShellButton();
-    }
     if (presented) {
       [host orderFrontRegardless];
     } else {
       [host orderFront:nil];
     }
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
+      context.duration = 0.16;
+      context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+      host.animator.alphaValue = presented ? 1.0 : 0.0;
+      if (gPanel && gHostWindow == host) {
+        gPanel.ignoresMouseEvents = !presented;
+        gPanel.animator.alphaValue = presented ? 1.0 : 0.0;
+      }
+      if (gShellPanel && gShellHostWindow == host) {
+        gShellPanel.ignoresMouseEvents = !presented;
+        gShellPanel.animator.alphaValue = presented ? 1.0 : 0.0;
+        PositionShellButton();
+      }
+    } completionHandler:nil];
     [view release];
   };
   if (NSThread.isMainThread) update();
@@ -295,7 +303,7 @@ void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_sock
     gShellPanel.opaque = NO;
     gShellPanel.backgroundColor = NSColor.clearColor;
     gShellPanel.hasShadow = NO;
-    gShellPanel.alphaValue = host.alphaValue > 0.01 ? 1.0 : 0.0;
+    gShellPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
     gShellPanel.ignoresMouseEvents = host.ignoresMouseEvents;
     gShellPanel.level = host.level + 1;
     gShellPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
@@ -352,7 +360,7 @@ void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
     gPanel.hostWindow = host;
     gPanel.opaque = NO;
     gPanel.backgroundColor = NSColor.clearColor;
-    gPanel.alphaValue = host.alphaValue > 0.01 ? 1.0 : 0.0;
+    gPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
     gPanel.hasShadow = NO;
     gPanel.ignoresMouseEvents = NO;
     gPanel.hidesOnDeactivate = NO;
