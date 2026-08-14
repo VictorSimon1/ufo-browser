@@ -61,6 +61,7 @@
     "native:cef:download:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-download-smoke.mjs",
     "native:cef:events:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-events-smoke.mjs",
     "native:cef:agent:events:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-agent-events-smoke.mjs",
+    "native:cef:profile:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-profile-smoke.mjs",
     "native:cef:app": "npm run native:cef:build && npm run build:native && node dist/main/native-cef-application.js",
     "native:cef:app:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-application-smoke.mjs",
     "native:cef:presentation:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-presentation-smoke.mjs",
