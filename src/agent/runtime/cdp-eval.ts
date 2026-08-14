@@ -77,6 +77,12 @@ async function runtimeEvaluate(
         expression,
         returnByValue: true,
         awaitPromise,
+        // Agent-side page.evaluate is a trusted automation action. Mark it as
+        // a user gesture so Chromium's popup policy matches the existing UFO
+        // runtime when an agent intentionally calls window.open(). Human
+        // input is still blocked by the outer native overlay, while the
+        // gesture bit only affects page APIs such as popup creation.
+        userGesture: true,
       },
       sessionId,
     );

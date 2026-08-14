@@ -72,7 +72,15 @@ const task = await bootstrapTaskSpace({ name: 'native parity' })
 await openOrReuseTab('http://127.0.0.1:${port}/main', { wait: true, timeout: 20000 })
 const snapshot = await snapshotRaw({ includeActionMarks: true })
 const before = await listTabs()
-cliLog(JSON.stringify({ snapshot, before }))
+await js("void window.open('http://127.0.0.1:${port}/popup', 'native-agent-popup'); true")
+const popupDeadline = Date.now() + 10000
+let after = []
+while (Date.now() < popupDeadline) {
+  after = await listTabs()
+  if (after.some((tab) => !before.some((item) => item.targetId === tab.targetId))) break
+  await new Promise((resolve) => setTimeout(resolve, 100))
+}
+cliLog(JSON.stringify({ snapshot, before, after }))
 `);
 const code = await new Promise((resolveCode, rejectCode) => {
   cli.once("error", rejectCode);

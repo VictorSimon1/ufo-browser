@@ -42,7 +42,7 @@ for (const name of ["ufo-browser", "x-browser"]) {
       break;
     }
   }
-  if (!source) throw new Error(`CLI executable is missing from native/electron App bundle: ${name}`);
+  if (!source) throw new Error(`CLI executable is missing from the Native CEF App bundle: ${name}`);
   const target = join(binRoot, name);
   const state = await lstat(target).catch(() => null);
   if (state?.isSymbolicLink()) {

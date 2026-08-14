@@ -5,6 +5,7 @@ import { build } from "esbuild";
 
 const root = process.cwd();
 const dist = join(root, "dist");
+const nativeOnly = process.env.UFO_NATIVE_ONLY === "1";
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
@@ -16,14 +17,16 @@ const shared = {
   logLevel: "info",
 };
 
-await build({
-  ...shared,
-  entryPoints: ["src/electron.ts"],
-  outfile: "dist/main/electron.js",
-  platform: "node",
-  format: "esm",
-  external: ["electron"],
-});
+if (!nativeOnly) {
+  await build({
+    ...shared,
+    entryPoints: ["src/electron.ts"],
+    outfile: "dist/main/electron.js",
+    platform: "node",
+    format: "esm",
+    external: ["electron"],
+  });
+}
 
 await build({
   ...shared,
@@ -99,18 +102,20 @@ await build({
   format: "esm",
 });
 
-await build({
-  ...shared,
-  entryPoints: {
-    shell: "src/preload/shell.ts",
-    page: "src/preload/page.ts",
-  },
-  outdir: "dist/preload",
-  platform: "node",
-  format: "cjs",
-  outExtension: { ".js": ".cjs" },
-  external: ["electron"],
-});
+if (!nativeOnly) {
+  await build({
+    ...shared,
+    entryPoints: {
+      shell: "src/preload/shell.ts",
+      page: "src/preload/page.ts",
+    },
+    outdir: "dist/preload",
+    platform: "node",
+    format: "cjs",
+    outExtension: { ".js": ".cjs" },
+    external: ["electron"],
+  });
+}
 
 await build({
   bundle: true,
@@ -136,14 +141,16 @@ await build({
   banner: { js: "#!/usr/bin/env node" },
 });
 
-await build({
-  ...shared,
-  entryPoints: ["src/tests/*.test.ts"],
-  outdir: "dist/tests",
-  platform: "node",
-  format: "esm",
-  external: ["electron"],
-});
+if (!nativeOnly) {
+  await build({
+    ...shared,
+    entryPoints: ["src/tests/*.test.ts"],
+    outdir: "dist/tests",
+    platform: "node",
+    format: "esm",
+    external: ["electron"],
+  });
+}
 
 for (const name of ["agent-overlay", "chat", "overview", "browser"]) {
   await cp(`src/renderer/${name}.html`, `dist/renderer/${name}.html`);
@@ -212,7 +219,7 @@ for (const name of ["ufo-browser", "x-browser"]) {
   await cp("scripts/ufo-browser-launcher.sh", join(dist, "bin", name));
   await chmod(join(dist, "bin", name), 0o755);
 }
-console.log("UFO-Browser build complete");
+console.log(`${nativeOnly ? "UFO-Browser Native CEF" : "UFO-Browser"} build complete`);
 
 function run(command, args) {
   return new Promise((resolvePromise, reject) => {
