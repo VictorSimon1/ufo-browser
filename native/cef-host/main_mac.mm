@@ -125,7 +125,7 @@ static bool StartPackagedAgentService() {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (g_stopping_agent || g_termination_requested) return;
       if (auto* handler = UfoCefHandler::GetInstance()) {
-        handler->CloseAllBrowsers(true);
+        handler->RequestApplicationClose(true);
       } else {
         [NSApp terminate:nil];
       }
@@ -184,6 +184,14 @@ static void StopPackagedAgentService() {
   g_stopping_agent = false;
 }
 
+void UfoCefRequestProductTermination() {
+  // Chrome Runtime can keep its message loop alive after its last native
+  // window is closed. Use the same bounded shutdown path as SIGTERM so the
+  // browser, managed Agent, and Chromium helpers leave as one product tree.
+  if (g_agent_task && g_agent_task.isRunning) [g_agent_task terminate];
+  raise(SIGTERM);
+}
+
 static void HandleTerminationSignal(int signal_number) {
   (void)signal_number;
   if (g_termination_requested) return;
@@ -213,7 +221,7 @@ static void StartSignalPump() {
       if (marker != 'T') continue;
       CefPostTask(TID_UI, base::BindOnce([] {
         if (auto* handler = UfoCefHandler::GetInstance()) {
-          handler->CloseAllBrowsers(true);
+          handler->RequestApplicationClose(true);
         } else {
           _exit(0);
         }
@@ -343,7 +351,7 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
   // test harness. Do not wait for page beforeunload/Views close negotiation
   // here: the outer App has already decided to terminate, so force the CEF
   // browser tree closed and let OnBeforeClose quit the message loop.
-  if (handler && !handler->IsClosing()) handler->CloseAllBrowsers(true);
+  if (handler && !handler->IsClosing()) handler->RequestApplicationClose(true);
 }
 @end
 

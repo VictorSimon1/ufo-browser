@@ -130,6 +130,10 @@ export class NativeCefPresentationCoordinator implements NativeCefOverviewPresen
         await this.manager.setLifecycle(spaceId, "completed");
         return;
       }
+      if (message.command === "close-space") {
+        await this.closeSpace(spaceId);
+        return;
+      }
     }
     throw new Error(`unknown presentation command: ${command}`);
   }

@@ -189,7 +189,7 @@ const attachedHostMonitor = attachedHostEnabled && Number.isInteger(attachedHost
       try {
         process.kill(attachedHostPid, 0);
       } catch {
-        void shutdown().finally(() => process.exit(0));
+        process.exit(0);
       }
     }, 1_000)
   : undefined;
@@ -209,8 +209,14 @@ async function shutdown() {
       join(process.env.TMPDIR || "/tmp", `ufo-browser-devtools-${process.pid}`),
   ), { recursive: true, force: true }).catch(() => undefined);
 }
-process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
-process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
+process.once("SIGTERM", () => {
+  if (attachedHostEnabled) process.exit(0);
+  else void shutdown().finally(() => process.exit(0));
+});
+process.once("SIGINT", () => {
+  if (attachedHostEnabled) process.exit(0);
+  else void shutdown().finally(() => process.exit(0));
+});
 process.once("exit", () => { void manager.shutdown(); });
 
 async function firstFile(...paths: string[]) {

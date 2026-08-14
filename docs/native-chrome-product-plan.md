@@ -79,6 +79,9 @@ Already covered by the Native vertical slice:
 - outer AppKit Agent-control overlay and native input interception;
 - ownership-persistent AppKit control capsule with explicit human takeover and
   task termination routed through the UFO lease/state machine;
+- native close routing that locks Agent-owned Space close buttons, sends a
+  user-owned Space through the durable Space/Presentation state machine, and
+  terminates the full UFO process tree when Overview closes;
 - drag-installable Native DMG with bundled Node, CLI, Skill, CEF host/helpers.
 
 ## Migration phases
@@ -97,13 +100,11 @@ returned by the running CEF host and command-line tests that protect this split.
 
 Replace the development-only loopback DevTools HTTP/WebSocket adapter with a
 per-runtime Unix-socket bridge backed by `CefBrowserHost::SendDevToolsMessage`
-and `CefDevToolsMessageObserver`. The first browser-level slice is now
-implemented and verified for `Browser.getVersion` and `Target.getTargets`.
-The Node side keeps the existing `CdpTransport` and multiplexed Agent protocol,
-so Skill callers do not change. Page target attachment, OOPIF sessions, and
-event parity remain explicitly opt-in until their CEF Chrome Runtime
-`Target.sendMessageToTarget` behavior passes a dedicated suite; the tested
-CDP adapter remains the default during this transition.
+and `CefDevToolsMessageObserver`. The browser-level and page-level slices now
+cover version/target discovery, flattened attachment, OOPIF routing,
+evaluation, navigation, screenshots, input, popup/download behavior, and page
+events. The Node side keeps the existing `CdpTransport` and multiplexed Agent
+protocol, so Skill callers do not change.
 
 ### Phase 3 — Full lifecycle and profile acceptance
 

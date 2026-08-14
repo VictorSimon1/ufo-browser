@@ -252,6 +252,18 @@ void UfoCefHandler::CloseAllBrowsers(bool force_close) {
   for (const auto& browser : browsers_) browser->GetHost()->CloseBrowser(force_close);
 }
 
+void UfoCefHandler::RequestApplicationClose(bool force_close) {
+  if (!CefCurrentlyOn(TID_UI)) {
+    CefPostTask(TID_UI, base::BindOnce(
+        &UfoCefHandler::RequestApplicationClose, this, force_close));
+    return;
+  }
+  if (closing_) return;
+  closing_ = true;
+  CefPostTask(TID_UI, base::BindOnce(
+      &UfoCefHandler::CloseAllBrowsers, this, force_close));
+}
+
 void UfoCefHandler::ShowMainWindow() {
   if (!CefCurrentlyOn(TID_UI)) {
     CefPostTask(TID_UI, base::BindOnce(&UfoCefHandler::ShowMainWindow, this));
@@ -330,8 +342,20 @@ void UfoCefHandler::RegisterSpaceWindow(int space_id,
                                         CefRefPtr<CefWindow> window) {
   CEF_REQUIRE_UI_THREAD();
   if (space_id <= 0) return;
-  if (window) space_windows_[space_id] = window;
-  else space_windows_.erase(space_id);
+  if (window) {
+    space_windows_[space_id] = window;
+  } else {
+    space_windows_.erase(space_id);
+    closing_spaces_.erase(space_id);
+  }
+}
+
+bool UfoCefHandler::IsSpaceAgentConnectionActive(int space_id) const {
+  return space_id > 0 && agent_active_spaces_.count(space_id) > 0;
+}
+
+bool UfoCefHandler::IsSpaceCloseAuthorized(int space_id) const {
+  return closing_ || (space_id > 0 && closing_spaces_.count(space_id) > 0);
 }
 
 void UfoCefHandler::SetPresentationSocket(std::string path) {
@@ -555,6 +579,13 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       value->SetDictionary(response);
       return JsonString(value);
     }
+    if (operation == "request-main-window-close") {
+      if (!main_window_ || main_window_->IsClosed()) {
+        return "error main-window-not-found";
+      }
+      UfoCefRequestProductTermination();
+      return "ok";
+    }
     const int space_id = root->GetInt("spaceId");
     const auto it = space_windows_.find(space_id);
     if (space_id <= 0 || it == space_windows_.end() || !it->second ||
@@ -640,7 +671,12 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     }
     if (operation == "close-space") {
       agent_active_spaces_.erase(space_id);
+      closing_spaces_.insert(space_id);
       if (visible_space_id_ == space_id) SetVisibleSpace(0);
+      window->Close();
+      return "ok";
+    }
+    if (operation == "request-window-close-space") {
       window->Close();
       return "ok";
     }

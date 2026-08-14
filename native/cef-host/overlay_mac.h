@@ -35,6 +35,8 @@ void UfoCefSpaceControllerSet(void* cef_view_handle,
 void UfoCefChromeControlsClear(void* cef_view_handle);
 bool UfoCefChromeControlsArePresentedForWindow(void* cef_view_handle);
 bool UfoCefChromeControlsOwnWindow(void* ns_window);
+void UfoCefRequestSpaceClose(int space_id, const char* presentation_socket);
+void UfoCefRequestProductTermination();
 
 #ifdef __cplusplus
 }

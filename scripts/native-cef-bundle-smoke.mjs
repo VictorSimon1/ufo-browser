@@ -2,6 +2,7 @@ import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const appRoot = join(root, "release-native/UFO-Browser.app");
@@ -57,7 +58,31 @@ try {
   if (exitCode !== 0 || !stdout.includes("Example Domain") || !stdout.includes("ego-browser-shot-")) {
     throw new Error(`Native bundle CLI failed (${exitCode})\n${stdout}\n${stderr}\n${appStderr}`);
   }
-  console.log(JSON.stringify({ appRoot, socket, oneUfoMainProcess: true, agent: true, screenshot: true }));
+  const controlSocket = join(tmpdir(), `ufo-browser-native-${app.pid}`, "control", "overview.sock");
+  await waitForFile(controlSocket, app, 5_000);
+  await sendSocket(controlSocket, JSON.stringify({ command: "request-main-window-close" })).catch(() => undefined);
+  const appExit = await waitForExit(app, 5_000);
+  if (appExit !== 0) {
+    throw new Error(`Closing Native Overview did not exit UFO cleanly (${appExit})\n${appStderr}`);
+  }
+  const processDeadline = Date.now() + 3_000;
+  let remaining = [];
+  while (Date.now() < processDeadline) {
+    remaining = (await ps()).filter((line) => line.includes(appRoot));
+    if (remaining.length === 0) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  if (remaining.length > 0) {
+    throw new Error(`Native Overview close left UFO child processes alive:\n${remaining.join("\n")}`);
+  }
+  console.log(JSON.stringify({
+    appRoot,
+    socket,
+    oneUfoMainProcess: true,
+    agent: true,
+    screenshot: true,
+    nativeOverviewCloseQuits: true,
+  }));
 } finally {
   if (app.exitCode === null) app.kill("SIGTERM");
   await waitForExit(app, 5_000).catch(() => undefined);
@@ -91,5 +116,32 @@ function waitForExit(child, timeoutMs) {
     const timer = setTimeout(() => reject(new Error("process exit timed out")), timeoutMs);
     child.once("error", (error) => { clearTimeout(timer); reject(error); });
     child.once("exit", (code) => { clearTimeout(timer); resolveExit(code ?? 1); });
+  });
+}
+
+function sendSocket(path, command) {
+  return new Promise((resolveResponse, reject) => {
+    const socket = createConnection(path);
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { response += chunk; });
+    socket.once("error", reject);
+    socket.once("close", () => resolveResponse(response.trim()));
+    socket.once("connect", () => socket.end(`${command}\n`));
+  });
+}
+
+function ps() {
+  return new Promise((resolvePs, rejectPs) => {
+    const child = spawn("/bin/ps", ["-axo", "command"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.once("error", rejectPs);
+    child.once("exit", (code) => code === 0
+      ? resolvePs(output.split("\n"))
+      : rejectPs(new Error(`ps failed (${code})`)));
   });
 }

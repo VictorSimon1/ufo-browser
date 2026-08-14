@@ -145,6 +145,24 @@ class UfoWindowDelegate final : public CefWindowDelegate {
   }
 
   bool CanClose(CefRefPtr<CefWindow> window) override {
+    if (auto* handler = UfoCefHandler::GetInstance()) {
+      if (space_id_ > 0 && !handler->IsSpaceCloseAuthorized(space_id_)) {
+        // Human window-close must go through the UFO Space state machine so
+        // the durable record, Agent lease, native surface, and Overview
+        // presentation cannot diverge. While an Agent owns the Space, the
+        // titlebar remains draggable but its close button stays locked.
+        if (!handler->IsSpaceAgentConnectionActive(space_id_)) {
+          UfoCefRequestSpaceClose(space_id_, presentation_socket_.c_str());
+        }
+        return false;
+      }
+      if (space_id_ == 0 && main_window_ && !handler->IsClosing()) {
+        // Closing Overview is closing the product, not merely destroying the
+        // coordinator window and leaving warm Spaces in a headless process.
+        UfoCefRequestProductTermination();
+        return false;
+      }
+    }
     auto browser = browser_view_ ? browser_view_->GetBrowser() : nullptr;
     return !browser || browser->GetHost()->TryCloseBrowser();
   }

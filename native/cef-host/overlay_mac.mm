@@ -711,6 +711,28 @@ bool UfoCefChromeControlsOwnWindow(void* ns_window) {
   return window && (window == gShellPanel || window == gSpaceControllerPanel);
 }
 
+void UfoCefRequestSpaceClose(int space_id, const char* presentation_socket) {
+  if (space_id <= 0 || !presentation_socket || !*presentation_socket) return;
+  const std::string socketPath = presentation_socket;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    if (socketPath.size() >= sizeof(sockaddr_un{}.sun_path)) return;
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socketPath.c_str(),
+                 sizeof(address.sun_path) - 1);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&address),
+                  sizeof(address)) == 0) {
+      const std::string command =
+          std::string("{\"command\":\"close-space\",\"spaceId\":") +
+          std::to_string(space_id) + "}\n";
+      (void)::write(fd, command.data(), command.size());
+    }
+    ::close(fd);
+  });
+}
+
 void UfoAgentOverlaySet(void* cef_view_handle,
                         bool active,
                         const char* label,

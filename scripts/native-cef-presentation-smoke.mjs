@@ -11,6 +11,7 @@ const noSource = join(userDataDir, "NoSource");
 // macOS limits AF_UNIX paths to roughly 104 bytes. `tmpdir()` expands to a
 // long /var/folders path, so keep the control socket itself under /tmp.
 const controlSocket = `/tmp/ufo-pres-${process.pid}-${Date.now()}.sock`;
+const presentationSocket = `/tmp/ufo-shell-${process.pid}-${Date.now()}.sock`;
 const executable = join(root, "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host");
 await access(executable);
 const app = new NativeCefApplication({
@@ -21,6 +22,7 @@ const app = new NativeCefApplication({
     UFO_BROWSER_SOURCE_PARTITIONS: noSource,
     UFO_CEF_PRIVATE_BRIDGE: "1",
     UFO_BROWSER_OVERVIEW_CONTROL_SOCKET: controlSocket,
+    UFO_BROWSER_PRESENTATION_SOCKET: presentationSocket,
   },
 });
 if (!userDataDir.includes("ufo-native-presentation-smoke-")) {
@@ -102,18 +104,52 @@ try {
       reopenedPresentation.chromeControlsSpaceId !== spaceId) {
     throw new Error(`Chrome controls did not return to the first warm Space: ${JSON.stringify(reopenedPresentation)}`);
   }
-  const closeCreated = await fetch(`${spacesUrl}/${createdSpaceId}/close`, { method: "POST" }).then((response) => response.json());
-  if (!closeCreated.ok) throw new Error(`close background Space failed: ${JSON.stringify(closeCreated)}`);
+  // A native red-button close is blocked while the Agent still owns the
+  // Space, even though titlebar dragging remains available.
+  const blockedClose = await sendSocket(controlSocket, JSON.stringify({
+    command: "request-window-close-space",
+    spaceId,
+  }));
+  if (blockedClose !== "ok") throw new Error(`native close request failed: ${blockedClose}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+  const afterBlockedClose = await fetch(spacesUrl).then((response) => response.json());
+  if (!afterBlockedClose.spaces?.some((space) => space.id === spaceId)) {
+    throw new Error("Agent-owned Space was closed through the native titlebar");
+  }
+  const showUserSpace = await fetch(`${spacesUrl}/${createdSpaceId}/open`, { method: "POST" }).then((response) => response.json());
+  if (!showUserSpace.ok) throw new Error(`open user Space failed: ${JSON.stringify(showUserSpace)}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  const closeBackground = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
+  if (!closeBackground.ok) throw new Error(`close background Space failed: ${JSON.stringify(closeBackground)}`);
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
   const afterBackgroundClose = await presentationStatus(controlSocket);
-  if (afterBackgroundClose.visibleSpaceId !== spaceId ||
-      afterBackgroundClose.chromeControlsSpaceId !== spaceId) {
+  if (afterBackgroundClose.visibleSpaceId !== createdSpaceId ||
+      afterBackgroundClose.chromeControlsSpaceId !== createdSpaceId) {
     throw new Error(`Closing a background Space removed the presented controls: ${JSON.stringify(afterBackgroundClose)}`);
   }
-  const close = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
-  if (!close.ok) throw new Error(`close Space failed: ${JSON.stringify(close)}`);
-  await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
-  const returnedPresentation = await presentationStatus(controlSocket);
+  const nativeClose = await sendSocket(controlSocket, JSON.stringify({
+    command: "request-window-close-space",
+    spaceId: createdSpaceId,
+  }));
+  if (nativeClose !== "ok") throw new Error(`native close request failed: ${nativeClose}`);
+  const closeDeadline = Date.now() + 5_000;
+  while (Date.now() < closeDeadline) {
+    const current = await fetch(spacesUrl).then((response) => response.json());
+    if (!current.spaces?.some((space) => space.id === createdSpaceId)) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  const afterNativeClose = await fetch(spacesUrl).then((response) => response.json());
+  if (afterNativeClose.spaces?.some((space) => space.id === createdSpaceId)) {
+    throw new Error("Native window close did not remove the durable Space record");
+  }
+  let returnedPresentation;
+  const overviewDeadline = Date.now() + 5_000;
+  while (Date.now() < overviewDeadline) {
+    returnedPresentation = await presentationStatus(controlSocket);
+    if (returnedPresentation.overviewPresented &&
+        returnedPresentation.presentedWindowCount === 1) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
   if (!returnedPresentation.overviewPresented ||
       returnedPresentation.presentedWindowCount !== 1 ||
       returnedPresentation.visibleSpaceId !== 0 ||
@@ -129,14 +165,21 @@ try {
     onePresentedWindow: true,
     chromeControlsFollowWarmSpace: true,
     backgroundClosePreservesControls: true,
+    agentOwnedNativeCloseBlocked: true,
+    nativeCloseUsesSpaceStateMachine: true,
   }));
 } finally {
   if (cli && cli.exitCode === null) cli.kill("SIGTERM");
   await app.stop();
   await rm(controlSocket, { force: true }).catch(() => undefined);
+  await rm(presentationSocket, { force: true }).catch(() => undefined);
 }
 
-function presentationStatus(path) {
+async function presentationStatus(path) {
+  return JSON.parse(await sendSocket(path, JSON.stringify({ command: "presentation-status" })));
+}
+
+function sendSocket(path, command) {
   return new Promise((resolveStatus, reject) => {
     const socket = createConnection(path);
     let response = "";
@@ -144,9 +187,8 @@ function presentationStatus(path) {
     socket.on("data", (chunk) => { response += chunk; });
     socket.once("error", reject);
     socket.once("close", () => {
-      try { resolveStatus(JSON.parse(response.trim())); }
-      catch (error) { reject(error); }
+      resolveStatus(response.trim());
     });
-    socket.once("connect", () => socket.end(`${JSON.stringify({ command: "presentation-status" })}\n`));
+    socket.once("connect", () => socket.end(`${command}\n`));
   });
 }

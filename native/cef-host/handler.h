@@ -45,6 +45,7 @@ class UfoCefHandler final : public CefClient,
                 int http_status_code) override;
 
   void CloseAllBrowsers(bool force_close);
+  void RequestApplicationClose(bool force_close);
   void ShowMainWindow();
   void HideMainWindow();
   void FocusMainWindow();
@@ -59,6 +60,8 @@ class UfoCefHandler final : public CefClient,
   void SetAgentConnectionActive(bool active);
   void SetSpaceAgentConnectionActive(int space_id, bool active);
   bool IsAgentConnectionActive() const { return agent_active_; }
+  bool IsSpaceAgentConnectionActive(int space_id) const;
+  bool IsSpaceCloseAuthorized(int space_id) const;
   void StartControlSocket(const std::string& path);
   void StopControlSocket();
   void StartDevToolsSocket(const std::string& path);
@@ -98,6 +101,7 @@ class UfoCefHandler final : public CefClient,
   std::map<std::string, std::string> context_download_dirs_;
   std::map<int, CefRefPtr<CefWindow>> space_windows_;
   std::set<int> agent_active_spaces_;
+  std::set<int> closing_spaces_;
   int visible_space_id_ = 0;
   std::string presentation_socket_;
   std::function<std::string(const std::string&)> shared_space_factory_;

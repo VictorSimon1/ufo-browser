@@ -101,7 +101,7 @@ owns no browser UI, so the Native path is Electron-free at runtime.
 1. **Native shell prototype** — one CEF Chrome-style window with
    `GetChromeToolbarType() == CEF_CTT_NORMAL`, real tabs, omnibox, profile
    menu, browser dialogs, popup handling, title updates, and graceful close.
-2. **Standalone Agent bridge** — map the existing Agent API to CEF DevTools targets and
+2. **Managed Agent bridge** — map the existing Agent API to CEF DevTools targets and
    preserve the current Skill call shapes.
 
    The first Electron-free vertical slice is now available during development:
@@ -111,11 +111,13 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    npm run native:cef:agent:smoke
    ```
 
-   `native-cef-agent` is a standalone Node service. It owns the private Agent
-   Unix socket, starts one shared UFO CEF Host, and registers each Space as an
-   isolated RequestContext and target route inside that Host. It exposes the
-   same `ufo-browser nodejs` helpers. The smoke covers bootstrap, `pageInfo`,
-   `js`, `snapshotText`, screenshot capture, navigation, and completion.
+   `native-cef-agent` is a UFO-managed Node service. In the packaged product it
+   owns the private Agent Unix socket and attaches to the existing
+   `UFO-Browser` CEF main process; it cannot start a second Host. It registers
+   each Space as an isolated RequestContext and target route inside that Host
+   and exposes the same `ufo-browser nodejs` helpers. The smoke covers
+   bootstrap, `pageInfo`, `js`, `snapshotText`, screenshot capture, navigation,
+   and completion.
 3. **Profiles and login state** — the current native vertical slice gives each
    Space a private CEF user-data directory, which avoids Chromium profile-lock
    races while preserving full browser persistence within that Space. The
@@ -204,6 +206,14 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    Space created inside the Overview Host would incorrectly lose its controls.
    While an Agent owns the Space, these UFO controls remain above the blocking
    overlay and interactive; the Chromium toolbar and page stay locked.
+
+   Native close buttons follow the same lifecycle rules. An Agent-owned Space
+   rejects a titlebar close while still allowing window dragging. A user-owned
+   Space routes the red-button close through the Presentation Coordinator,
+   removes the durable Space record, closes its CEF surface, and returns to
+   Overview. Closing Overview uses UFO's bounded product shutdown path so the
+   CEF main process, managed Agent service, and Chromium helpers do not remain
+   alive without a window.
 
    Native Profile Cookie sync is also connected to the CEF Agent. A running
    persistent Space gets an independent Cookie checkpoint and receives source
