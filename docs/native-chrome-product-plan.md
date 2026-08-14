@@ -23,6 +23,26 @@ Space, Profile, login-state, Overview, and control-overlay contracts intact.
 - Electron remains only as a migration fallback until every Native acceptance
   gate is green. It is not a product runtime dependency on the Native path.
 
+## Final host boundary (must not regress)
+
+The final product is one UFO native host, not an Overview process plus one
+`ufo-cef-host` process for every Space. The UFO host owns the Agent scheduler,
+Space scheduler, Overview surface, presentation state, and all human/Agent
+input policy. CEF is embedded in that host as the page/compositor layer.
+
+Each logical Space still gets its own CEF `CefRequestContext`/profile data
+root and its own CDP target route. Isolation is logical and persistent-data
+safe; it must not be implemented by launching another UFO/CEF application for
+every Space. The visible surface is a single UFO window that switches between
+Overview and the selected Space BrowserView. Background Spaces remain alive
+only when their lifecycle requires it and never create an additional visible
+window.
+
+The current per-Space native host is therefore a migration scaffold only. It
+is useful for validating CEF, profile seeding, and the private CDP bridge, but
+it is not the final architecture and must not be used as release evidence for
+the single-host milestone.
+
 ## Current implementation
 
 The branch starts from the Native CEF product runtime on

@@ -41,6 +41,12 @@ The following remains owned by UFO-Browser and is not copied from Ego Lite:
 - Overview state, low-frequency change-driven previews, and presentation state;
 - the native macOS agent-control overlay.
 
+The release target is a single UFO native host process. The current
+per-Space `ufo-cef-host` launch model is a migration scaffold used to verify
+the CEF bridge and profile isolation; it is not the final product boundary.
+The next host pass will keep the Agent/Space schedulers in one UFO process and
+switch one shared Overview/Space window between isolated CEF BrowserViews.
+
 Ego Lite is used as a behavioral and visual reference. Its compiled framework
 and private implementation are not product dependencies.
 
@@ -59,6 +65,10 @@ CEF Native Host (C++/Objective-C++)
        v
 CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
+
+In the final single-host form, the lower two layers are in the same native UFO
+process. A Space is a request context and target route, not a new application
+process or top-level browser window.
 
 The production direction is a per-runtime private Unix-socket CEF DevTools
 bridge. Its browser-level and page-level slices are verified for
