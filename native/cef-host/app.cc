@@ -1,9 +1,16 @@
 #include "native/cef-host/app.h"
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <utility>
 
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
+#include "include/cef_parser.h"
+#include "include/cef_request_context.h"
+#include "include/cef_values.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_helpers.h"
@@ -16,14 +23,29 @@ class UfoWindowDelegate final : public CefWindowDelegate {
  public:
   explicit UfoWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
                              bool present_on_start = false,
-                             bool show_shell_controls = false)
+                             bool show_shell_controls = false,
+                             bool main_window = true,
+                             int space_id = 0,
+                             std::string space_name = {},
+                             std::string profile_name = {},
+                             std::string presentation_socket = {})
       : browser_view_(browser_view),
         present_on_start_(present_on_start),
-        show_shell_controls_(show_shell_controls) {}
+        show_shell_controls_(show_shell_controls),
+        main_window_(main_window),
+        space_id_(space_id),
+        space_name_(std::move(space_name)),
+        profile_name_(std::move(profile_name)),
+        presentation_socket_(std::move(presentation_socket)) {}
 
   void OnWindowCreated(CefRefPtr<CefWindow> window) override {
     window->AddChildView(browser_view_);
-    if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(window);
+    if (auto* handler = UfoCefHandler::GetInstance()) {
+      if (main_window_) handler->SetMainWindow(window);
+      if (space_id_ > 0 && browser_view_->GetBrowser()) {
+        handler->RegisterBrowserSpace(browser_view_->GetBrowser(), space_id_);
+      }
+    }
     // Overview is the only surface that should appear on cold start. Space
     // runtimes are warm/background browser windows and are shown explicitly
     // by the Presentation Coordinator, avoiding a visible flash or focus
@@ -40,12 +62,17 @@ class UfoWindowDelegate final : public CefWindowDelegate {
       UfoCefWindowSetPresented(window->GetWindowHandle(), false);
     }
     if (show_shell_controls_ && !command_line->HasSwitch("overview")) {
-      const auto presentation_socket =
-          command_line->GetSwitchValue("presentation-socket").ToString();
+      const auto presentation_socket = presentation_socket_.empty()
+          ? command_line->GetSwitchValue("presentation-socket").ToString()
+          : presentation_socket_;
       if (!presentation_socket.empty()) {
         UfoCefShellControlsSet(window->GetWindowHandle(), presentation_socket.c_str());
-        const auto encoded_space_name = command_line->GetSwitchValue("space-name").ToString();
-        const auto encoded_profile_name = command_line->GetSwitchValue("profile-name").ToString();
+        const auto encoded_space_name = space_name_.empty()
+            ? command_line->GetSwitchValue("space-name").ToString()
+            : space_name_;
+        const auto encoded_profile_name = profile_name_.empty()
+            ? command_line->GetSwitchValue("profile-name").ToString()
+            : profile_name_;
         const auto decode = [](const std::string& value) {
           std::string decoded;
           decoded.reserve(value.size());
@@ -85,7 +112,11 @@ class UfoWindowDelegate final : public CefWindowDelegate {
     UfoCefShellControlsClear();
     UfoCefSpaceControllerClear();
     if (auto* handler = UfoCefHandler::GetInstance()) handler->SetAgentConnectionActive(false);
-    if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(nullptr);
+    if (main_window_) {
+      if (auto* handler = UfoCefHandler::GetInstance()) {
+        handler->SetMainWindow(nullptr);
+      }
+    }
     browser_view_ = nullptr;
   }
 
@@ -106,6 +137,11 @@ class UfoWindowDelegate final : public CefWindowDelegate {
   CefRefPtr<CefBrowserView> browser_view_;
   bool present_on_start_ = false;
   bool show_shell_controls_ = false;
+  bool main_window_ = true;
+  int space_id_ = 0;
+  std::string space_name_;
+  std::string profile_name_;
+  std::string presentation_socket_;
 
   IMPLEMENT_REFCOUNTING(UfoWindowDelegate);
 };
@@ -167,6 +203,60 @@ std::string StartupUrl() {
   return url.empty() ? "https://www.google.com/" : url.ToString();
 }
 
+void CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
+                       CefRefPtr<CefDictionaryValue> spec,
+                       const std::string& presentation_socket) {
+  if (!spec) return;
+  const int space_id = spec->GetInt("id");
+  const auto url = spec->GetString("url").ToString();
+  const auto cache_path = spec->GetString("cachePath").ToString();
+  if (space_id <= 0 || url.empty() || cache_path.empty()) return;
+
+  CefRequestContextSettings context_settings;
+  const auto canonical_cache = std::filesystem::weakly_canonical(
+      std::filesystem::path(cache_path));
+  CefString(&context_settings.cache_path) = canonical_cache.string();
+  context_settings.persist_session_cookies = true;
+  auto request_context =
+      CefRequestContext::CreateContext(context_settings, nullptr);
+  if (!request_context) return;
+
+  CefBrowserSettings browser_settings;
+  auto browser_view = CefBrowserView::CreateBrowserView(
+      handler, url, browser_settings, nullptr, request_context,
+      new UfoBrowserViewDelegate(true));
+  CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(
+      browser_view,
+      spec->GetBool("visible"),
+      true,
+      false,
+      space_id,
+      spec->GetString("name").ToString(),
+      spec->GetString("profileName").ToString(),
+      presentation_socket));
+}
+
+void CreateSharedManifestSpaces(CefRefPtr<UfoCefHandler> handler,
+                                CefRefPtr<CefCommandLine> command_line) {
+  const auto manifest_path =
+      command_line->GetSwitchValue("shared-space-manifest").ToString();
+  if (manifest_path.empty()) return;
+  std::ifstream stream(manifest_path);
+  if (!stream) return;
+  std::ostringstream contents;
+  contents << stream.rdbuf();
+  auto parsed = CefParseJSON(contents.str(), JSON_PARSER_RFC);
+  auto root = parsed ? parsed->GetDictionary() : nullptr;
+  auto spaces = root ? root->GetList("spaces") : nullptr;
+  if (!spaces) return;
+  const auto presentation_socket =
+      command_line->GetSwitchValue("presentation-socket").ToString();
+  for (size_t index = 0; index < spaces->GetSize(); ++index) {
+    CreateSharedSpace(handler, spaces->GetDictionary(index),
+                      presentation_socket);
+  }
+}
+
 }  // namespace
 
 void UfoCefApp::OnContextInitialized() {
@@ -195,6 +285,7 @@ void UfoCefApp::OnContextInitialized() {
           new UfoBrowserViewDelegate(chrome_shell)));
   CefWindow::CreateTopLevelWindow(
       new UfoWindowDelegate(browser_view, false, !overview));
+  CreateSharedManifestSpaces(handler, command_line);
 }
 
 CefRefPtr<CefClient> UfoCefApp::GetDefaultClient() {

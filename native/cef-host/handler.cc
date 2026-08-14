@@ -152,6 +152,11 @@ void UfoCefHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   {
     std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
     devtools_target_browsers_.erase(std::to_string(browser->GetIdentifier()));
+    const auto space_it = browser_spaces_.find(browser->GetIdentifier());
+    if (space_it != browser_spaces_.end()) {
+      space_browsers_.erase(space_it->second);
+      browser_spaces_.erase(space_it);
+    }
   }
   if (browsers_.empty()) {
     StopControlSocket();
@@ -225,6 +230,15 @@ void UfoCefHandler::SetMainWindow(CefRefPtr<CefWindow> window) {
   if (agent_active_ && main_window_) {
     UfoAgentOverlaySet(main_window_->GetWindowHandle(), true, "Agent controlling");
   }
+}
+
+void UfoCefHandler::RegisterBrowserSpace(CefRefPtr<CefBrowser> browser,
+                                         int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser || space_id <= 0) return;
+  std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+  browser_spaces_[browser->GetIdentifier()] = space_id;
+  space_browsers_[space_id] = browser->GetIdentifier();
 }
 
 void UfoCefHandler::SetAgentConnectionActive(bool active) {
@@ -415,6 +429,20 @@ CefRefPtr<CefBrowser> UfoCefHandler::FindDevToolsBrowser(
     const int routed_identifier = std::atoi(browser_route.c_str() + 8);
     for (const auto& browser : browsers_) {
       if (browser->GetIdentifier() == routed_identifier) return browser;
+    }
+    return nullptr;
+  }
+  if (browser_route.rfind("space:", 0) == 0) {
+    const int space_id = std::atoi(browser_route.c_str() + 6);
+    int browser_id = 0;
+    {
+      std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+      const auto it = space_browsers_.find(space_id);
+      if (it != space_browsers_.end()) browser_id = it->second;
+    }
+    if (browser_id <= 0) return nullptr;
+    for (const auto& browser : browsers_) {
+      if (browser->GetIdentifier() == browser_id) return browser;
     }
     return nullptr;
   }

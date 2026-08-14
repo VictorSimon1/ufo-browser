@@ -41,6 +41,8 @@ export type NativeCefRuntimeOptions = {
   profileName?: string;
   /** Show a Space immediately only for an explicit human-facing launch. */
   showOnStart?: boolean;
+  /** Development/prototype manifest for multiple isolated Spaces in one host. */
+  sharedSpaceManifest?: string;
   env?: NodeJS.ProcessEnv;
   /** Use the CEF-native DevTools message bridge over a private Unix socket. */
   devtoolsSocket?: string;
@@ -540,6 +542,9 @@ export function buildNativeCefArgs(options: NativeCefRuntimeOptions, port = opti
   if (!options.overview && options.spaceName) args.push(`--space-name=${encodeURIComponent(options.spaceName)}`);
   if (!options.overview && options.profileName) args.push(`--profile-name=${encodeURIComponent(options.profileName)}`);
   if (options.showOnStart) args.push("--show-on-start");
+  if (options.sharedSpaceManifest) {
+    args.push(`--shared-space-manifest=${resolve(options.sharedSpaceManifest)}`);
+  }
   return args;
 }
 

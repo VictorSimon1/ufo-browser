@@ -41,6 +41,7 @@ class UfoCefHandler final : public CefClient,
   void HideMainWindow();
   void FocusMainWindow();
   void SetMainWindow(CefRefPtr<CefWindow> window);
+  void RegisterBrowserSpace(CefRefPtr<CefBrowser> browser, int space_id);
   void SetAgentConnectionActive(bool active);
   bool IsAgentConnectionActive() const { return agent_active_; }
   void StartControlSocket(const std::string& path);
@@ -76,6 +77,8 @@ class UfoCefHandler final : public CefClient,
   std::map<std::string, CefRefPtr<CefRegistration>> devtools_registrations_;
   std::map<std::string, std::set<int>> devtools_outer_results_;
   std::map<std::string, int> devtools_target_browsers_;
+  std::map<int, int> browser_spaces_;
+  std::map<int, int> space_browsers_;
   std::mutex devtools_targets_mutex_;
 
   void HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& client);

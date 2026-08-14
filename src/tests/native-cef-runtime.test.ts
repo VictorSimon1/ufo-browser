@@ -43,11 +43,13 @@ test("Native CEF launches human-facing Spaces with the full Chrome shell", () =>
     presentationSocket: "/tmp/ufo-presentation.sock",
     userDataDir: "/tmp/ufo-space-data",
     chromeShell: true,
+    sharedSpaceManifest: "/tmp/ufo-shared-spaces.json",
   });
   assert.ok(args.includes("--chrome-shell"));
   assert.ok(!args.includes("--overview"));
   assert.ok(args.includes("--devtools-socket=/tmp/ufo-space-devtools.sock"));
   assert.ok(args.includes("--presentation-socket=/tmp/ufo-presentation.sock"));
+  assert.ok(args.includes("--shared-space-manifest=/tmp/ufo-shared-spaces.json"));
 });
 
 test("Native Overview stays a management page without browser chrome", () => {
