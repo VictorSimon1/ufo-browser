@@ -31,6 +31,14 @@ try {
   console.log(JSON.stringify({ chromeRuntime: true, nativeToolbar: true }));
 } finally {
   if (child.exitCode === null) child.kill("SIGTERM");
+  await new Promise((resolveExit) => {
+    if (child.exitCode !== null) return resolveExit();
+    const timer = setTimeout(() => {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      resolveExit();
+    }, 1_000);
+    child.once("exit", () => { clearTimeout(timer); resolveExit(); });
+  });
 }
 
 async function readSource(path) {
