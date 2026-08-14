@@ -88,6 +88,7 @@ npm run native:cef:build
 npm run native:cef:version:smoke
 npm run native:cef:private:smoke
 npm run native:cef:agent:smoke
+npm run native:cef:profile:smoke
 npm run native:cef:app:smoke
 npm run native:cef:bundle:smoke
 ```
