@@ -133,7 +133,12 @@ void UfoCefHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 bool UfoCefHandler::DoClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   if (browsers_.size() == 1) closing_ = true;
-    return true;
+  // Returning true tells CEF that the application handled the close and
+  // prevents the Chrome Runtime window from entering its normal destruction
+  // path. That leaves the host and GPU/renderer helpers alive after SIGTERM.
+  // Mark the final browser as closing, then let CEF continue to OnBeforeClose
+  // where the message loop is shut down cleanly.
+  return false;
 }
 
 void UfoCefHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {

@@ -131,20 +131,19 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    DMG. The install flow then syncs CLI and Skills exactly as the Electron
    installer does today.
 
-   A native launcher/package prototype is now available:
+   The Native CEF launcher/package is the formal macOS product path:
 
    ```bash
    npm run package:native:mac
    ```
 
    It creates `release-native/UFO-Browser.app` and a drag-install DMG without
-   Electron Builder. The bundle contains the AppKit launcher, standalone Node
-   Agent, CEF host, CEF Framework/Helpers, UFO CLI and Skill. The launcher
-   starts the Agent first, waits for its Overview API rendezvous file, and
-   then starts the native CEF Overview window. This prototype is not yet
-   signed/notarized and still needs production entitlements, helper signing,
-   and post-install CLI/Skill synchronization before replacing the release
-   Electron package.
+   Electron Builder or an Electron runtime. The bundle contains the AppKit
+   launcher, standalone Node Agent, CEF host, CEF Framework/Helpers, UFO CLI
+   and Skill. The launcher starts the Agent first, waits for its Overview API
+   rendezvous file, and then starts the native CEF Overview window. The
+   post-install flow detects this native bundle and synchronizes the CLI and
+   Skills into the installed Agent directories.
 
    Native presentation is now coordinated explicitly instead of letting each
    CEF window show itself independently. Opening a Space hides Overview and

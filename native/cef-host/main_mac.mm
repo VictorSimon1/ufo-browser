@@ -1,18 +1,94 @@
 #import <Cocoa/Cocoa.h>
 
+#include <signal.h>
+
+#include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstdlib>
 #include <filesystem>
+#include <fcntl.h>
 #include <string>
+#include <thread>
+#include <unistd.h>
 
 #include "include/cef_application_mac.h"
 #include "include/cef_command_line.h"
+#include "include/base/cef_callback.h"
+#include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_library_loader.h"
 #include "native/cef-host/app.h"
 #include "native/cef-host/handler.h"
 
 @interface UfoCefApplication : NSApplication <CefAppProtocol>
 @end
+
+static volatile sig_atomic_t g_termination_requested = 0;
+static int g_signal_pipe[2] = {-1, -1};
+static std::thread g_signal_thread;
+static std::atomic<bool> g_signal_thread_stop{false};
+
+static void HandleTerminationSignal(int signal_number) {
+  (void)signal_number;
+  if (g_termination_requested) return;
+  g_termination_requested = 1;
+  // Only write to a self-pipe here. This is async-signal-safe; the normal
+  // worker thread below performs the CEF task posting and browser teardown.
+  if (g_signal_pipe[1] >= 0) {
+    const char marker = 'T';
+    (void)write(g_signal_pipe[1], &marker, sizeof(marker));
+  }
+}
+
+static bool CreateSignalPipe() {
+  if (pipe(g_signal_pipe) != 0) return false;
+  fcntl(g_signal_pipe[0], F_SETFD, FD_CLOEXEC);
+  fcntl(g_signal_pipe[1], F_SETFD, FD_CLOEXEC);
+  return true;
+}
+
+static void StartSignalPump() {
+  g_signal_thread_stop.store(false);
+  g_signal_thread = std::thread([] {
+    char marker = 0;
+    while (!g_signal_thread_stop.load() &&
+           read(g_signal_pipe[0], &marker, sizeof(marker)) == sizeof(marker)) {
+      if (marker == 'Q') break;
+      if (marker != 'T') continue;
+      CefPostTask(TID_UI, base::BindOnce([] {
+        if (auto* handler = UfoCefHandler::GetInstance()) {
+          handler->CloseAllBrowsers(true);
+        } else {
+          _exit(0);
+        }
+      }));
+      // The Chrome Views runtime can be waiting on a renderer/browser-info
+      // callback while a SIGTERM is already tearing down the helper tree. Do
+      // not let that callback hold the host forever: give the normal close
+      // task a short grace period, then use the process-group shutdown path.
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      // The launcher sends SIGTERM to the complete detached process group, so
+      // helpers have already received the same bounded shutdown signal. If the
+      // Chrome Views loop is still blocked after the grace period, exiting the
+      // host here prevents a renderer/GPU leak from keeping the group alive.
+      _exit(0);
+      break;
+    }
+  });
+}
+
+static void StopSignalPump() {
+  g_signal_thread_stop.store(true);
+  if (g_signal_pipe[1] >= 0) {
+    const char marker = 'Q';
+    (void)write(g_signal_pipe[1], &marker, sizeof(marker));
+  }
+  if (g_signal_thread.joinable()) g_signal_thread.join();
+  if (g_signal_pipe[0] >= 0) close(g_signal_pipe[0]);
+  if (g_signal_pipe[1] >= 0) close(g_signal_pipe[1]);
+  g_signal_pipe[0] = -1;
+  g_signal_pipe[1] = -1;
+}
 
 namespace {
 
@@ -98,7 +174,11 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
 }
 - (void)terminate:(id)sender {
   UfoCefHandler* handler = UfoCefHandler::GetInstance();
-  if (handler && !handler->IsClosing()) handler->CloseAllBrowsers(false);
+  // SIGTERM is the bounded shutdown path used by the Native launcher and
+  // test harness. Do not wait for page beforeunload/Views close negotiation
+  // here: the outer App has already decided to terminate, so force the CEF
+  // browser tree closed and let OnBeforeClose quit the message loop.
+  if (handler && !handler->IsClosing()) handler->CloseAllBrowsers(true);
 }
 @end
 
@@ -139,6 +219,7 @@ int main(int argc, char* argv[]) {
   CefMainArgs main_args(argc, argv);
   @autoreleasepool {
     [UfoCefApplication sharedApplication];
+    if (!CreateSignalPipe()) return 1;
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
     command_line->InitFromArgv(argc, argv);
 
@@ -156,12 +237,21 @@ int main(int argc, char* argv[]) {
     ConfigureDevelopmentDevTools(command_line, &settings);
     CefRefPtr<UfoCefApp> app(new UfoCefApp());
     if (!CefInitialize(main_args, settings, app.get(), nullptr)) {
+      StopSignalPump();
       return CefGetExitCode();
     }
+
+    // Install after CefInitialize. Chromium may configure its own signal
+    // dispositions during initialization, so installing earlier can be
+    // silently overwritten and leave the host running after SIGTERM.
+    signal(SIGTERM, HandleTerminationSignal);
+    signal(SIGINT, HandleTerminationSignal);
+    StartSignalPump();
 
     UfoCefAppDelegate* delegate = [[UfoCefAppDelegate alloc] init];
     NSApp.delegate = delegate;
     CefRunMessageLoop();
+    StopSignalPump();
     CefShutdown();
     delegate = nil;
   }

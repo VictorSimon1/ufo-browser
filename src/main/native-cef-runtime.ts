@@ -305,6 +305,10 @@ export class NativeCefRuntime {
       cwd: merged.cwd,
       env: { ...process.env, ...merged.env },
       stdio: "ignore",
+      // CEF launches GPU/renderer/utility helpers. Put the host in its own
+      // process group so a bounded shutdown can reap the entire runtime tree
+      // instead of leaving Chromium helpers behind when a renderer stalls.
+      detached: true,
     });
     this.process.once("exit", () => {
       this.process = undefined;
@@ -413,14 +417,14 @@ export class NativeCefRuntime {
     if (!child || child.killed) return;
     await new Promise<void>((resolveStop) => {
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
+        signalProcessGroup(child, "SIGKILL");
         resolveStop();
       }, 2_000);
       child.once("exit", () => {
         clearTimeout(timer);
         resolveStop();
       });
-      child.kill("SIGTERM");
+      signalProcessGroup(child, "SIGTERM");
     });
   }
 
@@ -480,6 +484,19 @@ export class NativeCefRuntime {
     }
     throw new Error(`Native CEF DevTools did not become ready: ${String(lastError || "timeout")}`);
   }
+}
+
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals) {
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process may have exited between the check and kill. Fall back to
+      // the ChildProcess handle for platforms that do not expose groups.
+    }
+  }
+  child.kill(signal);
 }
 
 async function attachPrivateTarget(connection: NativeCefPrivateConnection, targetId: string, attempts = 8) {
