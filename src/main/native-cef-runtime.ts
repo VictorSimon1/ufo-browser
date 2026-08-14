@@ -36,6 +36,9 @@ export type NativeCefRuntimeOptions = {
   overview?: boolean;
   /** Use Chromium's full native Chrome toolbar for a human-facing Space. */
   chromeShell?: boolean;
+  /** UFO-owned native controller metadata shown in the Space titlebar. */
+  spaceName?: string;
+  profileName?: string;
   /** Show a Space immediately only for an explicit human-facing launch. */
   showOnStart?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -504,6 +507,8 @@ export function buildNativeCefArgs(options: NativeCefRuntimeOptions, port = opti
   // this mode for direct non-Overview runs, while --plain-page remains an
   // intentional diagnostic escape hatch for CEF host development.
   if (!options.overview && options.chromeShell !== false) args.push("--chrome-shell");
+  if (!options.overview && options.spaceName) args.push(`--space-name=${encodeURIComponent(options.spaceName)}`);
+  if (!options.overview && options.profileName) args.push(`--profile-name=${encodeURIComponent(options.profileName)}`);
   if (options.showOnStart) args.push("--show-on-start");
   return args;
 }

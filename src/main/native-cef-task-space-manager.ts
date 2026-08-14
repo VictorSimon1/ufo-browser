@@ -352,6 +352,10 @@ export class NativeCefTaskSpaceManager {
       // so future diagnostic/plain-page launches cannot silently change the
       // product shell while Agent/CDP behavior remains identical.
       chromeShell: true,
+      // UFO owns this metadata; it is drawn in AppKit and never enters the
+      // page compositor, Agent screenshot, or DOM surface.
+      spaceName: space.name,
+      profileName: this.options.profiles.getOrThrow(space.profileId).name,
       // Development smoke tests may pin a base for repeatability. Packaged
       // Native runs leave the base unset and receive an ephemeral loopback
       // port, so no predictable DevTools endpoint is exposed.

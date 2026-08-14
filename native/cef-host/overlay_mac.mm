@@ -169,6 +169,94 @@
 
 @end
 
+@interface UfoSpaceControllerView : NSView
+@property(nonatomic, copy) NSString* spaceName;
+@property(nonatomic, copy) NSString* profileName;
+@property(nonatomic, copy) NSString* socketPath;
+@property(nonatomic) BOOL highlighted;
+@end
+
+@implementation UfoSpaceControllerView
+
+- (BOOL)isOpaque { return NO; }
+- (BOOL)accessibilityIsIgnored { return NO; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityButtonRole; }
+- (NSString*)accessibilityLabel { return @"Return to Spaces"; }
+
+- (void)drawRect:(NSRect)dirtyRect {
+  (void)dirtyRect;
+  NSRect bounds = NSInsetRect(self.bounds, 1.0, 1.0);
+  NSColor* fill = [NSColor colorWithCalibratedWhite:0.10 alpha:self.highlighted ? 0.92 : 0.82];
+  NSColor* stroke = [NSColor colorWithCalibratedWhite:1.0 alpha:self.highlighted ? 0.26 : 0.15];
+  NSBezierPath* capsule = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:9.0 yRadius:9.0];
+  [fill setFill];
+  [capsule fill];
+  [stroke setStroke];
+  [capsule setLineWidth:1.0];
+  [capsule stroke];
+
+  NSBezierPath* chevron = [NSBezierPath bezierPath];
+  [chevron moveToPoint:NSMakePoint(13.0, NSMidY(bounds) + 4.0)];
+  [chevron lineToPoint:NSMakePoint(9.0, NSMidY(bounds))];
+  [chevron lineToPoint:NSMakePoint(13.0, NSMidY(bounds) - 4.0)];
+  [[NSColor colorWithCalibratedWhite:0.94 alpha:0.92] setStroke];
+  [chevron setLineWidth:1.5];
+  [chevron stroke];
+
+  NSDictionary* nameAttrs = @{
+    NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold],
+    NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.96 alpha:0.95],
+  };
+  NSDictionary* profileAttrs = @{
+    NSFontAttributeName: [NSFont systemFontOfSize:10.0 weight:NSFontWeightRegular],
+    NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.78 alpha:0.88],
+  };
+  NSString* name = self.spaceName.length ? self.spaceName : @"Space";
+  NSString* profile = self.profileName.length ? self.profileName : @"Default";
+  const CGFloat maxNameWidth = MAX(58.0, NSWidth(bounds) - 48.0);
+  while (name.length > 4 && [name sizeWithAttributes:nameAttrs].width > maxNameWidth) {
+    name = [[name substringToIndex:name.length - 2] stringByAppendingString:@"…"];
+  }
+  [name drawAtPoint:NSMakePoint(21.0, NSMaxY(bounds) - 16.0) withAttributes:nameAttrs];
+  [profile drawAtPoint:NSMakePoint(21.0, NSMinY(bounds) + 4.0) withAttributes:profileAttrs];
+}
+
+- (void)mouseDown:(NSEvent*)event {
+  (void)event;
+  self.highlighted = YES;
+  [self setNeedsDisplay:YES];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+  (void)event;
+  self.highlighted = NO;
+  [self setNeedsDisplay:YES];
+  const char* path = self.socketPath.UTF8String;
+  if (!path || std::strlen(path) >= sizeof(sockaddr_un{}.sun_path)) return;
+  const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return;
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::strncpy(address.sun_path, path, sizeof(address.sun_path) - 1);
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+    static const char command[] = "show-overview\n";
+    (void)::write(fd, command, sizeof(command) - 1);
+  }
+  ::close(fd);
+}
+
+@end
+
+@interface UfoSpaceControllerPanel : NSPanel
+@property(nonatomic, assign) NSWindow* hostWindow;
+@property(nonatomic, strong) UfoSpaceControllerView* controllerView;
+@end
+
+@implementation UfoSpaceControllerPanel
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
+@end
+
 static UfoOverlayPanel* gPanel;
 static NSWindow* gHostWindow;
 static id gMoveObserver;
@@ -177,6 +265,10 @@ static UfoShellPanel* gShellPanel;
 static NSWindow* gShellHostWindow;
 static id gShellMoveObserver;
 static id gShellResizeObserver;
+static UfoSpaceControllerPanel* gSpaceControllerPanel;
+static NSWindow* gSpaceControllerHostWindow;
+static id gSpaceControllerMoveObserver;
+static id gSpaceControllerResizeObserver;
 
 void RemoveOverlay() {
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
@@ -232,6 +324,35 @@ void RemoveShellControls() {
   gShellPanel = nil;
   [gShellHostWindow release];
   gShellHostWindow = nil;
+}
+
+void PositionSpaceController() {
+  if (!gSpaceControllerPanel || !gSpaceControllerHostWindow) return;
+  NSRect frame = gSpaceControllerHostWindow.frame;
+  const CGFloat width = MIN(280.0, MAX(190.0, NSWidth(frame) * 0.24));
+  const CGFloat height = 30.0;
+  // AppKit titlebar placement keeps the UFO controller visible without
+  // covering Chromium's native tabs, omnibox, profile, or menu controls.
+  frame.origin.x += 174.0;
+  frame.origin.y = NSMaxY(frame) - height - 7.0;
+  frame.size = NSMakeSize(width, height);
+  [gSpaceControllerPanel setFrame:frame display:YES];
+}
+
+void RemoveSpaceController() {
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (gSpaceControllerMoveObserver) [center removeObserver:gSpaceControllerMoveObserver];
+  if (gSpaceControllerResizeObserver) [center removeObserver:gSpaceControllerResizeObserver];
+  gSpaceControllerMoveObserver = nil;
+  gSpaceControllerResizeObserver = nil;
+  if (gSpaceControllerHostWindow && gSpaceControllerPanel) {
+    [gSpaceControllerHostWindow removeChildWindow:gSpaceControllerPanel];
+  }
+  [gSpaceControllerPanel orderOut:nil];
+  [gSpaceControllerPanel release];
+  gSpaceControllerPanel = nil;
+  [gSpaceControllerHostWindow release];
+  gSpaceControllerHostWindow = nil;
 }
 
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
@@ -330,6 +451,70 @@ void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_sock
 
 void UfoCefShellControlsClear() {
   dispatch_async(dispatch_get_main_queue(), ^{ RemoveShellControls(); });
+}
+
+void UfoCefSpaceControllerSet(void* cef_view_handle,
+                              const char* space_name,
+                              const char* profile_name,
+                              const char* presentation_socket) {
+  NSView* retainedCefView = [(NSView*)cef_view_handle retain];
+  NSString* space = [NSString stringWithUTF8String:space_name ?: "Space"];
+  NSString* profile = [NSString stringWithUTF8String:profile_name ?: "Default"];
+  NSString* socket = [NSString stringWithUTF8String:presentation_socket ?: ""];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSView* cefView = retainedCefView;
+    NSWindow* host = cefView.window;
+    if (!host || !socket.length) {
+      RemoveSpaceController();
+      [cefView release];
+      return;
+    }
+    if (gSpaceControllerPanel && gSpaceControllerHostWindow == host) {
+      gSpaceControllerPanel.controllerView.spaceName = space;
+      gSpaceControllerPanel.controllerView.profileName = profile;
+      gSpaceControllerPanel.controllerView.socketPath = socket;
+      [gSpaceControllerPanel.controllerView setNeedsDisplay:YES];
+      PositionSpaceController();
+      [cefView release];
+      return;
+    }
+    RemoveSpaceController();
+    gSpaceControllerHostWindow = [host retain];
+    gSpaceControllerPanel = [[UfoSpaceControllerPanel alloc] initWithContentRect:NSMakeRect(0, 0, 240.0, 30.0)
+                                                                          styleMask:NSWindowStyleMaskBorderless
+                                                                            backing:NSBackingStoreBuffered
+                                                                              defer:NO];
+    gSpaceControllerPanel.hostWindow = host;
+    gSpaceControllerPanel.opaque = NO;
+    gSpaceControllerPanel.backgroundColor = NSColor.clearColor;
+    gSpaceControllerPanel.hasShadow = NO;
+    gSpaceControllerPanel.level = host.level + 1;
+    gSpaceControllerPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+                                                NSWindowCollectionBehaviorFullScreenAuxiliary;
+    UfoSpaceControllerView* controller = [[UfoSpaceControllerView alloc] initWithFrame:NSMakeRect(0, 0, 240.0, 30.0)];
+    controller.spaceName = space;
+    controller.profileName = profile;
+    controller.socketPath = socket;
+    gSpaceControllerPanel.controllerView = controller;
+    gSpaceControllerPanel.contentView = controller;
+    [host addChildWindow:gSpaceControllerPanel ordered:NSWindowAbove];
+    PositionSpaceController();
+    [gSpaceControllerPanel orderFront:nil];
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    gSpaceControllerMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+      (void)note;
+      PositionSpaceController();
+    }];
+    gSpaceControllerResizeObserver = [center addObserverForName:NSWindowDidResizeNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+      (void)note;
+      PositionSpaceController();
+    }];
+    [cefView release];
+  });
+}
+
+void UfoCefSpaceControllerClear() {
+  dispatch_async(dispatch_get_main_queue(), ^{ RemoveSpaceController(); });
 }
 
 void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {

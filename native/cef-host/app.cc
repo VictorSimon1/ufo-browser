@@ -44,12 +44,46 @@ class UfoWindowDelegate final : public CefWindowDelegate {
           command_line->GetSwitchValue("presentation-socket").ToString();
       if (!presentation_socket.empty()) {
         UfoCefShellControlsSet(window->GetWindowHandle(), presentation_socket.c_str());
+        const auto encoded_space_name = command_line->GetSwitchValue("space-name").ToString();
+        const auto encoded_profile_name = command_line->GetSwitchValue("profile-name").ToString();
+        const auto decode = [](const std::string& value) {
+          std::string decoded;
+          decoded.reserve(value.size());
+          for (size_t i = 0; i < value.size(); ++i) {
+            if (value[i] == '%' && i + 2 < value.size()) {
+              const auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+              };
+              const int hi = hex(value[i + 1]);
+              const int lo = hex(value[i + 2]);
+              if (hi >= 0 && lo >= 0) {
+                decoded.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+              }
+            }
+            decoded.push_back(value[i]);
+          }
+          return decoded;
+        };
+        const auto space_name = decode(encoded_space_name);
+        const auto profile_name = decode(encoded_profile_name);
+        window->SetTitle((std::string("UFO-Browser · ") +
+                         (space_name.empty() ? "Space" : space_name)).c_str());
+        UfoCefSpaceControllerSet(window->GetWindowHandle(),
+                                 space_name.empty() ? "Space" : space_name.c_str(),
+                                 profile_name.empty() ? "Default" : profile_name.c_str(),
+                                 presentation_socket.c_str());
       }
     }
   }
 
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
     UfoCefShellControlsClear();
+    UfoCefSpaceControllerClear();
     if (auto* handler = UfoCefHandler::GetInstance()) handler->SetAgentConnectionActive(false);
     if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(nullptr);
     browser_view_ = nullptr;

@@ -21,6 +21,12 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented);
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket);
 void UfoCefShellControlsClear();
 
+void UfoCefSpaceControllerSet(void* cef_view_handle,
+                              const char* space_name,
+                              const char* profile_name,
+                              const char* presentation_socket);
+void UfoCefSpaceControllerClear();
+
 #ifdef __cplusplus
 }
 #endif

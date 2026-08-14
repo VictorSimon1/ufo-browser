@@ -11,6 +11,10 @@ provided by Chromium rather than by UFO-Browser HTML/CSS. The delegate opts
 into `CEF_CTT_NORMAL`; without that explicit opt-in CEF intentionally creates a
 Chrome-style page window with no toolbar.
 
+The surrounding Space controller is still owned by UFO: Space name, Profile,
+and return-to-Spaces are drawn by AppKit in the native titlebar. It is not an
+HTML overlay and never participates in page screenshots or Agent/CDP input.
+
 ## Build
 
 The build requires a full Xcode installation (not only Command Line Tools),
