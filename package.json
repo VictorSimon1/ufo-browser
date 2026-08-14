@@ -62,6 +62,7 @@
     "native:cef:app": "npm run native:cef:build && npm run build:native && node dist/main/native-cef-application.js",
     "native:cef:app:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-application-smoke.mjs",
     "native:cef:presentation:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-presentation-smoke.mjs",
+    "native:cef:restart:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-restart-smoke.mjs",
     "native:cef:bundle:smoke": "npm run package:native:mac && node scripts/native-cef-bundle-smoke.mjs",
     "native:cef:install:smoke": "npm run package:native:mac && node scripts/native-cef-install-smoke.mjs",
     "start:native": "npm run native:cef:app",

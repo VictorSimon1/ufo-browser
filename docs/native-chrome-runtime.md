@@ -235,7 +235,10 @@ private bridge forwards Chrome Runtime's flattened `sessionId` envelope
 directly; wrapping page commands in legacy `Target.sendMessageToTarget` caused
 acknowledged commands to hang on newer CEF Chrome Runtime builds. The native
 private smoke covers page evaluation, Page.enable, navigation readiness, and
-screenshots. The existing Electron path remains a migration fallback for
+screenshots. Native Overview windows are controlled by their private AppKit
+control socket and do not expose a public DevTools port in packaged builds;
+an Overview port is only enabled when an explicit development port is passed.
+The existing Electron path remains a migration fallback for
 legacy tests until the acceptance gates pass; it is not used by the Native DMG
 runtime and is not the final browser UI.
 

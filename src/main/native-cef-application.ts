@@ -11,6 +11,7 @@ export type NativeCefApplicationOptions = {
   cefExecutable?: string;
   userDataDir?: string;
   infoFile?: string;
+  /** Development-only Overview DevTools port. Omit in packaged builds. */
   overviewDevtoolsPort?: number;
   useMockKeychain?: boolean;
   startupTimeoutMs?: number;
@@ -81,23 +82,39 @@ export class NativeCefApplication {
       if (!this.stopping) void this.stop();
     });
     const info = await waitForOverviewInfo(infoFile, merged.startupTimeoutMs ?? 15_000, this.agent);
-    const port = merged.overviewDevtoolsPort ?? await findFreePort();
-    this.overviewPort = port;
-    this.overview = spawn(cefExecutable, [
+    const overviewArgs = [
       `--url=${info.url}`,
       "--overview",
-      `--agent-devtools-port=${port}`,
       `--control-socket=${overviewControlSocket}`,
       `--user-data-dir=${join(userDataDir, "OverviewWindow")}`,
       ...(merged.useMockKeychain ? ["--use-mock-keychain"] : []),
-    ], { cwd: bundleRoot || process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
+    ];
+    // The Overview window is controlled by the native presentation socket and
+    // does not need a public DevTools listener. Only an explicit development
+    // port opts into the temporary HTTP transport used by smoke/debug tools.
+    const overviewDevtoolsPort = merged.overviewDevtoolsPort ??
+      (merged.env?.UFO_CEF_OVERVIEW_DEVTOOLS_PORT || process.env.UFO_CEF_OVERVIEW_DEVTOOLS_PORT
+        ? Number(merged.env?.UFO_CEF_OVERVIEW_DEVTOOLS_PORT || process.env.UFO_CEF_OVERVIEW_DEVTOOLS_PORT)
+        : undefined);
+    if (overviewDevtoolsPort !== undefined) {
+      if (!Number.isInteger(overviewDevtoolsPort) || overviewDevtoolsPort < 0 || overviewDevtoolsPort > 65535) {
+        throw new Error(`Invalid Overview DevTools port: ${overviewDevtoolsPort}`);
+      }
+      overviewArgs.push(`--agent-devtools-port=${overviewDevtoolsPort}`);
+      this.overviewPort = overviewDevtoolsPort;
+    } else {
+      this.overviewPort = undefined;
+    }
+    this.overview = spawn(cefExecutable, overviewArgs, { cwd: bundleRoot || process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] });
     this.overview.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     this.overview.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     this.overview.once("exit", () => {
       this.overview = undefined;
       if (!this.stopping) void this.stop();
     });
-    await waitForDevtools(port, merged.startupTimeoutMs ?? 15_000, this.overview);
+    if (overviewDevtoolsPort !== undefined) {
+      await waitForDevtools(overviewDevtoolsPort, merged.startupTimeoutMs ?? 15_000, this.overview);
+    }
     return this.status();
   }
 
