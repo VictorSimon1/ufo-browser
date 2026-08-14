@@ -1,12 +1,15 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { hashSkillDirectory } from "./sync-agent-skills.mjs";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const sourceApp = join(root, "release-native/UFO-Browser.app");
 const installRoot = await mkdtemp(join(tmpdir(), "ufo-native-install-smoke-"));
 const appRoot = join(installRoot, "UFO-Browser.app");
+const isolatedHome = join(installRoot, "home");
+const isolatedBin = join(isolatedHome, ".local/bin");
 await copyBundle(sourceApp, appRoot);
 const launcher = join(appRoot, "Contents/MacOS/ufo-browser-native");
 const userData = join(installRoot, "UserData");
@@ -20,6 +23,46 @@ for (const path of [
 const skillContents = await readFile(join(appRoot, "Contents/Resources/skills/ufo-browser/SKILL.md"), "utf8");
 if (!/^---[\s\S]*?^name:\s*ufo-browser\s*$/m.test(skillContents)) throw new Error("Native bundle Skill frontmatter is invalid");
 if (await exists(join(appRoot, "Contents/Resources/app.asar"))) throw new Error("Native install contains app.asar");
+
+// Exercise the same post-install hooks used by install-mac.mjs, but inside an
+// isolated HOME. This proves a dragged-in DMG updates the CLI and each
+// installed agent's Skill directory without touching the developer machine.
+for (const agentHome of [".claude", ".codex", ".agents"]) {
+  await mkdir(join(isolatedHome, agentHome), { recursive: true, mode: 0o700 });
+}
+await mkdir(isolatedBin, { recursive: true, mode: 0o700 });
+const resolvedAppRoot = await realpath(appRoot);
+const syncEnv = {
+  ...process.env,
+  HOME: isolatedHome,
+  CODEX_HOME: join(isolatedHome, ".codex"),
+  UFO_BROWSER_CLI_BIN: isolatedBin,
+};
+await runNode(join(root, "scripts/install-local-cli.mjs"), ["--app", appRoot, "--force"], syncEnv);
+for (const name of ["ufo-browser", "x-browser"]) {
+  const link = join(isolatedBin, name);
+  const target = await realpath(link);
+  if (target !== join(resolvedAppRoot, "Contents/Resources", name)) {
+    throw new Error(`Installed ${name} CLI points to ${target}, expected the DMG App bundle`);
+  }
+}
+const sourceSkill = join(appRoot, "Contents/Resources/skills/ufo-browser");
+const expectedHash = await hashSkillDirectory(sourceSkill);
+await runNode(join(root, "scripts/sync-agent-skills.mjs"), ["--source", sourceSkill], syncEnv);
+for (const targetRoot of [
+  join(isolatedHome, ".claude/skills/ufo-browser"),
+  join(isolatedHome, ".codex/skills/ufo-browser"),
+  join(isolatedHome, ".agents/skills/ufo-browser"),
+]) {
+  const markerPath = join(targetRoot, ".ufo-browser-managed.json");
+  const marker = JSON.parse(await readFile(markerPath, "utf8"));
+  if (marker.managedBy !== "UFO-Browser" || marker.skill !== "ufo-browser" || marker.sourceHash !== expectedHash) {
+    throw new Error(`Skill marker is invalid: ${markerPath}`);
+  }
+  if (await hashSkillDirectory(targetRoot) !== expectedHash) {
+    throw new Error(`Installed Skill hash mismatch: ${targetRoot}`);
+  }
+}
 
 const app = spawn(launcher, [], {
   cwd: appRoot,
@@ -60,6 +103,27 @@ async function copyBundle(source, destination) {
     const child = spawn("/usr/bin/ditto", [source, destination], { stdio: "ignore" });
     child.once("error", rejectCopy);
     child.once("exit", (code) => code === 0 ? resolveCopy() : rejectCopy(new Error(`ditto failed (${code})`)));
+  });
+}
+
+async function runNode(script, args, env) {
+  await new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, [script, ...args], {
+      cwd: root,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    let error = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { error += chunk; });
+    child.once("error", rejectRun);
+    child.once("exit", (code) => {
+      if (code === 0) return resolveRun();
+      rejectRun(new Error(`${script} failed (${code})\n${output}${error}`));
+    });
   });
 }
 
