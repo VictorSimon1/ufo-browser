@@ -32,6 +32,8 @@ export type NativeCefRuntimeOptions = {
   controlSocket?: string;
   useMockKeychain?: boolean;
   overview?: boolean;
+  /** Use Chromium's full native Chrome toolbar for a human-facing Space. */
+  chromeShell?: boolean;
   /** Show a Space immediately only for an explicit human-facing launch. */
   showOnStart?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -292,15 +294,7 @@ export class NativeCefRuntime {
     this.port = port;
     this.controlSocketPath = merged.controlSocket ? resolve(merged.controlSocket) : undefined;
     this.devtoolsSocketPath = merged.devtoolsSocket ? resolve(merged.devtoolsSocket) : undefined;
-    const args = [
-      `--url=${merged.url || "https://www.google.com/"}`,
-      ...(merged.devtoolsSocket ? [`--devtools-socket=${resolve(merged.devtoolsSocket)}`] : [`--agent-devtools-port=${port}`]),
-    ];
-    if (merged.userDataDir) args.push(`--user-data-dir=${resolve(merged.userDataDir)}`);
-    if (merged.controlSocket) args.push(`--control-socket=${resolve(merged.controlSocket)}`);
-    if (merged.useMockKeychain) args.push("--use-mock-keychain");
-    if (merged.overview) args.push("--overview");
-    if (merged.showOnStart) args.push("--show-on-start");
+    const args = buildNativeCefArgs(merged, port);
     this.process = spawn(executable, args, {
       cwd: merged.cwd,
       env: { ...process.env, ...merged.env },
@@ -484,6 +478,31 @@ export class NativeCefRuntime {
     }
     throw new Error(`Native CEF DevTools did not become ready: ${String(lastError || "timeout")}`);
   }
+}
+
+/**
+ * Build the native host command line in one place so every launch path keeps
+ * the same Chrome-shell contract. Overview is intentionally a UFO management
+ * page without browser chrome; human-facing Spaces explicitly opt into the
+ * CEF native tabs/omnibox/profile controls.
+ */
+export function buildNativeCefArgs(options: NativeCefRuntimeOptions, port = options.port ?? 9222) {
+  const args = [
+    `--url=${options.url || "https://www.google.com/"}`,
+    ...(options.devtoolsSocket
+      ? [`--devtools-socket=${resolve(options.devtoolsSocket)}`]
+      : [`--agent-devtools-port=${port}`]),
+  ];
+  if (options.userDataDir) args.push(`--user-data-dir=${resolve(options.userDataDir)}`);
+  if (options.controlSocket) args.push(`--control-socket=${resolve(options.controlSocket)}`);
+  if (options.useMockKeychain) args.push("--use-mock-keychain");
+  if (options.overview) args.push("--overview");
+  // Keep the mode explicit in production launches. The host also defaults to
+  // this mode for direct non-Overview runs, while --plain-page remains an
+  // intentional diagnostic escape hatch for CEF host development.
+  if (!options.overview && options.chromeShell !== false) args.push("--chrome-shell");
+  if (options.showOnStart) args.push("--show-on-start");
+  return args;
 }
 
 function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals) {

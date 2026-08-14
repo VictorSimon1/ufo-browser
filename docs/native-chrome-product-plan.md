@@ -1,6 +1,6 @@
 # Native Chrome Product Plan
 
-This branch is the migration track for making UFO-Browser a real CEF/Chrome
+This branch is the Native Chrome-feel track for making UFO-Browser a real CEF/Chrome
 Runtime application while keeping the existing UFO Agent, Skill, CLI, Task
 Space, Profile, login-state, Overview, and control-overlay contracts intact.
 
@@ -26,7 +26,7 @@ Space, Profile, login-state, Overview, and control-overlay contracts intact.
 ## Current implementation
 
 The branch starts from the Native CEF product runtime on
-`codex/native-chrome-next` and validates the latest stable CEF selected by the
+`codex/native-chrome-feel` and validates the latest stable CEF selected by the
 repository tooling. The current local validation target is CEF
 `151.3.17+gf059e67+chromium-151.0.7922.138`; CEF binaries remain ignored and
 are never copied into Git.
@@ -34,6 +34,8 @@ are never copied into Git.
 Already covered by the Native vertical slice:
 
 - CEF Chrome Runtime with `CEF_CTT_NORMAL` toolbar for human-facing Spaces;
+- explicit `--chrome-shell` launch contract so every human-facing Space cannot
+  silently fall back to a page-only shell;
 - native tabs, omnibox, navigation, profile menu, dialogs, and popup lifecycle;
 - standalone Node Agent service and the existing `ufo-browser nodejs` protocol;
 - isolated persistent/temporary Spaces and profile-aware CEF user-data roots;
@@ -49,8 +51,11 @@ Already covered by the Native vertical slice:
 
 Keep Agent contracts unchanged, make CEF version selection reproducible, build
 against the latest stable CEF, and verify a relocated DMG bundle starts without
-Electron. The branch adds a version smoke that asserts the actual Chromium
-version returned by the running CEF host.
+Electron. Human-facing Spaces now pass an explicit `--chrome-shell` switch and
+the CEF host defaults non-Overview windows to the same native Chrome toolbar;
+Overview remains a purpose-built management surface without browser chrome.
+The branch adds a version smoke that asserts the actual Chromium version
+returned by the running CEF host and command-line tests that protect this split.
 
 ### Phase 2 — Private CEF Agent transport
 

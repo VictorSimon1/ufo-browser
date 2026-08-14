@@ -97,8 +97,7 @@ struct UfoCefHandler::DevToolsClient {
 };
 
 UfoCefHandler::UfoCefHandler(bool chrome_style)
-    {
-  (void)chrome_style;
+    : chrome_style_(chrome_style) {
   DCHECK(!g_instance);
   g_instance = this;
 }

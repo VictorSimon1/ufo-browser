@@ -66,6 +66,9 @@ class UfoWindowDelegate final : public CefWindowDelegate {
 
 class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
  public:
+  explicit UfoBrowserViewDelegate(bool chrome_shell)
+      : chrome_shell_(chrome_shell) {}
+
   bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view,
                                  CefRefPtr<CefBrowserView> popup_browser_view,
                                  bool is_devtools) override {
@@ -89,10 +92,11 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
   // supplied by Chromium itself.
   ChromeToolbarType GetChromeToolbarType(
       CefRefPtr<CefBrowserView> browser_view) override {
-    return CEF_CTT_NORMAL;
+    return chrome_shell_ ? CEF_CTT_NORMAL : CEF_CTT_NONE;
   }
 
  private:
+  const bool chrome_shell_;
   IMPLEMENT_REFCOUNTING(UfoBrowserViewDelegate);
 };
 
@@ -122,20 +126,27 @@ std::string StartupUrl() {
 void UfoCefApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
 
-  auto handler = CefRefPtr<UfoCefHandler>(new UfoCefHandler(true));
   const auto command_line = CefCommandLine::GetGlobalCommandLine();
+  const bool overview = command_line->HasSwitch("overview");
+  // A non-Overview CEF host is a real browser shell by default. The explicit
+  // switch is passed by UFO's runtime and makes the product invariant visible
+  // in process inspection; --plain-page remains available only for host-level
+  // diagnostics that intentionally want a page without browser chrome.
+  const bool chrome_shell = !overview &&
+      (command_line->HasSwitch("chrome-shell") ||
+       !command_line->HasSwitch("plain-page"));
+  auto handler = CefRefPtr<UfoCefHandler>(new UfoCefHandler(chrome_shell));
   const auto control_socket = command_line->GetSwitchValue("control-socket").ToString();
   if (!control_socket.empty()) handler->StartControlSocket(control_socket);
   const auto devtools_socket = command_line->GetSwitchValue("devtools-socket").ToString();
   if (!devtools_socket.empty()) handler->StartDevToolsSocket(devtools_socket);
   CefBrowserSettings browser_settings;
-  const bool overview = command_line->HasSwitch("overview");
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, StartupUrl(), browser_settings, nullptr, nullptr,
       overview ? static_cast<CefRefPtr<CefBrowserViewDelegate>>(
           new UfoOverviewBrowserViewDelegate())
                : static_cast<CefRefPtr<CefBrowserViewDelegate>>(
-          new UfoBrowserViewDelegate()));
+          new UfoBrowserViewDelegate(chrome_shell)));
   CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(browser_view));
 }
 

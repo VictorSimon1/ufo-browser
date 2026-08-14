@@ -346,6 +346,10 @@ export class NativeCefTaskSpaceManager {
     const runtimeOptions: NativeCefRuntimeOptions = {
       executable: this.options.executable,
       url: url || tab.url,
+      // Every human-facing Space is a real Chrome window. Keep this explicit
+      // so future diagnostic/plain-page launches cannot silently change the
+      // product shell while Agent/CDP behavior remains identical.
+      chromeShell: true,
       // Development smoke tests may pin a base for repeatability. Packaged
       // Native runs leave the base unset and receive an ephemeral loopback
       // port, so no predictable DevTools endpoint is exposed.

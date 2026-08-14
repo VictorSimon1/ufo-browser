@@ -4,6 +4,9 @@ UFO-Browser's product runtime is CEF-first. The existing Electron application
 is retained only as a development fallback for legacy tests and migration
 rollback. The browser window itself is CEF's
 Chrome Runtime; Electron must not redraw or embed a fake address bar.
+Human-facing Spaces are launched with an explicit `--chrome-shell` contract,
+which enables CEF's full native tabs/omnibox/profile toolbar. Overview remains
+the UFO management surface and intentionally has no browser toolbar.
 
 ## What is being replaced
 
@@ -237,6 +240,10 @@ private smoke covers page evaluation, Page.enable, navigation readiness, and
 screenshots. Native Overview windows are controlled by their private AppKit
 control socket and do not expose a public DevTools port in packaged builds;
 an Overview port is only enabled when an explicit development port is passed.
+The Native runtime passes `--chrome-shell` for every human-facing Space. The
+CEF host also defaults non-Overview direct launches to that same Chrome shell;
+`--plain-page` is reserved for low-level host diagnostics and is not used by
+the product or DMG.
 The existing Electron path remains a migration fallback for
 legacy tests until the acceptance gates pass; it is not used by the Native DMG
 runtime and is not the final browser UI.

@@ -51,12 +51,14 @@ class UfoCefHandler final : public CefClient,
                               const std::string& message);
   bool ConsumeDevToolsOuterResult(const std::string& route_id, int id);
   bool IsClosing() const { return closing_; }
+  bool IsChromeStyle() const { return chrome_style_; }
 
  private:
   using BrowserList = std::list<CefRefPtr<CefBrowser>>;
 
   BrowserList browsers_;
   CefRefPtr<CefWindow> main_window_;
+  const bool chrome_style_;
   bool closing_ = false;
   std::atomic<bool> agent_active_{false};
   std::string control_socket_path_;

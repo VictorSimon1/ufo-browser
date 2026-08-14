@@ -8,7 +8,7 @@ const root = resolve(new URL("..", import.meta.url).pathname);
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-chrome-shell-"));
 const executable = join(root, "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host");
 await access(executable);
-const child = spawn(executable, ["--url=https://example.com/", `--user-data-dir=${userData}`, "--show-on-start"], {
+const child = spawn(executable, ["--url=https://example.com/", `--user-data-dir=${userData}`, "--chrome-shell", "--show-on-start"], {
   cwd: root,
   stdio: ["ignore", "ignore", "pipe"],
   detached: true,
@@ -27,9 +27,10 @@ try {
     child.once("error", rejectReady);
     child.once("exit", (code) => rejectReady(new Error(`CEF shell exited ${code}\n${stderr}`)));
   });
-  assert.match(await readSource(join(root, "native/cef-host/app.cc")), /return CEF_CTT_NORMAL;/);
+  assert.match(await readSource(join(root, "native/cef-host/app.cc")), /CEF_CTT_NORMAL/);
   assert.match(await readSource(join(root, "native/cef-host/app.cc")), /return CEF_RUNTIME_STYLE_CHROME;/);
-  console.log(JSON.stringify({ chromeRuntime: true, nativeToolbar: true }));
+  assert.match(await readSource(join(root, "native/cef-host/app.cc")), /HasSwitch\("chrome-shell"\)/);
+  console.log(JSON.stringify({ chromeRuntime: true, nativeToolbar: true, explicitChromeShell: true }));
 } finally {
   if (child.exitCode === null) signalProcessGroup(child, "SIGTERM");
   const exit = await waitForExit(child, 5_000);
