@@ -396,6 +396,13 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
   else dispatch_async(dispatch_get_main_queue(), update);
 }
 
+bool UfoCefWindowIsPresented(void* cef_view_handle) {
+  NSView* view = (NSView*)cef_view_handle;
+  if (!view || !view.window) return false;
+  NSWindow* host = view.window;
+  return host.isVisible && host.alphaValue > 0.5 && !host.ignoresMouseEvents;
+}
+
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {
   NSView* retainedCefView = [(NSView*)cef_view_handle retain];
   const char* socket = presentation_socket ?: "";

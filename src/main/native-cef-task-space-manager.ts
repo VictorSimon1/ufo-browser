@@ -33,7 +33,7 @@ export type NativeCefTaskSpaceManagerOptions = {
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
   onBeforeRuntimeStart?: (spaceId: number, profileId: string, dataDir: string) => Promise<void>;
   onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
-  /** One native CEF process that owns all logical Space BrowserViews. */
+  /** The one native CEF main process that owns all logical Space surfaces. */
   sharedHost?: NativeCefRuntime;
   ownsSharedHost?: boolean;
 };
@@ -46,10 +46,10 @@ export type NativeCefPresentationHooks = {
 /**
  * Electron-free Task Space manager used by the native CEF Agent Host.
  *
- * A Space owns a CEF Chrome Runtime process and a persistent user-data
- * directory. The first native slice intentionally uses one browser target per
- * Space; CEF's own toolbar remains responsible for human tab UI while the
- * Agent protocol is layered on the active target.
+ * A Space owns a persistent data directory, isolated CefRequestContext, and
+ * target route inside the shared CEF Host. It never owns or launches another
+ * CEF main process. CEF's own toolbar remains responsible for human tab UI
+ * while the Agent protocol is layered on the active target.
  */
 export class NativeCefTaskSpaceManager {
   private state = { version: 1 as const, nextSpaceId: 1, spaces: [] as SpaceRecord[] };

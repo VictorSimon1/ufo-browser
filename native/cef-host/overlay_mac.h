@@ -14,6 +14,7 @@ void UfoAgentOverlayClear(void* cef_view_handle);
 // human. Unlike Hide/orderOut, alpha=0 preserves CEF screenshot production and
 // DevTools input for background Agent Spaces.
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented);
+bool UfoCefWindowIsPresented(void* cef_view_handle);
 
 // Add the small native Spaces button used by human-facing Chrome shells. It
 // sends presentation commands to UFO over a private Unix socket and is never

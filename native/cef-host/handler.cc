@@ -486,6 +486,34 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       return shared_space_factory_ ? shared_space_factory_(command)
                                    : "error shared-host-disabled";
     }
+    if (operation == "presentation-status") {
+      int presented_count = 0;
+      auto presented_spaces = CefListValue::Create();
+      const bool overview_presented =
+          main_window_ && !main_window_->IsClosed() &&
+          UfoCefWindowIsPresented(main_window_->GetWindowHandle());
+      if (overview_presented) presented_count += 1;
+      for (const auto& [candidate_id, window] : space_windows_) {
+        if (!window || window->IsClosed() ||
+            !UfoCefWindowIsPresented(window->GetWindowHandle())) {
+          continue;
+        }
+        presented_spaces->SetInt(presented_spaces->GetSize(), candidate_id);
+        presented_count += 1;
+      }
+      auto response = CefDictionaryValue::Create();
+      response->SetBool("ok", true);
+      response->SetInt("visibleSpaceId", visible_space_id_);
+      response->SetBool("overviewPresented", overview_presented);
+      response->SetInt("presentedWindowCount", presented_count);
+      response->SetInt("managedWindowCount",
+                       static_cast<int>(space_windows_.size()) +
+                           (main_window_ ? 1 : 0));
+      response->SetList("presentedSpaceIds", presented_spaces);
+      auto value = CefValue::Create();
+      value->SetDictionary(response);
+      return JsonString(value);
+    }
     const int space_id = root->GetInt("spaceId");
     const auto it = space_windows_.find(space_id);
     if (space_id <= 0 || it == space_windows_.end() || !it->second ||

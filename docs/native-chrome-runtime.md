@@ -41,11 +41,15 @@ The following remains owned by UFO-Browser and is not copied from Ego Lite:
 - Overview state, low-frequency change-driven previews, and presentation state;
 - the native macOS agent-control overlay.
 
-The release target is a single UFO native host process. The current
-per-Space `ufo-cef-host` launch model is a migration scaffold used to verify
-the CEF bridge and profile isolation; it is not the final product boundary.
-The next host pass will keep the Agent/Space schedulers in one UFO process and
-switch one shared Overview/Space window between isolated CEF BrowserViews.
+The release target uses one shared UFO CEF host process for Overview and every
+Space. A Space never launches another `ufo-cef-host` application or CEF main
+process. CEF Chrome Runtime permits only one Chrome-style BrowserView per
+`CefWindow` (`Cannot add multiple Chrome style BrowserViews`), so isolated
+Space RequestContexts are held by separate internal native windows inside that
+single Host. UFO's Presentation Coordinator guarantees that exactly one of
+those managed surfaces is presented to the human; the others remain
+compositor-backed for Agent screenshots and input without accepting human
+events.
 
 Ego Lite is used as a behavioral and visual reference. Its compiled framework
 and private implementation are not product dependencies.
@@ -66,9 +70,11 @@ CEF Native Host (C++/Objective-C++)
 CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
 
-In the final single-host form, the lower two layers are in the same native UFO
-process. A Space is a request context and target route, not a new application
-process or top-level browser window.
+The standalone Node Agent service and the CEF Native Host are separate runtime
+components in one UFO application process tree. All Spaces live in the same
+CEF Host process. A Space is an isolated request context, target route, and
+internally managed Chrome surface—not a new application/CEF process. The
+native presentation invariant is one human-presented UFO surface at a time.
 
 The production direction is a per-runtime private Unix-socket CEF DevTools
 bridge. Its browser-level and page-level slices are verified for
@@ -101,12 +107,11 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    npm run native:cef:agent:smoke
    ```
 
-   `native-cef-agent` is a standalone Node process. It owns the private Agent
-   Unix socket, starts one CEF Chrome Runtime per Space, and exposes the same
-   `ufo-browser nodejs` helpers. The smoke covers bootstrap, `pageInfo`, `js`,
-   `snapshotText`, screenshot capture, navigation, and completion. This is
-   intentionally a vertical slice; multi-Space Overview and profile import are
-   the next integration gates.
+   `native-cef-agent` is a standalone Node service. It owns the private Agent
+   Unix socket, starts one shared UFO CEF Host, and registers each Space as an
+   isolated RequestContext and target route inside that Host. It exposes the
+   same `ufo-browser nodejs` helpers. The smoke covers bootstrap, `pageInfo`,
+   `js`, `snapshotText`, screenshot capture, navigation, and completion.
 3. **Profiles and login state** — the current native vertical slice gives each
    Space a private CEF user-data directory, which avoids Chromium profile-lock
    races while preserving full browser persistence within that Space. The
@@ -130,10 +135,10 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    place the human-input blocking overlay in an outer native `NSPanel`/`NSView`
    so Agent CDP input and screenshots are never covered.
 
-   The native host now has a private per-Space control socket for `show`,
-   `hide`, `focus`, `close`, and `status`. It is separate from the CDP port and
-   is used by the future native Overview/presentation layer; the Agent still
-   talks through the existing UFO Unix socket.
+   The shared native Host has one private control socket. Space-scoped
+   `show`, `hide`, `focus`, `close`, and `status` commands carry a Space id and
+   are routed inside the Host. It is separate from the DevTools bridge; the
+   Agent still talks through the existing UFO Unix socket.
 
    The first native overlay slice is now implemented. Agent lease acquisition
    sends `agent-active-on` to the CEF host, which installs a transparent AppKit
@@ -164,14 +169,17 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    Skills into the installed Agent directories.
 
    Native presentation is now coordinated explicitly instead of letting each
-   CEF window show itself independently. Opening a Space hides Overview and
-   all other running Space windows; closing the visible Space returns to and
-   focuses Overview. Background Spaces keep their Chromium state but remain
-   hidden, and cold Spaces are still started only when opened or used by an
-   Agent. Control sockets live in a short per-Agent temporary directory to
+   CEF window show itself independently. Opening a Space makes it the only
+   human-presented surface and disables human input on Overview and all other
+   running Space windows; closing the visible Space returns to and focuses
+   Overview. Background Spaces keep their Chromium state and compositor for
+   Agent work but remain transparent and non-interactive to the human. Cold
+   Spaces are still started only when opened or used by an Agent. Control
+   sockets live in a short per-Agent temporary directory to
    stay below macOS `sockaddr_un` path limits even when Profile data lives in a
    deeply nested directory. Run `npm run native:cef:presentation:smoke` for the
-   create/open/close/return lifecycle gate.
+   create/open/close/return lifecycle gate, including the assertion that the
+   presented-window count never exceeds one.
 
    Native Profile Cookie sync is also connected to the CEF Agent. A running
    persistent Space gets an independent Cookie checkpoint and receives source
@@ -195,8 +203,8 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    relative to `Contents/MacOS`, so moving the host into `Resources` would
    break Framework loading after a drag-install. The launcher starts the
    standalone Agent with the bundled Node runtime, then the Agent starts the
-   CEF Overview and Space hosts. No Electron process is required by the native
-   bundle.
+   single shared CEF Host that owns Overview and all Space surfaces. No
+   Electron process is required by the native bundle.
 
 ## Build and run
 

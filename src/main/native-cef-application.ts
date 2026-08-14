@@ -22,10 +22,10 @@ export type NativeCefApplicationOptions = {
  * Electron-free UFO-Browser product coordinator.
  *
  * The Agent service owns Task Spaces and the HTTP Overview API. A native CEF
- * host renders that API with CEF's Chrome Runtime, while Space hosts remain
- * isolated runtimes managed by the Agent. Keeping the two processes explicit
- * gives us a safe shutdown boundary and makes the eventual .app launcher
- * independent of Electron.
+ * Host renders that API and every Space with CEF's Chrome Runtime. Spaces are
+ * isolated RequestContexts and target routes inside that one shared Host, not
+ * child CEF applications. The standalone Agent/Host process boundary gives us
+ * a safe shutdown boundary while keeping the .app independent of Electron.
  */
 export class NativeCefApplication {
   private agent?: ChildProcess;

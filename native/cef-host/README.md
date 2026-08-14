@@ -58,11 +58,12 @@ The DMG also bundles the storage-revision Worker next to the Native Agent;
 login-state storage synchronization therefore does not depend on the source
 checkout after installation.
 
-Space hosts start hidden by default and are shown through the private control
-socket only when Overview opens or focuses that Space. Pass `--show-on-start`
-for a standalone human-facing development window. This avoids the cold-start
-flash and focus steal that would otherwise occur before the Presentation
-Coordinator applies Space visibility.
+The product starts one shared CEF Host for Overview and every Space. Space
+surfaces start transparent and non-interactive inside that Host and are
+presented through the private control socket only when Overview opens or
+focuses the Space. Pass `--show-on-start` only for a standalone host diagnostic.
+This avoids cold-start flash and focus steal before the Presentation
+Coordinator applies the single-visible-surface state.
 
 The port is a temporary prototype transport. It must not be enabled in a
 release build; the production bridge will be a private Unix-socket/CEF

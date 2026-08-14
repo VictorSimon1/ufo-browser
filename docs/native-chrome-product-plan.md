@@ -32,16 +32,18 @@ input policy. CEF is embedded in that host as the page/compositor layer.
 
 Each logical Space still gets its own CEF `CefRequestContext`/profile data
 root and its own CDP target route. Isolation is logical and persistent-data
-safe; it must not be implemented by launching another UFO/CEF application for
-every Space. The visible surface is a single UFO window that switches between
-Overview and the selected Space BrowserView. Background Spaces remain alive
-only when their lifecycle requires it and never create an additional visible
-window.
+safe; it must not be implemented by launching another UFO/CEF application or
+CEF main process for every Space. Public CEF Chrome Runtime supports only one
+Chrome-style BrowserView per `CefWindow`, so the shared Host owns internal
+Overview/Space windows and the Presentation Coordinator exposes exactly one
+of them to the human at a time. Background Spaces remain alive only when their
+lifecycle requires it; their windows are compositor-backed, transparent, and
+non-interactive rather than additional visible product windows.
 
-The current per-Space native host is therefore a migration scaffold only. It
-is useful for validating CEF, profile seeding, and the private CDP bridge, but
-it is not the final architecture and must not be used as release evidence for
-the single-host milestone.
+The former per-Space native host process was a migration scaffold only. The
+shared Host is now the required architecture. Release evidence must prove both
+that all Spaces route to the same CEF Host process and that no presentation
+transition exposes more than one human-interactive native window.
 
 ## Current implementation
 
