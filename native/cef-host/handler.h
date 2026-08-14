@@ -47,6 +47,7 @@ class UfoCefHandler final : public CefClient,
   void SetSharedSpaceFactory(
       std::function<std::string(const std::string&)> factory);
   void SetAgentConnectionActive(bool active);
+  void SetSpaceAgentConnectionActive(int space_id, bool active);
   bool IsAgentConnectionActive() const { return agent_active_; }
   void StartControlSocket(const std::string& path);
   void StopControlSocket();
@@ -84,6 +85,8 @@ class UfoCefHandler final : public CefClient,
   std::map<int, int> browser_spaces_;
   std::map<int, int> space_browsers_;
   std::map<int, CefRefPtr<CefWindow>> space_windows_;
+  std::set<int> agent_active_spaces_;
+  int visible_space_id_ = 0;
   std::function<std::string(const std::string&)> shared_space_factory_;
   std::mutex devtools_targets_mutex_;
 
@@ -96,6 +99,7 @@ class UfoCefHandler final : public CefClient,
   CefRefPtr<CefBrowser> FindDevToolsBrowser(const std::string& target_id,
                                             const std::string& browser_route);
   std::string HandleControlCommandOnUi(const std::string& command);
+  void SetVisibleSpace(int space_id);
 
   IMPLEMENT_REFCOUNTING(UfoCefHandler);
 };

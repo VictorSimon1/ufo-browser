@@ -330,7 +330,9 @@ export class NativeCefRuntime {
     this.process = spawn(executable, args, {
       cwd: merged.cwd,
       env: { ...process.env, ...merged.env },
-      stdio: "ignore",
+      // Keep release launches quiet, but allow focused shared-host debugging
+      // without changing the process topology or the private bridge.
+      stdio: process.env.UFO_CEF_DEBUG_STDIO === "1" ? "inherit" : "ignore",
       // CEF launches GPU/renderer/utility helpers. Put the host in its own
       // process group so a bounded shutdown can reap the entire runtime tree
       // instead of leaving Chromium helpers behind when a renderer stalls.
@@ -487,7 +489,14 @@ export class NativeCefRuntime {
 
   async controlSharedSpace(
     spaceId: number,
-    command: "show-space" | "hide-space" | "focus-space" | "close-space" | "status-space",
+    command:
+      | "show-space"
+      | "hide-space"
+      | "focus-space"
+      | "close-space"
+      | "status-space"
+      | "agent-active-space-on"
+      | "agent-active-space-off",
   ) {
     const response = await this.sendControlPayload(JSON.stringify({ command, spaceId }));
     if (response.startsWith("error ")) throw new Error(response);
@@ -549,6 +558,117 @@ export class NativeCefRuntime {
       }
     }
     throw new Error(`Native CEF DevTools did not become ready: ${String(lastError || "timeout")}`);
+  }
+}
+
+/**
+ * A logical Space hosted inside one shared Native CEF process.
+ *
+ * This adapter intentionally matches NativeCefRuntime's public surface so the
+ * Agent, snapshot, profile-sync, and CDP broker layers do not need a second
+ * protocol. Process ownership remains with the shared host; closing a Space
+ * destroys only its BrowserView/RequestContext.
+ */
+export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
+  private started = false;
+  private readonly browserRoute: string;
+
+  constructor(
+    private readonly host: NativeCefRuntime,
+    private readonly space: NativeCefSharedSpaceSpec,
+  ) {
+    super();
+    this.browserRoute = `space:${space.id}`;
+  }
+
+  override isRunning() {
+    return this.started && this.host.isRunning();
+  }
+
+  override getPort() {
+    return this.host.getPort();
+  }
+
+  override usesPrivateBridge() {
+    return this.host.usesPrivateBridge();
+  }
+
+  override async start() {
+    if (this.isRunning()) return this.host.version();
+    if (!this.host.isRunning()) {
+      throw new Error("Native CEF shared host is not running");
+    }
+    await this.host.createSharedSpace(this.space);
+    this.started = true;
+    return this.host.version();
+  }
+
+  override version() {
+    return this.host.version();
+  }
+
+  override async targets(): Promise<NativeCefTarget[]> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const connection = await this.host.connectBrowser(this.browserRoute);
+      try {
+        const result = await connection.send("Target.getTargets");
+        return (result?.targetInfos || []).map((target: any) => ({
+          id: target.targetId,
+          type: target.type,
+          title: target.title,
+          url: target.url,
+          parentId: target.parentId,
+          parentFrameId: target.parentFrameId,
+          openerId: target.openerId,
+        }));
+      } catch (error) {
+        lastError = error;
+      } finally {
+        await connection.close();
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
+    throw new Error(`Native CEF shared Space route did not become ready: ${String(lastError || this.browserRoute)}`);
+  }
+
+  override connect(targetId?: string) {
+    return this.host.connect(targetId, this.browserRoute);
+  }
+
+  override connectRaw(targetId: string) {
+    return this.host.connectRaw(targetId, this.browserRoute);
+  }
+
+  override connectBrowser() {
+    return this.host.connectBrowser(this.browserRoute);
+  }
+
+  override async stop() {
+    if (!this.started) return;
+    this.started = false;
+    await this.host.controlSharedSpace(this.space.id, "close-space").catch(() => undefined);
+  }
+
+  override async control(
+    command: "show" | "hide" | "focus" | "close" | "status" | "agent-active-on" | "agent-active-off",
+  ) {
+    const routed = {
+      show: "show-space",
+      hide: "hide-space",
+      focus: "focus-space",
+      close: "close-space",
+      status: "status-space",
+      "agent-active-on": "agent-active-space-on",
+      "agent-active-off": "agent-active-space-off",
+    } as const;
+    const response = await this.host.controlSharedSpace(this.space.id, routed[command]);
+    if (command === "close") this.started = false;
+    return response;
+  }
+
+  override hasExited() {
+    return !this.isRunning();
   }
 }
 

@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { pathToFileURL } from "node:url";
 
 export type NativeCefApplicationOptions = {
@@ -32,13 +32,17 @@ export class NativeCefApplication {
   private overview?: ChildProcess;
   private infoPath?: string;
   private overviewPort?: number;
+  private sharedHostOwnedByAgent = false;
   private stopPromise?: Promise<void>;
   private stopping = false;
 
   constructor(private readonly defaults: NativeCefApplicationOptions = {}) {}
 
   isRunning() {
-    return Boolean(this.agent && !this.agent.killed && this.overview && !this.overview.killed);
+    return Boolean(
+      this.agent && !this.agent.killed &&
+      (this.sharedHostOwnedByAgent || (this.overview && !this.overview.killed)),
+    );
   }
 
   async start(options: NativeCefApplicationOptions = {}) {
@@ -60,6 +64,7 @@ export class NativeCefApplication {
       UFO_BROWSER_NATIVE_USER_DATA: userDataDir,
       UFO_BROWSER_SOCKET: socketPath,
       UFO_BROWSER_NATIVE_OVERVIEW_MODE: "external",
+      UFO_BROWSER_NATIVE_SHARED_HOST: "1",
       UFO_BROWSER_OVERVIEW_INFO_FILE: infoFile,
       UFO_CEF_HOST: cefExecutable,
       UFO_BROWSER_OVERVIEW_CONTROL_SOCKET: overviewControlSocket,
@@ -82,6 +87,21 @@ export class NativeCefApplication {
       if (!this.stopping) void this.stop();
     });
     const info = await waitForOverviewInfo(infoFile, merged.startupTimeoutMs ?? 15_000, this.agent);
+    this.sharedHostOwnedByAgent = env.UFO_BROWSER_NATIVE_SHARED_HOST === "1";
+    if (this.sharedHostOwnedByAgent) {
+      await waitForControlSocket(
+        overviewControlSocket,
+        merged.startupTimeoutMs ?? 15_000,
+        this.agent,
+      );
+      await waitForSocketConnect(
+        socketPath,
+        merged.startupTimeoutMs ?? 15_000,
+        this.agent,
+      );
+      this.overviewPort = undefined;
+      return this.status();
+    }
     const overviewArgs = [
       `--url=${info.url}`,
       "--overview",
@@ -125,6 +145,7 @@ export class NativeCefApplication {
       overviewDevtoolsPort: this.overviewPort,
       agentPid: this.agent?.pid,
       overviewPid: this.overview?.pid,
+      sharedHostOwnedByAgent: this.sharedHostOwnedByAgent,
     };
   }
 
@@ -141,6 +162,7 @@ export class NativeCefApplication {
       if (this.infoPath) await rm(this.infoPath, { force: true }).catch(() => undefined);
       this.infoPath = undefined;
       this.overviewPort = undefined;
+      this.sharedHostOwnedByAgent = false;
       this.stopping = false;
       this.stopPromise = undefined;
     })();
@@ -178,6 +200,61 @@ async function waitForDevtools(port: number, timeoutMs: number, child: ChildProc
     await delay(100);
   }
   throw new Error(`Native CEF Overview host did not become ready: ${String(lastError || "timeout")}`);
+}
+
+async function waitForControlSocket(path: string, timeoutMs: number, child: ChildProcess) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`Native CEF Agent exited before shared Host started (${child.exitCode})`);
+    }
+    try {
+      const response = await sendControl(path, "status");
+      if (response === "ok") return;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(100);
+  }
+  throw new Error(`Native CEF shared Host did not become ready: ${String(lastError || "timeout")}`);
+}
+
+async function waitForSocketConnect(path: string, timeoutMs: number, child: ChildProcess) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`Native CEF Agent exited before its socket started (${child.exitCode})`);
+    }
+    try {
+      await new Promise<void>((resolveConnected, reject) => {
+        const socket = createConnection(path);
+        socket.once("error", reject);
+        socket.once("connect", () => {
+          socket.end();
+          resolveConnected();
+        });
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(50);
+  }
+  throw new Error(`Native CEF Agent socket did not become ready: ${String(lastError || "timeout")}`);
+}
+
+function sendControl(path: string, command: string) {
+  return new Promise<string>((resolveResponse, reject) => {
+    const socket = createConnection(path);
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { response += chunk; });
+    socket.once("error", reject);
+    socket.once("close", () => resolveResponse(response.trim()));
+    socket.once("connect", () => socket.end(`${command}\n`));
+  });
 }
 
 async function terminate(child?: ChildProcess) {

@@ -18,7 +18,12 @@ if (!userDataDir.includes("ufo-native-app-smoke-")) {
 }
 try {
   const status = await app.start();
-  if (!status.running || !status.agentPid || !status.overviewPid) {
+  if (
+    !status.running ||
+    !status.agentPid ||
+    !status.sharedHostOwnedByAgent ||
+    status.overviewPid
+  ) {
     throw new Error(`Native CEF application did not start: ${JSON.stringify(status)}`);
   }
   console.log(JSON.stringify(status));

@@ -192,6 +192,7 @@ void UfoCefHandler::ShowMainWindow() {
   }
   if (main_window_ && !main_window_->IsClosed()) main_window_->Show();
   if (main_window_ && !main_window_->IsClosed()) {
+    SetVisibleSpace(0);
     UfoCefWindowSetPresented(main_window_->GetWindowHandle(), true);
   }
 }
@@ -212,6 +213,7 @@ void UfoCefHandler::FocusMainWindow() {
     return;
   }
   if (main_window_ && !main_window_->IsClosed()) {
+    SetVisibleSpace(0);
     main_window_->Show();
     UfoCefWindowSetPresented(main_window_->GetWindowHandle(), true);
     main_window_->Activate();
@@ -266,6 +268,35 @@ void UfoCefHandler::SetAgentConnectionActive(bool active) {
   if (!main_window_ || main_window_->IsClosed()) return;
   if (active) UfoAgentOverlaySet(main_window_->GetWindowHandle(), true, "Agent controlling");
   else UfoAgentOverlayClear(main_window_->GetWindowHandle());
+}
+
+void UfoCefHandler::SetSpaceAgentConnectionActive(int space_id, bool active) {
+  CEF_REQUIRE_UI_THREAD();
+  if (space_id <= 0) return;
+  if (active) agent_active_spaces_.insert(space_id);
+  else agent_active_spaces_.erase(space_id);
+  if (visible_space_id_ == space_id) SetVisibleSpace(space_id);
+}
+
+void UfoCefHandler::SetVisibleSpace(int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (visible_space_id_ > 0) {
+    const auto previous = space_windows_.find(visible_space_id_);
+    if (previous != space_windows_.end() && previous->second &&
+        !previous->second->IsClosed()) {
+      UfoAgentOverlayClear(previous->second->GetWindowHandle());
+    }
+  }
+  visible_space_id_ = space_id;
+  const bool active = space_id > 0 && agent_active_spaces_.contains(space_id);
+  agent_active_ = active;
+  if (!active) return;
+  const auto current = space_windows_.find(space_id);
+  if (current != space_windows_.end() && current->second &&
+      !current->second->IsClosed()) {
+    UfoAgentOverlaySet(current->second->GetWindowHandle(), true,
+                       "Agent controlling");
+  }
 }
 
 void UfoCefHandler::StartControlSocket(const std::string& path) {
@@ -385,10 +416,12 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     if (operation == "show-space") {
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), true);
+      SetVisibleSpace(space_id);
       return "ok";
     }
     if (operation == "hide-space") {
       UfoCefWindowSetPresented(window->GetWindowHandle(), false);
+      if (visible_space_id_ == space_id) SetVisibleSpace(0);
       return "ok";
     }
     if (operation == "focus-space") {
@@ -396,10 +429,21 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       UfoCefWindowSetPresented(window->GetWindowHandle(), true);
       window->Activate();
       window->BringToTop();
+      SetVisibleSpace(space_id);
       return "ok";
     }
     if (operation == "close-space") {
+      agent_active_spaces_.erase(space_id);
+      if (visible_space_id_ == space_id) SetVisibleSpace(0);
       window->Close();
+      return "ok";
+    }
+    if (operation == "agent-active-space-on") {
+      SetSpaceAgentConnectionActive(space_id, true);
+      return "ok";
+    }
+    if (operation == "agent-active-space-off") {
+      SetSpaceAgentConnectionActive(space_id, false);
       return "ok";
     }
     if (operation == "status-space") return "ok";
@@ -490,6 +534,13 @@ void UfoCefHandler::DispatchDevToolsMessage(
         if (!browser) {
           LOG(ERROR) << "Private DevTools target not found: " << target_id
                      << " route=" << browser_route;
+          const int message_id = message->GetInt("id");
+          if (message_id > 0) {
+            handler->PublishDevToolsMessage(
+                client->route_id,
+                std::string("{\"id\":") + std::to_string(message_id) +
+                    ",\"error\":{\"message\":\"Native CEF browser route is not ready\"}}");
+          }
           return;
         }
         auto observer = CefRefPtr<UfoDevToolsObserver>(

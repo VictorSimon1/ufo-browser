@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { lstat, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { lstat, mkdir, rm } from "node:fs/promises";
 import { AgentServer } from "./agent-server.js";
 import { NativeCefBroker } from "./native-cef-broker.js";
 import { NativeCefSnapshotService } from "./native-cef-snapshot.js";
@@ -16,6 +16,7 @@ import { NativeCefProfileSync } from "./native-cef-profile-sync.js";
 import { NativeCefProfileService } from "./native-cef-profile-service.js";
 import type { BrowserProfileRecord } from "./profile-registry.js";
 import { createNativeKeychain } from "./native-cef-keychain.js";
+import { NativeCefRuntime } from "./native-cef-runtime.js";
 
 // Native CEF is the production browser shell, so it shares the existing UFO
 // Profile registry, imported partitions, and default Agent socket. Tests and
@@ -38,6 +39,12 @@ const controlSocketsRoot = resolve(
 const overviewControlSocket = resolve(
   process.env.UFO_BROWSER_OVERVIEW_CONTROL_SOCKET ||
   join(controlSocketsRoot, "overview.sock"),
+);
+const sharedHostEnabled = process.env.UFO_BROWSER_NATIVE_SHARED_HOST !== "0";
+const sharedHostDevtoolsSocket = join(
+  process.env.UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT ||
+    join(process.env.TMPDIR || "/tmp", `ufo-browser-devtools-${process.pid}`),
+  "shared-host.sock",
 );
 const presentationSocket = resolve(
   process.env.UFO_BROWSER_PRESENTATION_SOCKET ||
@@ -125,14 +132,32 @@ const overview = new NativeCefOverview({
   port: Number(process.env.UFO_CEF_OVERVIEW_HTTP_PORT || 0),
   devtoolsPort: Number(process.env.UFO_CEF_OVERVIEW_PORT || 0),
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
-  startRuntime: process.env.UFO_BROWSER_NATIVE_OVERVIEW_MODE !== "external",
+  startRuntime: !sharedHostEnabled &&
+    process.env.UFO_BROWSER_NATIVE_OVERVIEW_MODE !== "external",
   infoFile: process.env.UFO_BROWSER_OVERVIEW_INFO_FILE,
   controlSocket: overviewControlSocket,
   profileService,
   profiles,
   rendererRoot: process.env.UFO_BROWSER_NATIVE_RENDERER_ROOT || join(process.cwd(), "dist/renderer"),
 });
-await overview.start();
+const overviewInfo = await overview.start();
+if (sharedHostEnabled) {
+  if (!overviewInfo?.url) throw new Error("Native Overview URL is unavailable");
+  await mkdir(dirname(overviewControlSocket), { recursive: true, mode: 0o700 });
+  await mkdir(dirname(sharedHostDevtoolsSocket), { recursive: true, mode: 0o700 });
+  const sharedHost = new NativeCefRuntime({
+    executable: process.env.UFO_CEF_HOST,
+    url: overviewInfo.url,
+    overview: true,
+    userDataDir: userDataPath,
+    controlSocket: overviewControlSocket,
+    presentationSocket,
+    devtoolsSocket: sharedHostDevtoolsSocket,
+    useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
+  });
+  await sharedHost.start();
+  manager.setSharedHost(sharedHost, true);
+}
 const presentation = new NativeCefPresentationCoordinator(manager, overview, presentationSocket);
 await presentation.start();
 overview.setPresentationController(presentation);

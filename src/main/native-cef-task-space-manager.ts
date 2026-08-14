@@ -9,7 +9,11 @@ import {
   isTemporarySpace,
   TEMPORARY_PROFILE_ID,
 } from "./temporary-profile.js";
-import { NativeCefRuntime, type NativeCefRuntimeOptions } from "./native-cef-runtime.js";
+import {
+  NativeCefRuntime,
+  NativeCefSharedSpaceRuntime,
+  type NativeCefRuntimeOptions,
+} from "./native-cef-runtime.js";
 import { seedNativeCefProfile } from "./native-cef-profile-seed.js";
 import type { CookieWriteTarget } from "./chrome-import/cookie-writer.js";
 
@@ -29,6 +33,9 @@ export type NativeCefTaskSpaceManagerOptions = {
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
   onBeforeRuntimeStart?: (spaceId: number, profileId: string, dataDir: string) => Promise<void>;
   onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
+  /** One native CEF process that owns all logical Space BrowserViews. */
+  sharedHost?: NativeCefRuntime;
+  ownsSharedHost?: boolean;
 };
 
 export type NativeCefPresentationHooks = {
@@ -49,9 +56,22 @@ export class NativeCefTaskSpaceManager {
   private readonly runtimes = new Map<string, NativeCefRuntime>();
   private readonly browserConnections = new Map<string, any>();
   private readonly agentOverlayState = new Map<string, boolean>();
+  private sharedHost?: NativeCefRuntime;
+  private ownsSharedHost = false;
   private presentationHooks?: NativeCefPresentationHooks;
 
-  constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {}
+  constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {
+    this.sharedHost = options.sharedHost;
+    this.ownsSharedHost = Boolean(options.ownsSharedHost);
+  }
+
+  setSharedHost(host: NativeCefRuntime | undefined, ownsHost = false) {
+    if (this.runtimes.size > 0 && host !== this.sharedHost) {
+      throw new Error("cannot replace Native CEF shared host while Spaces are running");
+    }
+    this.sharedHost = host;
+    this.ownsSharedHost = ownsHost;
+  }
 
   setPresentationHooks(hooks: NativeCefPresentationHooks | undefined) {
     this.presentationHooks = hooks;
@@ -355,7 +375,9 @@ export class NativeCefTaskSpaceManager {
       // UFO owns this metadata; it is drawn in AppKit and never enters the
       // page compositor, Agent screenshot, or DOM surface.
       spaceName: space.name,
-      profileName: this.options.profiles.getOrThrow(space.profileId).name,
+      profileName: space.profileMode === "temporary"
+        ? "Temporary"
+        : this.options.profiles.getOrThrow(space.profileId).name,
       // Development smoke tests may pin a base for repeatability. Packaged
       // Native runs leave the base unset and receive an ephemeral loopback
       // port, so no predictable DevTools endpoint is exposed.
@@ -382,7 +404,16 @@ export class NativeCefTaskSpaceManager {
         : undefined,
       useMockKeychain: this.options.useMockKeychain,
     };
-    const runtime = new NativeCefRuntime(runtimeOptions);
+    const runtime = this.sharedHost
+      ? new NativeCefSharedSpaceRuntime(this.sharedHost, {
+          id: space.id,
+          url: runtimeOptions.url || tab.url,
+          cachePath: dataDir,
+          name: space.name,
+          profileName: runtimeOptions.profileName,
+          visible: false,
+        })
+      : new NativeCefRuntime(runtimeOptions);
     if (runtimeOptions.controlSocket) await mkdir(dirname(runtimeOptions.controlSocket), { recursive: true, mode: 0o700 });
     // The private CEF DevTools bridge is a per-Space Unix socket. Create its
     // short-lived parent before launching CEF; otherwise the host cannot bind
@@ -599,6 +630,11 @@ export class NativeCefTaskSpaceManager {
     this.browserConnections.clear();
     await Promise.all(runtimes.map((runtime) => runtime.stop().catch(() => undefined)));
     await Promise.all(browsers.map((browser) => browser.close().catch(() => undefined)));
+    if (this.ownsSharedHost) {
+      await this.sharedHost?.stop().catch(() => undefined);
+      this.sharedHost = undefined;
+      this.ownsSharedHost = false;
+    }
     if (this.options.controlSocketsRoot) {
       await rm(this.options.controlSocketsRoot, { recursive: true, force: true }).catch(() => undefined);
     }
