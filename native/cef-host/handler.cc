@@ -299,7 +299,8 @@ void UfoCefHandler::SetMainWindow(CefRefPtr<CefWindow> window) {
   }
   main_window_ = window;
   if (agent_active_ && main_window_) {
-    UfoAgentOverlaySet(main_window_->GetWindowHandle(), true, "Agent controlling");
+    UfoAgentOverlaySet(main_window_->GetWindowHandle(), true,
+                       "Agent controlling", 0, nullptr);
   }
 }
 
@@ -333,6 +334,11 @@ void UfoCefHandler::RegisterSpaceWindow(int space_id,
   else space_windows_.erase(space_id);
 }
 
+void UfoCefHandler::SetPresentationSocket(std::string path) {
+  CEF_REQUIRE_UI_THREAD();
+  presentation_socket_ = std::move(path);
+}
+
 void UfoCefHandler::SetSharedSpaceFactory(
     std::function<std::string(const std::string&)> factory) {
   CEF_REQUIRE_UI_THREAD();
@@ -346,7 +352,10 @@ void UfoCefHandler::SetAgentConnectionActive(bool active) {
   }
   agent_active_ = active;
   if (!main_window_ || main_window_->IsClosed()) return;
-  if (active) UfoAgentOverlaySet(main_window_->GetWindowHandle(), true, "Agent controlling");
+  if (active) {
+    UfoAgentOverlaySet(main_window_->GetWindowHandle(), true,
+                       "Agent controlling", 0, nullptr);
+  }
   else UfoAgentOverlayClear(main_window_->GetWindowHandle());
 }
 
@@ -375,7 +384,8 @@ void UfoCefHandler::SetVisibleSpace(int space_id) {
   if (current != space_windows_.end() && current->second &&
       !current->second->IsClosed()) {
     UfoAgentOverlaySet(current->second->GetWindowHandle(), true,
-                       "Agent controlling");
+                       "Agent controlling", space_id,
+                       presentation_socket_.c_str());
   }
 }
 
@@ -489,11 +499,15 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     if (operation == "presentation-status") {
       int presented_count = 0;
       auto presented_spaces = CefListValue::Create();
+      auto active_spaces = CefListValue::Create();
       const bool overview_presented =
           main_window_ && !main_window_->IsClosed() &&
           UfoCefWindowIsPresented(main_window_->GetWindowHandle());
       if (overview_presented) presented_count += 1;
       for (const auto& [candidate_id, window] : space_windows_) {
+        if (agent_active_spaces_.contains(candidate_id)) {
+          active_spaces->SetInt(active_spaces->GetSize(), candidate_id);
+        }
         if (!window || window->IsClosed() ||
             !UfoCefWindowIsPresented(window->GetWindowHandle())) {
           continue;
@@ -510,6 +524,25 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
                        static_cast<int>(space_windows_.size()) +
                            (main_window_ ? 1 : 0));
       response->SetList("presentedSpaceIds", presented_spaces);
+      response->SetList("agentActiveSpaceIds", active_spaces);
+      bool overlay_presented = false;
+      bool overlay_actions_available = false;
+      if (visible_space_id_ > 0) {
+        const auto visible = space_windows_.find(visible_space_id_);
+        overlay_presented = visible != space_windows_.end() && visible->second &&
+            !visible->second->IsClosed() &&
+            UfoAgentOverlayIsActiveForWindow(
+                visible->second->GetWindowHandle());
+        overlay_actions_available = overlay_presented &&
+            UfoAgentOverlayHasActionsForWindow(
+                visible->second->GetWindowHandle());
+      } else if (main_window_ && !main_window_->IsClosed()) {
+        overlay_presented = UfoAgentOverlayIsActiveForWindow(
+            main_window_->GetWindowHandle());
+      }
+      response->SetBool("agentOverlayPresented", overlay_presented);
+      response->SetBool("agentOverlayActionsAvailable",
+                        overlay_actions_available);
       auto value = CefValue::Create();
       value->SetDictionary(response);
       return JsonString(value);

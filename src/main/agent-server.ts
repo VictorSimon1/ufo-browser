@@ -65,6 +65,19 @@ export class AgentServer {
     return this.closePromise;
   }
 
+  /** Revoke the live Agent execution fence without discarding Space selection.
+   * Native human controls call this before changing ownership/lifecycle so an
+   * in-flight CDP command observes the generation loss immediately. */
+  revokeSpace(spaceId: number) {
+    for (const connection of this.connections.values()) {
+      if (connection.selectedSpaceId !== spaceId) continue;
+      this.broker.releaseConnectionSpace(connection.id, spaceId);
+      connection.lease = undefined;
+    }
+    this.manager.setAgentConnectionActive?.(spaceId, false);
+    this.leases.release(spaceId);
+  }
+
   private accept(socket: Socket) {
     socket.setEncoding("utf8");
     const connection: Connection = {

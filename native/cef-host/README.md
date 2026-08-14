@@ -15,6 +15,12 @@ The surrounding Space controller is still owned by UFO: Space name, Profile,
 and return-to-Spaces are drawn by AppKit in the native titlebar. It is not an
 HTML overlay and never participates in page screenshots or Agent/CDP input.
 
+When an Agent owns the presented Space, an outer AppKit panel blocks human
+page/toolbar input while leaving CEF screenshots and DevTools input untouched.
+Its native capsule exposes only two state-machine actions: **接管** and
+**终止任务**. The overlay follows persistent Space ownership, so it remains
+present after a short-lived CLI process exits.
+
 ## Build
 
 The build requires a full Xcode installation (not only Command Line Tools),

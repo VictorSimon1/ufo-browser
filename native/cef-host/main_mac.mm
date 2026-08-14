@@ -19,6 +19,7 @@
 #include "include/wrapper/cef_library_loader.h"
 #include "native/cef-host/app.h"
 #include "native/cef-host/handler.h"
+#include "native/cef-host/overlay_mac.h"
 
 @interface UfoCefApplication : NSApplication <CefAppProtocol>
 @end
@@ -162,6 +163,14 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
     // event queue. Swallowing these events blocks the human without covering
     // the CEF surface, so screenshots and CDP clicks remain pixel-accurate.
     if (humanInput) {
+      // The AppKit overlay owns the only two explicit human actions available
+      // while an Agent controls the Space. Deliver events to that transparent
+      // panel; its full-size view swallows everything outside the control
+      // capsule and routes only takeover/termination through UFO state.
+      if (UfoAgentOverlayOwnsWindow(event.window)) {
+        [super sendEvent:event];
+        return;
+      }
       // A controlled Space remains draggable from the native titlebar. Do not
       // broaden this to the CEF toolbar or page: those must stay blocked.
       if (IsTitlebarDragEvent(event)) {

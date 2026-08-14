@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -11,8 +12,26 @@
 
 @interface UfoOverlayView : NSView
 @property(nonatomic, copy) NSString* label;
+@property(nonatomic, copy) NSString* socketPath;
+@property(nonatomic) NSInteger spaceId;
+@property(nonatomic, copy) NSString* pressedAction;
 @property(nonatomic) CGFloat phase;
 @end
+
+static NSRect UfoOverlayCapsuleRect(NSRect bounds) {
+  const CGFloat width = MIN(430.0, MAX(360.0, bounds.size.width * 0.34));
+  return NSMakeRect((NSWidth(bounds) - width) / 2.0,
+                    NSHeight(bounds) - 72.0, width, 44.0);
+}
+
+static NSRect UfoOverlayTerminateRect(NSRect capsule) {
+  return NSMakeRect(NSMaxX(capsule) - 92.0, NSMinY(capsule) + 6.0, 84.0, 32.0);
+}
+
+static NSRect UfoOverlayTakeOverRect(NSRect capsule) {
+  const NSRect terminate = UfoOverlayTerminateRect(capsule);
+  return NSMakeRect(NSMinX(terminate) - 74.0, NSMinY(terminate), 66.0, 32.0);
+}
 
 @implementation UfoOverlayView
 
@@ -28,9 +47,7 @@
 
   // Transparent everywhere except for a small neutral control capsule. The
   // view itself covers the content area and consumes human input events.
-  CGFloat capsuleWidth = MIN(260.0, MAX(190.0, bounds.size.width * 0.26));
-  NSRect capsule = NSMakeRect((NSWidth(bounds) - capsuleWidth) / 2.0,
-                              NSHeight(bounds) - 62.0, capsuleWidth, 34.0);
+  NSRect capsule = UfoOverlayCapsuleRect(bounds);
   CGFloat pulse = 0.5 + 0.5 * std::sin(self.phase);
   NSColor* fill = [NSColor colorWithCalibratedWhite:0.10 alpha:0.88 - pulse * 0.04];
   NSColor* stroke = [NSColor colorWithCalibratedWhite:1.0 alpha:0.13 + pulse * 0.06];
@@ -41,7 +58,7 @@
   [path setLineWidth:1.0];
   [path stroke];
 
-  NSRect dot = NSMakeRect(NSMinX(capsule) + 13.0,
+  NSRect dot = NSMakeRect(NSMinX(capsule) + 14.0,
                           NSMidY(capsule) - 4.0,
                           8.0 + pulse * 1.5,
                           8.0 + pulse * 1.5);
@@ -54,15 +71,70 @@
   };
   NSString* text = self.label.length ? self.label : @"Agent controlling";
   NSSize textSize = [text sizeWithAttributes:attrs];
-  [text drawAtPoint:NSMakePoint(NSMidX(capsule) - textSize.width / 2.0 + 7.0,
+  [text drawAtPoint:NSMakePoint(NSMinX(capsule) + 31.0,
                                 NSMidY(capsule) - textSize.height / 2.0)
       withAttributes:attrs];
+
+  const NSRect takeOver = UfoOverlayTakeOverRect(capsule);
+  const NSRect terminate = UfoOverlayTerminateRect(capsule);
+  for (NSString* action in @[@"take-over-space", @"terminate-space"]) {
+    const BOOL isTakeOver = [action isEqualToString:@"take-over-space"];
+    const NSRect button = isTakeOver ? takeOver : terminate;
+    const BOOL pressed = [self.pressedAction isEqualToString:action];
+    NSColor* buttonFill = isTakeOver
+        ? [NSColor colorWithCalibratedWhite:1.0 alpha:pressed ? 0.20 : 0.11]
+        : [NSColor colorWithCalibratedRed:0.72 green:0.20 blue:0.22 alpha:pressed ? 0.90 : 0.72];
+    NSBezierPath* buttonPath = [NSBezierPath bezierPathWithRoundedRect:button xRadius:10.0 yRadius:10.0];
+    [buttonFill setFill];
+    [buttonPath fill];
+    NSString* title = isTakeOver ? @"接管" : @"终止任务";
+    NSDictionary* buttonAttrs = @{
+      NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold],
+      NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.98 alpha:0.96],
+    };
+    NSSize size = [title sizeWithAttributes:buttonAttrs];
+    [title drawAtPoint:NSMakePoint(NSMidX(button) - size.width / 2.0,
+                                   NSMidY(button) - size.height / 2.0)
+         withAttributes:buttonAttrs];
+  }
 }
 
-// Swallow all human input while the agent owns the Space. CEF's DevTools/CDP
-// transport does not go through this AppKit event path and remains unaffected.
-- (void)mouseDown:(NSEvent*)event {}
-- (void)mouseUp:(NSEvent*)event {}
+// Swallow all page input while the agent owns the Space, but keep the two
+// explicit ownership controls interactive. CEF's DevTools/CDP transport does
+// not go through this AppKit event path and remains unaffected.
+- (NSString*)actionAtPoint:(NSPoint)point {
+  const NSRect capsule = UfoOverlayCapsuleRect(self.bounds);
+  if (NSPointInRect(point, UfoOverlayTakeOverRect(capsule))) return @"take-over-space";
+  if (NSPointInRect(point, UfoOverlayTerminateRect(capsule))) return @"terminate-space";
+  return nil;
+}
+
+- (void)mouseDown:(NSEvent*)event {
+  self.pressedAction = [self actionAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  [self setNeedsDisplayInRect:UfoOverlayCapsuleRect(self.bounds)];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+  NSString* action = [self actionAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+  const BOOL shouldSend = action.length && [action isEqualToString:self.pressedAction];
+  self.pressedAction = nil;
+  [self setNeedsDisplayInRect:UfoOverlayCapsuleRect(self.bounds)];
+  if (!shouldSend || self.spaceId <= 0 || !self.socketPath.length) return;
+  const char* path = self.socketPath.UTF8String;
+  if (!path || std::strlen(path) >= sizeof(sockaddr_un{}.sun_path)) return;
+  const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return;
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::strncpy(address.sun_path, path, sizeof(address.sun_path) - 1);
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+    NSString* command = [NSString stringWithFormat:@"{\"command\":\"%@\",\"spaceId\":%ld}\n",
+                                                   action, (long)self.spaceId];
+    const char* bytes = command.UTF8String;
+    if (bytes) (void)::write(fd, bytes, std::strlen(bytes));
+  }
+  ::close(fd);
+}
 - (void)mouseDragged:(NSEvent*)event {}
 - (void)rightMouseDown:(NSEvent*)event {}
 - (void)rightMouseUp:(NSEvent*)event {}
@@ -524,8 +596,13 @@ void UfoCefSpaceControllerClear() {
   dispatch_async(dispatch_get_main_queue(), ^{ RemoveSpaceController(); });
 }
 
-void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
+void UfoAgentOverlaySet(void* cef_view_handle,
+                        bool active,
+                        const char* label,
+                        int space_id,
+                        const char* presentation_socket) {
   NSView* retainedCefView = [(NSView*)cef_view_handle retain];
+  const std::string socketValue = presentation_socket ?: "";
   dispatch_async(dispatch_get_main_queue(), ^{
     NSView* cefView = retainedCefView;
     NSWindow* host = cefView.window;
@@ -536,6 +613,8 @@ void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
     }
     if (gPanel && gHostWindow == host) {
       gPanel.overlayView.label = [NSString stringWithUTF8String:label ?: "Agent controlling"];
+      gPanel.overlayView.spaceId = space_id;
+      gPanel.overlayView.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
       PositionOverlay();
       [gPanel orderFront:nil];
       [cefView release];
@@ -554,26 +633,30 @@ void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
     gPanel.backgroundColor = NSColor.clearColor;
     gPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
     gPanel.hasShadow = NO;
-    gPanel.ignoresMouseEvents = NO;
+    gPanel.ignoresMouseEvents = host.ignoresMouseEvents;
     gPanel.hidesOnDeactivate = NO;
     gPanel.level = host.level + 1;
     gPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehaviorFullScreenAuxiliary;
     UfoOverlayView* view = [[UfoOverlayView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
     view.label = [NSString stringWithUTF8String:label ?: "Agent controlling"];
+    view.spaceId = space_id;
+    view.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
     view.phase = 0.0;
     gPanel.overlayView = view;
     gPanel.contentView = view;
     [host addChildWindow:gPanel ordered:NSWindowAbove];
     [gPanel orderFront:nil];
-    gPanel.pulseTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 30.0
+    // Redraw only the small capsule at a restrained cadence. Repositioning or
+    // repainting the full-window transparent panel every frame needlessly
+    // wakes the compositor and was visible in UFO's idle GPU usage.
+    gPanel.pulseTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 12.0
                                                            repeats:YES
                                                              block:^(NSTimer* timer) {
       (void)timer;
       if (!gPanel) return;
-      gPanel.overlayView.phase += 0.11;
-      [gPanel.overlayView setNeedsDisplay:YES];
-      PositionOverlay();
+      gPanel.overlayView.phase += 0.20;
+      [gPanel.overlayView setNeedsDisplayInRect:UfoOverlayCapsuleRect(gPanel.overlayView.bounds)];
     }];
     NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
     gMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
@@ -591,4 +674,19 @@ void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {
 void UfoAgentOverlayClear(void* cef_view_handle) {
   (void)cef_view_handle;
   dispatch_async(dispatch_get_main_queue(), ^{ RemoveOverlay(); });
+}
+
+bool UfoAgentOverlayIsActiveForWindow(void* cef_view_handle) {
+  NSView* view = (NSView*)cef_view_handle;
+  return view && view.window && gPanel && gHostWindow == view.window &&
+      gPanel.isVisible && gPanel.alphaValue > 0.5 && !gPanel.ignoresMouseEvents;
+}
+
+bool UfoAgentOverlayHasActionsForWindow(void* cef_view_handle) {
+  if (!UfoAgentOverlayIsActiveForWindow(cef_view_handle)) return false;
+  return gPanel.overlayView.spaceId > 0 && gPanel.overlayView.socketPath.length > 0;
+}
+
+bool UfoAgentOverlayOwnsWindow(void* ns_window) {
+  return ns_window && gPanel && gPanel == (NSWindow*)ns_window;
 }

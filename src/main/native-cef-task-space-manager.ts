@@ -172,6 +172,7 @@ export class NativeCefTaskSpaceManager {
     space.lifecycle = lifecycle;
     space.updatedAt = Date.now();
     await this.save();
+    await this.syncAgentOverlay(spaceId);
     if (ownership !== "agent") {
       // Handoff/completion returns the native browser surface to the human.
       // Do not start a cold Space just to show it; only an already-presented
@@ -183,13 +184,10 @@ export class NativeCefTaskSpaceManager {
   }
 
   async setLifecycle(spaceId: number, lifecycle: SpaceLifecycle) {
-    const space = this.getSpaceOrThrow(spaceId);
-    space.lifecycle = lifecycle;
-    space.updatedAt = Date.now();
-    await this.save();
-    if (lifecycle !== "active") await this.showRunningSpace(spaceId);
-    if (lifecycle !== "active") await this.presentationHooks?.onSpaceStateChanged?.(spaceId);
-    return structuredClone(space);
+    // Completion/error always hands the surface back to the human. Keeping
+    // ownership=agent after the task becomes inactive would leave a stale
+    // control overlay after the short-lived CLI connection exits.
+    return this.setOwnership(spaceId, "user", lifecycle);
   }
 
   async setAgentTaskState(spaceId: number, state: any) {
@@ -343,6 +341,7 @@ export class NativeCefTaskSpaceManager {
     for (const tab of space.tabs) await browser?.send("Target.closeTarget", { targetId: tab.targetId }).catch(() => undefined);
     this.runtimes.delete(runtimeKey);
     this.browserConnections.delete(runtimeKey);
+    this.agentOverlayState.delete(runtimeKey);
     await browser?.close().catch(() => undefined);
     await runtime?.stop().catch(() => undefined);
     this.state.spaces.splice(index, 1);
@@ -450,7 +449,9 @@ export class NativeCefTaskSpaceManager {
     tab.url = target.url || tab.url;
     tab.title = target.title || tab.title;
     this.runtimes.set(runtimeKey, runtime);
-    if (this.agentOverlayState.get(runtimeKey)) {
+    const overlayActive = space.ownership === "agent" && space.lifecycle === "active";
+    this.agentOverlayState.set(runtimeKey, overlayActive);
+    if (overlayActive) {
       await runtime.control("agent-active-on").catch(() => undefined);
     }
     await this.save();
@@ -617,14 +618,22 @@ export class NativeCefTaskSpaceManager {
     return runtime;
   }
 
-  setAgentConnectionActive(spaceId: number, active: boolean) {
+  setAgentConnectionActive(spaceId: number, _active: boolean) {
+    // The CLI is intentionally short-lived. Overlay ownership belongs to the
+    // Space state, not to a transient socket connection, so disconnecting a
+    // command runner must not silently return control to the human.
+    void this.syncAgentOverlay(spaceId);
+  }
+
+  private async syncAgentOverlay(spaceId: number) {
     const space = this.getSpace(spaceId);
     if (!space) return;
     const runtimeKey = this.runtimeKey(space);
+    const active = space.ownership === "agent" && space.lifecycle === "active";
     this.agentOverlayState.set(runtimeKey, active);
     const runtime = this.runtimes.get(runtimeKey);
     if (runtime?.isRunning()) {
-      void runtime.control(active ? "agent-active-on" : "agent-active-off").catch(() => undefined);
+      await runtime.control(active ? "agent-active-on" : "agent-active-off").catch(() => undefined);
     }
   }
   showAgentPointer(_spaceId: number, _x: number, _y: number) {}

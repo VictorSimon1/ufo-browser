@@ -80,3 +80,91 @@ test("the native Spaces button routes through the presentation coordinator", asy
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("native overlay takeover revokes the Agent lease and keeps the Space presented", async () => {
+  const calls: string[] = [];
+  const manager = {
+    presentSpace: async () => {},
+    hideRunningSpaces: async () => {},
+    closeSpace: async () => false,
+    showSpace: async () => {},
+    setOwnership: async (id: number, ownership: string, lifecycle: string) => {
+      calls.push(`ownership:${id}:${ownership}:${lifecycle}`);
+    },
+    setLifecycle: async () => {},
+  } as any;
+  const overview = {
+    hideWindow: async () => {},
+    showWindow: async () => {},
+    focusWindow: async () => {},
+  } as any;
+  const root = await mkdtemp(join(tmpdir(), "ufo-overlay-takeover-"));
+  const socketPath = join(root, "presentation.sock");
+  const coordinator = new NativeCefPresentationCoordinator(manager, overview, socketPath);
+  coordinator.setAgentControl({ revokeSpace: (id) => calls.push(`revoke:${id}`) });
+  try {
+    await coordinator.start();
+    await coordinator.openSpace(9);
+    calls.length = 0;
+    const response = await sendPresentationCommand(socketPath, {
+      command: "take-over-space",
+      spaceId: 9,
+    });
+    assert.equal(response, "ok\n");
+    assert.deepEqual(calls, ["revoke:9", "ownership:9:user:active"]);
+    assert.deepEqual(coordinator.getState(), { kind: "space", spaceId: 9 });
+  } finally {
+    await coordinator.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native overlay termination revokes the Agent lease without closing the Space", async () => {
+  const calls: string[] = [];
+  const manager = {
+    presentSpace: async () => {},
+    hideRunningSpaces: async () => {},
+    closeSpace: async () => false,
+    showSpace: async () => {},
+    setOwnership: async () => {},
+    setLifecycle: async (id: number, lifecycle: string) => {
+      calls.push(`lifecycle:${id}:${lifecycle}`);
+    },
+  } as any;
+  const overview = {
+    hideWindow: async () => {},
+    showWindow: async () => {},
+    focusWindow: async () => {},
+  } as any;
+  const root = await mkdtemp(join(tmpdir(), "ufo-overlay-terminate-"));
+  const socketPath = join(root, "presentation.sock");
+  const coordinator = new NativeCefPresentationCoordinator(manager, overview, socketPath);
+  coordinator.setAgentControl({ revokeSpace: (id) => calls.push(`revoke:${id}`) });
+  try {
+    await coordinator.start();
+    await coordinator.openSpace(11);
+    calls.length = 0;
+    const response = await sendPresentationCommand(socketPath, {
+      command: "terminate-space",
+      spaceId: 11,
+    });
+    assert.equal(response, "ok\n");
+    assert.deepEqual(calls, ["revoke:11", "lifecycle:11:completed"]);
+    assert.deepEqual(coordinator.getState(), { kind: "space", spaceId: 11 });
+  } finally {
+    await coordinator.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function sendPresentationCommand(path: string, command: unknown) {
+  return new Promise<string>((resolve, reject) => {
+    const socket = createConnection(path);
+    let body = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { body += chunk; });
+    socket.once("error", reject);
+    socket.once("connect", () => socket.write(`${JSON.stringify(command)}\n`));
+    socket.once("close", () => resolve(body));
+  });
+}

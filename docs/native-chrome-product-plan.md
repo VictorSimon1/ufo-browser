@@ -67,6 +67,8 @@ Already covered by the Native vertical slice:
 - Overview API/renderer, global four-second preview cadence, and presentation
   transitions;
 - outer AppKit Agent-control overlay and native input interception;
+- ownership-persistent AppKit control capsule with explicit human takeover and
+  task termination routed through the UFO lease/state machine;
 - drag-installable Native DMG with bundled Node, CLI, Skill, CEF host/helpers.
 
 ## Migration phases

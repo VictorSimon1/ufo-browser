@@ -7,8 +7,15 @@ extern "C" {
 // The CEF Views window handle is an NSView* on macOS. The overlay is kept in
 // a separate AppKit child panel so it never participates in CEF page captures
 // or DevTools input dispatch.
-void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label);
+void UfoAgentOverlaySet(void* cef_view_handle,
+                        bool active,
+                        const char* label,
+                        int space_id,
+                        const char* presentation_socket);
 void UfoAgentOverlayClear(void* cef_view_handle);
+bool UfoAgentOverlayIsActiveForWindow(void* cef_view_handle);
+bool UfoAgentOverlayHasActionsForWindow(void* cef_view_handle);
+bool UfoAgentOverlayOwnsWindow(void* ns_window);
 
 // Keep a native CEF window in the compositor while making it invisible to a
 // human. Unlike Hide/orderOut, alpha=0 preserves CEF screenshot production and

@@ -112,7 +112,13 @@ class UfoWindowDelegate final : public CefWindowDelegate {
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
     UfoCefShellControlsClear();
     UfoCefSpaceControllerClear();
-    if (auto* handler = UfoCefHandler::GetInstance()) handler->SetAgentConnectionActive(false);
+    if (auto* handler = UfoCefHandler::GetInstance()) {
+      if (space_id_ > 0) {
+        handler->SetSpaceAgentConnectionActive(space_id_, false);
+      } else if (main_window_) {
+        handler->SetAgentConnectionActive(false);
+      }
+    }
     if (main_window_) {
       if (auto* handler = UfoCefHandler::GetInstance()) {
         handler->SetMainWindow(nullptr);
@@ -306,6 +312,7 @@ void UfoCefApp::OnContextInitialized() {
   if (!devtools_socket.empty()) handler->StartDevToolsSocket(devtools_socket);
   const auto presentation_socket =
       command_line->GetSwitchValue("presentation-socket").ToString();
+  handler->SetPresentationSocket(presentation_socket);
   auto* handler_raw = handler.get();
   handler->SetSharedSpaceFactory(
       [handler_raw, presentation_socket](const std::string& command) {

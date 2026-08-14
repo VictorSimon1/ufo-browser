@@ -8,16 +8,25 @@ export type NativeCefPresentationState =
   | { kind: "overview" }
   | { kind: "space"; spaceId: number };
 
+export type NativeCefAgentControl = {
+  revokeSpace(spaceId: number): void;
+};
+
 /** Single owner for the visible native CEF surface. */
 export class NativeCefPresentationCoordinator implements NativeCefOverviewPresentation {
   private state: NativeCefPresentationState = { kind: "overview" };
   private server?: Server;
+  private agentControl?: NativeCefAgentControl;
 
   constructor(
     private readonly manager: NativeCefTaskSpaceManager,
     private readonly overview: NativeCefOverview,
     private readonly socketPath?: string,
   ) {}
+
+  setAgentControl(control: NativeCefAgentControl | undefined) {
+    this.agentControl = control;
+  }
 
   /** Start the small AppKit-to-UFO presentation channel used by the native
    * Spaces button. The browser shell never calls the Agent socket directly. */
@@ -99,6 +108,28 @@ export class NativeCefPresentationCoordinator implements NativeCefOverviewPresen
     if (command === "show-overview") {
       await this.showOverview();
       return;
+    }
+    if (command.startsWith("{")) {
+      const message = JSON.parse(command);
+      const spaceId = Number(message?.spaceId);
+      if (!Number.isInteger(spaceId) || spaceId <= 0) {
+        throw new Error("invalid Space id");
+      }
+      if (this.state.kind !== "space" || this.state.spaceId !== spaceId) {
+        throw new Error("Space is not presented");
+      }
+      if (message.command === "take-over-space") {
+        if (!this.agentControl) throw new Error("Agent control is unavailable");
+        this.agentControl.revokeSpace(spaceId);
+        await this.manager.setOwnership(spaceId, "user", "active");
+        return;
+      }
+      if (message.command === "terminate-space") {
+        if (!this.agentControl) throw new Error("Agent control is unavailable");
+        this.agentControl.revokeSpace(spaceId);
+        await this.manager.setLifecycle(spaceId, "completed");
+        return;
+      }
     }
     throw new Error(`unknown presentation command: ${command}`);
   }

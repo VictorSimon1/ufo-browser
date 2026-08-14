@@ -158,17 +158,18 @@ if (sharedHostEnabled) {
   await sharedHost.start();
   manager.setSharedHost(sharedHost, true);
 }
+const leases = new SpaceLeaseRegistry();
+const broker = new NativeCefBroker(manager);
+const snapshot = new NativeCefSnapshotService(manager);
+const server = new AgentServer(socketPath, manager, leases, snapshot, broker, "0.1.7-cef");
 const presentation = new NativeCefPresentationCoordinator(manager, overview, presentationSocket);
+presentation.setAgentControl({ revokeSpace: (spaceId) => server.revokeSpace(spaceId) });
 await presentation.start();
 overview.setPresentationController(presentation);
 manager.setPresentationHooks({
   onSpaceClosed: (spaceId) => presentation.onSpaceClosed(spaceId),
   onSpaceStateChanged: (spaceId) => presentation.onSpaceStateChanged(spaceId),
 });
-const leases = new SpaceLeaseRegistry();
-const broker = new NativeCefBroker(manager);
-const snapshot = new NativeCefSnapshotService(manager);
-const server = new AgentServer(socketPath, manager, leases, snapshot, broker, "0.1.7-cef");
 await server.listen();
 console.error(`[UFO Native CEF] Agent socket: ${socketPath}`);
 

@@ -140,14 +140,22 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    are routed inside the Host. It is separate from the DevTools bridge; the
    Agent still talks through the existing UFO Unix socket.
 
-   The first native overlay slice is now implemented. Agent lease acquisition
-   sends `agent-active-on` to the CEF host, which installs a transparent AppKit
-   child panel above the CEF window. The panel draws only a small neutral,
-   lightly pulsing control capsule, consumes human mouse/keyboard events, and
-   does not enter the CEF compositor or page screenshot path. Lease release,
-   handoff, close, and host shutdown send `agent-active-off`/clear and remove
-   the panel. A cold Space is started lazily when an Agent first acquires its
-   lease so the overlay state cannot be skipped on first entry.
+   The native overlay is owned by persistent Space state, not by the lifetime
+   of a short CLI socket. `ownership=agent` plus `lifecycle=active` installs a
+   transparent AppKit child panel above the presented CEF window; a CLI exit
+   therefore cannot silently unlock the page. The panel draws a neutral,
+   lightly pulsing capsule with explicit **接管** and **终止任务** actions.
+   Those actions route through the Presentation Coordinator, revoke the Agent
+   lease/generation fence, and update ownership/lifecycle without closing the
+   Space. The panel consumes all other human input and never enters the CEF
+   compositor or page screenshot path, so Agent CDP input and screenshots are
+   unaffected. Its animation redraws only the capsule at 12 FPS rather than
+   repainting/repositioning a full-window panel at 30 FPS.
+
+   Run `npm run native:cef:overlay:smoke` to prove that the overlay survives a
+   CLI disconnect, Agent input/screenshot still work behind it, takeover keeps
+   the Space open, and termination ends the task and returns ownership to the
+   user.
 6. **Electron removal and packaging** — build the CEF host plus standalone
    Agent Service, copy the framework/helpers/resources,
    sign the complete app bundle, and produce the normal drag-to-Applications

@@ -53,6 +53,7 @@ class UfoCefHandler final : public CefClient,
   void RegisterPopupBrowser(CefRefPtr<CefBrowser> parent,
                             CefRefPtr<CefBrowser> popup);
   void RegisterSpaceWindow(int space_id, CefRefPtr<CefWindow> window);
+  void SetPresentationSocket(std::string path);
   void SetSharedSpaceFactory(
       std::function<std::string(const std::string&)> factory);
   void SetAgentConnectionActive(bool active);
@@ -98,6 +99,7 @@ class UfoCefHandler final : public CefClient,
   std::map<int, CefRefPtr<CefWindow>> space_windows_;
   std::set<int> agent_active_spaces_;
   int visible_space_id_ = 0;
+  std::string presentation_socket_;
   std::function<std::string(const std::string&)> shared_space_factory_;
   std::mutex devtools_targets_mutex_;
   std::atomic<uint64_t> next_devtools_client_id_{1};
