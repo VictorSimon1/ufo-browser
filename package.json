@@ -70,10 +70,13 @@
     "package:native": "npm run package:native:mac",
     "package:native:mac": "npm run build:native && npm run native:cef:build && node scripts/package-native-mac.mjs",
     "verify:skill-sync": "node --test scripts/sync-agent-skills.test.mjs",
-    "dist:mac": "node scripts/package-mac.mjs --dir",
-    "package:mac:test": "node scripts/package-mac.mjs --temporary",
-    "package:mac": "node scripts/package-mac.mjs --release",
-    "release:mac": "npm run package:mac",
+    "dist:mac:electron": "node scripts/package-mac.mjs --dir",
+    "package:mac:test:electron": "node scripts/package-mac.mjs --temporary",
+    "package:mac:electron": "node scripts/package-mac.mjs --release",
+    "dist:mac": "npm run package:native:mac",
+    "package:mac:test": "npm run package:native:mac",
+    "package:mac": "npm run package:native:mac",
+    "release:mac": "npm run package:native:mac",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

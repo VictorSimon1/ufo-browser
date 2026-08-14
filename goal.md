@@ -10,7 +10,7 @@
 ## 1. 不可破坏的核心约束
 
 1. **一个 App、一个 macOS 主窗口、多个 Task Space。** Space 是窗口内任务容器，不是新的系统窗口。
-2. **继续使用当前 Electron/Chromium 内核。** 不切换外部 Chrome controller，不 fork Chromium，不引入第二套浏览器引擎。
+2. **正式产品使用 Native CEF/Chromium Runtime。** 不使用 Electron 绘制浏览器壳，不切换外部 Chrome controller，不 fork Chromium，不引入第二套浏览器引擎。Electron 仅作为迁移期间的显式回退和旧测试运行时。
 3. **Chat、Overview、Browser Chrome 是长期存在的 shell `WebContentsView`。** 普通切换、最小化、恢复和侧栏 resize 不重复 `loadFile()`。
 4. **`PresentationCoordinator` 是前台展示状态的唯一来源。** 不新增第二份 `visibleSpaceId`、route 或“当前 Space”状态。
 5. **Overview 中页面 View 恒为 0；Space 模式只能 attach 1 个用户明确打开的页面 View。** 后台 Agent、截图和预览不能进入主窗口。

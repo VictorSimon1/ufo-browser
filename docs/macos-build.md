@@ -6,28 +6,27 @@
 
 | 目的 | 命令 | 全局 Skill 同步 | 输出 |
 |---|---|---:|---|
-| 日常运行 | `npm run test:app` | 否 | 隔离测试 Profile 的开发 App |
-| 快速重开 | `npm run test:app:reuse` | 否 | 复用现有构建和测试 Profile |
-| 临时 `.app` | `npm run dist:mac` | 否 | `release/mac-*/UFO-Browser.app` |
-| 临时 DMG/ZIP | `npm run package:mac:test` | 否 | `release/*.dmg`、`release/*.zip` |
-| 正式内部包 | `npm run package:mac` | 是 | 已验证的 App、DMG 和 ZIP |
-| 安装并替换本地 App | `npm run install:mac -- release/UFO-Browser-*.dmg` | 安装后同步 | `/Applications/UFO-Browser.app`、CLI、Skills |
+| 日常 Native 运行 | `npm run start:native` | 否 | CEF Chrome Runtime |
+| 临时 Native App/DMG | `npm run dist:mac` 或 `npm run package:mac:test` | 否 | `release-native/` |
+| 正式 Native CEF 包 | `npm run package:mac` | 安装后同步 | `release-native/UFO-Browser-*.dmg` |
+| Electron 迁移回退包 | `npm run package:mac:electron` | 否 | `release/` |
+| 安装并替换本地 App | `npm run install:mac -- release-native/UFO-Browser-*.dmg` | 安装后同步 | `/Applications/UFO-Browser.app`、CLI、Skills |
 
-通常使用前三个命令即可。`package:mac` 会更新用户级 Agent Skill，只有准备正式内部包时才运行。
+通常使用 Native 命令即可。`package:mac` 现在是 CEF 正式包入口；Electron 只保留给迁移期间的旧测试和回退，必须显式使用带 `:electron` 后缀的命令。
 
 ## 日常临时构建
 
-开发调试：
+Native CEF 开发调试：
 
 ```bash
-npm run test:app
+npm run start:native
 ```
 
-只验证 macOS App Bundle，不制作磁盘镜像：
+构建并验证 Native macOS App/DMG：
 
 ```bash
 npm run dist:mac
-npm run smoke
+npm run native:cef:install:smoke
 ```
 
 需要测试安装镜像，但不希望改动任何 Agent 全局目录：
@@ -36,7 +35,14 @@ npm run smoke
 npm run package:mac:test
 ```
 
-临时构建会优先使用 `node_modules/electron/dist` 中已经安装的 Electron，避免重复联网下载 Chromium/Electron。App Bundle 由 electron-builder 生成，ZIP 使用 macOS `ditto`，DMG 使用系统 `hdiutil`，制作安装包本身不再下载额外的 `dmgbuild` 工具。
+Native 包由 CEF host、AppKit launcher、独立 Node Agent 和系统 `hdiutil` 生成，不包含 Electron、`app.asar` 或 Electron Builder 运行时。CEF 二进制来自本地 `test/cef-runtime`，需要时运行 `npm run native:cef:fetch`。
+
+旧 Electron 回退包仅用于迁移测试：
+
+```bash
+npm run dist:mac:electron
+npm run package:mac:test:electron
+```
 
 ## 正式内部发包
 
@@ -46,7 +52,7 @@ npm run package:mac:test
 npm run skills:sync:dry-run
 ```
 
-执行完整流程：
+执行完整 Native CEF 流程：
 
 ```bash
 npm run package:mac
@@ -54,15 +60,11 @@ npm run package:mac
 
 该命令依次执行：
 
-1. 清理仓库内生成的 `release/` 目录。
-2. 运行 TypeScript 类型检查。
-3. 构建并运行完整单元测试。
-4. 计算 `skills/ufo-browser` 的 SHA-256，并同步到已安装的 Agent。
-5. 重新构建主进程、preload、renderer、CLI 和测试产物。
-6. 使用 electron-builder 生成 UFO-Browser App，再由 macOS `ditto` 和 `hdiutil` 生成 ZIP 与 DMG。
-7. 验证 App 内的 `app.asar`、App Icon、Skill、OpenAI Agent manifest、可执行 `ufo-keychain-helper`、`chrome-cookie-worker.js` 及 DMG/ZIP 均存在。
-8. 使用隔离 Chrome fixture 与 Mock Keychain 直接启动打包后的 App，完成一次 Chrome 登录态导入成功 E2E，证明 ASAR Worker、打包路径、Cookie/CHIPS 与站点存储导入在正式 Bundle 结构中可运行。
-9. 连续三次在页面注册 `beforeunload` 的情况下执行原生 `app.quit()`，要求打包 App 均以退出码 0 结束且不出现 macOS `NSAlert` 与窗口销毁重入崩溃。
+1. 构建 Native CEF Agent、renderer 和 CLI。
+2. 构建 CEF Chrome host 和 AppKit launcher。
+3. 生成不含 Electron/app.asar 的 `release-native/UFO-Browser.app` 和拖拽安装 DMG。
+4. 运行 Native bundle、relocated install、CLI/Skill sync 和 Electron-free 进程树 smoke。
+5. 安装流程从 App 内 Skill 目录同步 Claude、Codex 和其他已安装 Agent。
 
 `npm run release:mac` 是同一正式流程的别名。
 
@@ -71,7 +73,7 @@ npm run package:mac
 DMG 生成后，使用明确的 DMG 路径执行安装流程：
 
 ```bash
-npm run install:mac -- release/UFO-Browser-0.1.7-arm64.dmg
+npm run install:mac -- release-native/UFO-Browser-0.1.7-native.dmg
 ```
 
 该流程只替换明确的 `/Applications/UFO-Browser.app`：
@@ -79,7 +81,7 @@ npm run install:mac -- release/UFO-Browser-0.1.7-arm64.dmg
 1. 以只读方式挂载 DMG，并确认镜像中包含 `UFO-Browser.app`。
 2. 仅结束 UFO-Browser 自己的 `UFO-Browser` 进程，不影响 Ego Lite 或其他 Electron 应用。
 3. 先复制到 `/Applications/.UFO-Browser.app.install-*`，再原子替换旧 App；替换失败会尝试恢复旧 App。
-4. 卸载 DMG，并校验已安装 App 的可执行文件、ASAR、内置 Skill 和版本信息。
+4. 卸载 DMG，并校验已安装 Native App 的 CEF host、内置 Skill 和版本信息。
 5. 让 `~/.local/bin/ufo-browser`、`~/.local/bin/x-browser` 指向已安装 App 内的 CLI，避免继续使用仓库旧构建。
 6. 从已安装 App 的 `Contents/Resources/skills/ufo-browser` 同步 Claude、Codex、Cursor、Gemini、Copilot、OpenCode 和 Agent Skills 目录。
 

@@ -166,12 +166,18 @@ These suites cover Task Space leases, macOS foreground/cursor isolation, native 
 
 ## macOS builds
 
-Day-to-day development builds never modify global Agent Skill folders:
+Day-to-day Native CEF builds never modify global Agent Skill folders:
 
 ```bash
 npm run dist:mac
 npm run package:mac:test
 ```
+
+The formal macOS package is now the CEF/Chromium Runtime build. It contains
+the native Chrome shell, CEF framework/helpers, standalone Node Agent, CLI,
+and Skill, and does not contain Electron or `app.asar`. Electron remains only
+behind explicitly named `*:electron` commands for migration fallback and old
+legacy tests.
 
 The infrequently used formal packaging flow runs all checks, updates the managed `ufo-browser` Skill for installed Claude Code, Codex, and other supported Agent Skills clients, then produces and verifies the App, DMG, and ZIP:
 
