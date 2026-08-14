@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -11,6 +11,10 @@ const storageWorker = join(appRoot, "Contents/Resources/profile-sync-storage-rev
 await access(launcher);
 await access(cli);
 await access(storageWorker);
+const forbiddenNativeResources = ["app.asar", "electron", "Electron"];
+const bundleEntries = await walk(appRoot);
+const forbidden = bundleEntries.filter((path) => forbiddenNativeResources.some((name) => path.toLowerCase().includes(name.toLowerCase())));
+if (forbidden.length) throw new Error(`Native bundle contains Electron resources: ${forbidden.join("\n")}`);
 
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-bundle-smoke-"));
 const app = spawn(launcher, [], {
@@ -55,6 +59,17 @@ try {
   if (app.exitCode === null) app.kill("SIGTERM");
   await waitForExit(app, 5_000).catch(() => undefined);
   await rm(userData, { recursive: true, force: true });
+}
+
+async function walk(path) {
+  const entries = await readdir(path, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) files.push(...await walk(child));
+    else files.push(child);
+  }
+  return files;
 }
 
 async function waitForFile(path, process, timeoutMs) {

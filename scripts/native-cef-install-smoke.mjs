@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -17,6 +17,9 @@ for (const path of [
   join(appRoot, "Contents/Resources/native-cef-agent.js"),
   join(appRoot, "Contents/Resources/skills/ufo-browser/SKILL.md"),
 ]) await access(path);
+const skillContents = await readFile(join(appRoot, "Contents/Resources/skills/ufo-browser/SKILL.md"), "utf8");
+if (!/^---[\s\S]*?^name:\s*ufo-browser\s*$/m.test(skillContents)) throw new Error("Native bundle Skill frontmatter is invalid");
+if (await exists(join(appRoot, "Contents/Resources/app.asar"))) throw new Error("Native install contains app.asar");
 
 const app = spawn(launcher, [], {
   cwd: appRoot,
@@ -46,6 +49,10 @@ try {
   if (app.exitCode === null) app.kill("SIGTERM");
   await waitForExit(app, 5_000).catch(() => undefined);
   await rm(installRoot, { recursive: true, force: true });
+}
+
+async function exists(path) {
+  try { await access(path); return true; } catch { return false; }
 }
 
 async function copyBundle(source, destination) {
