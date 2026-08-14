@@ -15,6 +15,12 @@ void UfoAgentOverlayClear(void* cef_view_handle);
 // DevTools input for background Agent Spaces.
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented);
 
+// Add the small native Spaces button used by human-facing Chrome shells. It
+// sends presentation commands to UFO over a private Unix socket and is never
+// part of the CEF page/compositor screenshot path.
+void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket);
+void UfoCefShellControlsClear();
+
 #ifdef __cplusplus
 }
 #endif

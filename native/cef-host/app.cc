@@ -15,8 +15,11 @@ namespace {
 class UfoWindowDelegate final : public CefWindowDelegate {
  public:
   explicit UfoWindowDelegate(CefRefPtr<CefBrowserView> browser_view,
-                             bool present_on_start = false)
-      : browser_view_(browser_view), present_on_start_(present_on_start) {}
+                             bool present_on_start = false,
+                             bool show_shell_controls = false)
+      : browser_view_(browser_view),
+        present_on_start_(present_on_start),
+        show_shell_controls_(show_shell_controls) {}
 
   void OnWindowCreated(CefRefPtr<CefWindow> window) override {
     window->AddChildView(browser_view_);
@@ -36,9 +39,17 @@ class UfoWindowDelegate final : public CefWindowDelegate {
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), false);
     }
+    if (show_shell_controls_ && !command_line->HasSwitch("overview")) {
+      const auto presentation_socket =
+          command_line->GetSwitchValue("presentation-socket").ToString();
+      if (!presentation_socket.empty()) {
+        UfoCefShellControlsSet(window->GetWindowHandle(), presentation_socket.c_str());
+      }
+    }
   }
 
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
+    UfoCefShellControlsClear();
     if (auto* handler = UfoCefHandler::GetInstance()) handler->SetAgentConnectionActive(false);
     if (auto* handler = UfoCefHandler::GetInstance()) handler->SetMainWindow(nullptr);
     browser_view_ = nullptr;
@@ -60,6 +71,7 @@ class UfoWindowDelegate final : public CefWindowDelegate {
  private:
   CefRefPtr<CefBrowserView> browser_view_;
   bool present_on_start_ = false;
+  bool show_shell_controls_ = false;
 
   IMPLEMENT_REFCOUNTING(UfoWindowDelegate);
 };
@@ -76,7 +88,7 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
     // a human immediately. Agent-created popup targets remain controllable
     // through CDP even if their page later receives the outer Agent overlay.
     CefWindow::CreateTopLevelWindow(
-        new UfoWindowDelegate(popup_browser_view, true));
+        new UfoWindowDelegate(popup_browser_view, true, false));
     return true;
   }
 
@@ -147,7 +159,8 @@ void UfoCefApp::OnContextInitialized() {
           new UfoOverviewBrowserViewDelegate())
                : static_cast<CefRefPtr<CefBrowserViewDelegate>>(
           new UfoBrowserViewDelegate(chrome_shell)));
-  CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(browser_view));
+  CefWindow::CreateTopLevelWindow(
+      new UfoWindowDelegate(browser_view, false, !overview));
 }
 
 CefRefPtr<CefClient> UfoCefApp::GetDefaultClient() {

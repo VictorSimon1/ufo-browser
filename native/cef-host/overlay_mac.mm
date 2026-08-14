@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstring>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include "native/cef-host/overlay_mac.h"
 
@@ -81,10 +84,98 @@
 
 @end
 
+@interface UfoShellButtonView : NSView
+@property(nonatomic, copy) NSString* socketPath;
+@property(nonatomic) BOOL highlighted;
+@end
+
+@implementation UfoShellButtonView
+
+- (BOOL)isOpaque { return NO; }
+- (BOOL)accessibilityIsIgnored { return NO; }
+- (NSAccessibilityRole)accessibilityRole { return NSAccessibilityButtonRole; }
+- (NSString*)accessibilityLabel { return @"Spaces"; }
+
+- (void)drawRect:(NSRect)dirtyRect {
+  (void)dirtyRect;
+  NSRect bounds = NSInsetRect(self.bounds, 1.0, 1.0);
+  NSColor* fill = [NSColor colorWithCalibratedWhite:0.12
+                                               alpha:self.highlighted ? 0.92 : 0.78];
+  NSColor* stroke = [NSColor colorWithCalibratedWhite:1.0
+                                                 alpha:self.highlighted ? 0.26 : 0.16];
+  NSBezierPath* capsule = [NSBezierPath bezierPathWithRoundedRect:bounds
+                                                            xRadius:8.0
+                                                            yRadius:8.0];
+  [fill setFill];
+  [capsule fill];
+  [stroke setStroke];
+  [capsule setLineWidth:1.0];
+  [capsule stroke];
+
+  // Four small squares give the same compact Spaces affordance as a native
+  // browser tab/workspace control without drawing any browser chrome in HTML.
+  const CGFloat gap = 2.5;
+  const CGFloat cell = 5.0;
+  const CGFloat total = cell * 2.0 + gap;
+  const CGFloat originX = NSMidX(bounds) - total / 2.0;
+  const CGFloat originY = NSMidY(bounds) - total / 2.0;
+  NSColor* icon = [NSColor colorWithCalibratedWhite:0.94 alpha:0.92];
+  [icon setFill];
+  for (NSInteger row = 0; row < 2; row += 1) {
+    for (NSInteger column = 0; column < 2; column += 1) {
+      NSRect cellRect = NSMakeRect(originX + column * (cell + gap),
+                                   originY + row * (cell + gap), cell, cell);
+      [[NSBezierPath bezierPathWithRoundedRect:cellRect xRadius:1.2 yRadius:1.2] fill];
+    }
+  }
+}
+
+- (void)mouseDown:(NSEvent*)event {
+  (void)event;
+  self.highlighted = YES;
+  [self setNeedsDisplay:YES];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+  (void)event;
+  self.highlighted = NO;
+  [self setNeedsDisplay:YES];
+  const char* path = self.socketPath.UTF8String;
+  if (!path || std::strlen(path) >= sizeof(sockaddr_un{}.sun_path)) return;
+  const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) return;
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::strncpy(address.sun_path, path, sizeof(address.sun_path) - 1);
+  if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+    static const char command[] = "show-overview\n";
+    (void)::write(fd, command, sizeof(command) - 1);
+  }
+  ::close(fd);
+}
+
+@end
+
+@interface UfoShellPanel : NSPanel
+@property(nonatomic, assign) NSWindow* hostWindow;
+@property(nonatomic, strong) UfoShellButtonView* buttonView;
+@end
+
+@implementation UfoShellPanel
+
+- (BOOL)canBecomeKeyWindow { return NO; }
+- (BOOL)canBecomeMainWindow { return NO; }
+
+@end
+
 static UfoOverlayPanel* gPanel;
 static NSWindow* gHostWindow;
 static id gMoveObserver;
 static id gResizeObserver;
+static UfoShellPanel* gShellPanel;
+static NSWindow* gShellHostWindow;
+static id gShellMoveObserver;
+static id gShellResizeObserver;
 
 void RemoveOverlay() {
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
@@ -110,6 +201,38 @@ void PositionOverlay() {
   [gPanel setFrame:frame display:YES];
 }
 
+void PositionShellButton() {
+  if (!gShellPanel || !gShellHostWindow) return;
+  NSView* content = gShellHostWindow.contentView;
+  if (!content) return;
+  NSRect frame = [content convertRect:content.bounds toView:nil];
+  frame = [gShellHostWindow convertRectToScreen:frame];
+  const CGFloat width = 34.0;
+  const CGFloat height = 30.0;
+  // Leave Chromium's profile/avatar and menu controls unobstructed. The
+  // native toolbar reserves roughly the final 90px for those controls.
+  const CGFloat rightInset = 98.0;
+  const CGFloat topInset = 8.0;
+  frame.origin.x = NSMaxX(frame) - rightInset - width;
+  frame.origin.y = NSMaxY(frame) - topInset - height;
+  frame.size = NSMakeSize(width, height);
+  [gShellPanel setFrame:frame display:YES];
+}
+
+void RemoveShellControls() {
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  if (gShellMoveObserver) [center removeObserver:gShellMoveObserver];
+  if (gShellResizeObserver) [center removeObserver:gShellResizeObserver];
+  gShellMoveObserver = nil;
+  gShellResizeObserver = nil;
+  if (gShellHostWindow && gShellPanel) [gShellHostWindow removeChildWindow:gShellPanel];
+  [gShellPanel orderOut:nil];
+  [gShellPanel release];
+  gShellPanel = nil;
+  [gShellHostWindow release];
+  gShellHostWindow = nil;
+}
+
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
   NSView* view = (NSView*)cef_view_handle;
   if (!view) return;
@@ -128,6 +251,11 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
       gPanel.alphaValue = presented ? 1.0 : 0.0;
       gPanel.ignoresMouseEvents = !presented;
     }
+    if (gShellPanel && gShellHostWindow == host) {
+      gShellPanel.alphaValue = presented ? 1.0 : 0.0;
+      gShellPanel.ignoresMouseEvents = !presented;
+      PositionShellButton();
+    }
     if (presented) {
       [host orderFrontRegardless];
     } else {
@@ -137,6 +265,63 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
   };
   if (NSThread.isMainThread) update();
   else dispatch_async(dispatch_get_main_queue(), update);
+}
+
+void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {
+  NSView* retainedCefView = [(NSView*)cef_view_handle retain];
+  const char* socket = presentation_socket ?: "";
+  NSString* socketPath = [NSString stringWithUTF8String:socket];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSView* cefView = retainedCefView;
+    NSWindow* host = cefView.window;
+    if (!host || !socketPath.length) {
+      RemoveShellControls();
+      [cefView release];
+      return;
+    }
+    if (gShellPanel && gShellHostWindow == host) {
+      gShellPanel.buttonView.socketPath = socketPath;
+      PositionShellButton();
+      [cefView release];
+      return;
+    }
+    RemoveShellControls();
+    gShellHostWindow = [host retain];
+    gShellPanel = [[UfoShellPanel alloc] initWithContentRect:NSMakeRect(0, 0, 34.0, 30.0)
+                                                    styleMask:NSWindowStyleMaskBorderless
+                                                      backing:NSBackingStoreBuffered
+                                                        defer:NO];
+    gShellPanel.hostWindow = host;
+    gShellPanel.opaque = NO;
+    gShellPanel.backgroundColor = NSColor.clearColor;
+    gShellPanel.hasShadow = NO;
+    gShellPanel.alphaValue = host.alphaValue > 0.01 ? 1.0 : 0.0;
+    gShellPanel.ignoresMouseEvents = host.ignoresMouseEvents;
+    gShellPanel.level = host.level + 1;
+    gShellPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+                                      NSWindowCollectionBehaviorFullScreenAuxiliary;
+    UfoShellButtonView* button = [[UfoShellButtonView alloc] initWithFrame:NSMakeRect(0, 0, 34.0, 30.0)];
+    button.socketPath = socketPath;
+    gShellPanel.buttonView = button;
+    gShellPanel.contentView = button;
+    [host addChildWindow:gShellPanel ordered:NSWindowAbove];
+    PositionShellButton();
+    [gShellPanel orderFront:nil];
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    gShellMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+      (void)note;
+      PositionShellButton();
+    }];
+    gShellResizeObserver = [center addObserverForName:NSWindowDidResizeNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+      (void)note;
+      PositionShellButton();
+    }];
+    [cefView release];
+  });
+}
+
+void UfoCefShellControlsClear() {
+  dispatch_async(dispatch_get_main_queue(), ^{ RemoveShellControls(); });
 }
 
 void UfoAgentOverlaySet(void* cef_view_handle, bool active, const char* label) {

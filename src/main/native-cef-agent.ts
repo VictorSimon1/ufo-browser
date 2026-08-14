@@ -37,7 +37,11 @@ const controlSocketsRoot = resolve(
 );
 const overviewControlSocket = resolve(
   process.env.UFO_BROWSER_OVERVIEW_CONTROL_SOCKET ||
-    join(controlSocketsRoot, "overview.sock"),
+  join(controlSocketsRoot, "overview.sock"),
+);
+const presentationSocket = resolve(
+  process.env.UFO_BROWSER_PRESENTATION_SOCKET ||
+  join(controlSocketsRoot, "presentation.sock"),
 );
 const sourcePartitionsRoot = resolve(
   process.env.UFO_BROWSER_SOURCE_PARTITIONS || join(userDataPath, "Partitions"),
@@ -64,6 +68,7 @@ const manager = new NativeCefTaskSpaceManager({
   useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   sourcePartitionsRoot,
   controlSocketsRoot,
+  presentationSocket,
   // macOS sockaddr_un paths are limited to roughly 104 bytes. Keep transient
   // per-Space sockets under a short TMPDIR root; browser data remains under
   // the user-data directory and is not moved or exposed by this change.
@@ -128,7 +133,8 @@ const overview = new NativeCefOverview({
   rendererRoot: process.env.UFO_BROWSER_NATIVE_RENDERER_ROOT || join(process.cwd(), "dist/renderer"),
 });
 await overview.start();
-const presentation = new NativeCefPresentationCoordinator(manager, overview);
+const presentation = new NativeCefPresentationCoordinator(manager, overview, presentationSocket);
+await presentation.start();
 overview.setPresentationController(presentation);
 manager.setPresentationHooks({
   onSpaceClosed: (spaceId) => presentation.onSpaceClosed(spaceId),
@@ -148,6 +154,7 @@ async function shutdown() {
   await server.close().catch(() => undefined);
   await profileSync?.close().catch(() => undefined);
   await manager.shutdown().catch(() => undefined);
+  await presentation.stop().catch(() => undefined);
   await overview.stop().catch(() => undefined);
   await manager.flushState().catch(() => undefined);
   await rm(resolve(

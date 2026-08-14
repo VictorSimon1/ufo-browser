@@ -1,3 +1,6 @@
+import { createServer, type Server } from "node:net";
+import { mkdir, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { NativeCefOverview, NativeCefOverviewPresentation } from "./native-cef-overview.js";
 import type { NativeCefTaskSpaceManager } from "./native-cef-task-space-manager.js";
 
@@ -8,11 +11,50 @@ export type NativeCefPresentationState =
 /** Single owner for the visible native CEF surface. */
 export class NativeCefPresentationCoordinator implements NativeCefOverviewPresentation {
   private state: NativeCefPresentationState = { kind: "overview" };
+  private server?: Server;
 
   constructor(
     private readonly manager: NativeCefTaskSpaceManager,
     private readonly overview: NativeCefOverview,
+    private readonly socketPath?: string,
   ) {}
+
+  /** Start the small AppKit-to-UFO presentation channel used by the native
+   * Spaces button. The browser shell never calls the Agent socket directly. */
+  async start() {
+    if (!this.socketPath || this.server) return;
+    await mkdir(dirname(this.socketPath), { recursive: true, mode: 0o700 });
+    await unlink(this.socketPath).catch(() => undefined);
+    this.server = createServer((socket) => {
+      let buffer = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk) => {
+        buffer += chunk;
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const command = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        void this.handleShellCommand(command).then(
+          () => { socket.end("ok\n"); },
+          (error) => { socket.end(`error ${String(error instanceof Error ? error.message : error)}\n`); },
+        );
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      this.server!.once("error", reject);
+      this.server!.listen(this.socketPath, () => resolve());
+    });
+  }
+
+  async stop() {
+    const server = this.server;
+    this.server = undefined;
+    await new Promise<void>((resolve) => {
+      if (!server) return resolve();
+      server.close(() => resolve());
+    });
+    if (this.socketPath) await unlink(this.socketPath).catch(() => undefined);
+  }
 
   async openSpace(spaceId: number) {
     await this.manager.presentSpace(spaceId);
@@ -51,5 +93,13 @@ export class NativeCefPresentationCoordinator implements NativeCefOverviewPresen
 
   getState() {
     return this.state;
+  }
+
+  private async handleShellCommand(command: string) {
+    if (command === "show-overview") {
+      await this.showOverview();
+      return;
+    }
+    throw new Error(`unknown presentation command: ${command}`);
   }
 }

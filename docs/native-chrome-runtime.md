@@ -7,6 +7,11 @@ Chrome Runtime; Electron must not redraw or embed a fake address bar.
 Human-facing Spaces are launched with an explicit `--chrome-shell` contract,
 which enables CEF's full native tabs/omnibox/profile toolbar. Overview remains
 the UFO management surface and intentionally has no browser toolbar.
+Each human-facing Space also gets a small native Spaces button above the CEF
+toolbar. It sends `show-overview` through a separate private Unix socket to
+the UFO Presentation Coordinator, so returning to Overview hides the current
+Space through the same single-surface state machine instead of merely exposing
+another window.
 
 ## What is being replaced
 

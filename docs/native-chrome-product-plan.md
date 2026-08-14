@@ -36,6 +36,8 @@ Already covered by the Native vertical slice:
 - CEF Chrome Runtime with `CEF_CTT_NORMAL` toolbar for human-facing Spaces;
 - explicit `--chrome-shell` launch contract so every human-facing Space cannot
   silently fall back to a page-only shell;
+- native Spaces button routed through a private presentation socket so a human
+  can return to Overview without bypassing the UFO presentation coordinator;
 - native tabs, omnibox, navigation, profile menu, dialogs, and popup lifecycle;
 - standalone Node Agent service and the existing `ufo-browser nodejs` protocol;
 - isolated persistent/temporary Spaces and profile-aware CEF user-data roots;

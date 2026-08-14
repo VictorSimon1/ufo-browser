@@ -30,6 +30,8 @@ export type NativeCefRuntimeOptions = {
   cwd?: string;
   userDataDir?: string;
   controlSocket?: string;
+  /** UFO presentation channel used by the native Spaces button. */
+  presentationSocket?: string;
   useMockKeychain?: boolean;
   overview?: boolean;
   /** Use Chromium's full native Chrome toolbar for a human-facing Space. */
@@ -495,6 +497,7 @@ export function buildNativeCefArgs(options: NativeCefRuntimeOptions, port = opti
   ];
   if (options.userDataDir) args.push(`--user-data-dir=${resolve(options.userDataDir)}`);
   if (options.controlSocket) args.push(`--control-socket=${resolve(options.controlSocket)}`);
+  if (options.presentationSocket) args.push(`--presentation-socket=${resolve(options.presentationSocket)}`);
   if (options.useMockKeychain) args.push("--use-mock-keychain");
   if (options.overview) args.push("--overview");
   // Keep the mode explicit in production launches. The host also defaults to

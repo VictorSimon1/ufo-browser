@@ -24,6 +24,8 @@ export type NativeCefTaskSpaceManagerOptions = {
   sourcePartitionsRoot?: string;
   controlSocketsRoot?: string;
   devtoolsSocketsRoot?: string;
+  /** Unix socket used by the native Chrome Spaces button. */
+  presentationSocket?: string;
   seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
   onBeforeRuntimeStart?: (spaceId: number, profileId: string, dataDir: string) => Promise<void>;
   onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
@@ -364,6 +366,7 @@ export class NativeCefTaskSpaceManager {
         this.options.controlSocketsRoot || join(this.options.partitionsRoot, "..", "Control"),
         `space-${space.id}.sock`,
       ),
+      presentationSocket: this.options.presentationSocket,
       // Native Spaces use the private CEF bridge by default. Set
       // UFO_CEF_PRIVATE_BRIDGE=0 only for legacy diagnostics that explicitly
       // need the loopback DevTools HTTP endpoint during migration.
