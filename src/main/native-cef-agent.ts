@@ -41,10 +41,15 @@ const overviewControlSocket = resolve(
   join(controlSocketsRoot, "overview.sock"),
 );
 const sharedHostEnabled = process.env.UFO_BROWSER_NATIVE_SHARED_HOST !== "0";
-const sharedHostDevtoolsSocket = join(
-  process.env.UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT ||
-    join(process.env.TMPDIR || "/tmp", `ufo-browser-devtools-${process.pid}`),
-  "shared-host.sock",
+const attachedHostEnabled = process.env.UFO_BROWSER_NATIVE_ATTACHED_HOST === "1";
+const attachedHostPid = Number(process.env.UFO_BROWSER_NATIVE_HOST_PID || 0);
+const sharedHostDevtoolsSocket = resolve(
+  process.env.UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET ||
+    join(
+      process.env.UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT ||
+        join(process.env.TMPDIR || "/tmp", `ufo-browser-devtools-${process.pid}`),
+      "shared-host.sock",
+    ),
 );
 const presentationSocket = resolve(
   process.env.UFO_BROWSER_PRESENTATION_SOCKET ||
@@ -155,8 +160,13 @@ if (sharedHostEnabled) {
     devtoolsSocket: sharedHostDevtoolsSocket,
     useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   });
-  await sharedHost.start();
-  manager.setSharedHost(sharedHost, true);
+  if (attachedHostEnabled) {
+    await sharedHost.attach();
+    manager.setSharedHost(sharedHost, false);
+  } else {
+    await sharedHost.start();
+    manager.setSharedHost(sharedHost, true);
+  }
 }
 const leases = new SpaceLeaseRegistry();
 const broker = new NativeCefBroker(manager);
@@ -174,9 +184,20 @@ await server.listen();
 console.error(`[UFO Native CEF] Agent socket: ${socketPath}`);
 
 let shuttingDown = false;
+const attachedHostMonitor = attachedHostEnabled && Number.isInteger(attachedHostPid) && attachedHostPid > 1
+  ? setInterval(() => {
+      try {
+        process.kill(attachedHostPid, 0);
+      } catch {
+        void shutdown().finally(() => process.exit(0));
+      }
+    }, 1_000)
+  : undefined;
+attachedHostMonitor?.unref();
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  if (attachedHostMonitor) clearInterval(attachedHostMonitor);
   await server.close().catch(() => undefined);
   await profileSync?.close().catch(() => undefined);
   await manager.shutdown().catch(() => undefined);

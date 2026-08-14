@@ -94,3 +94,38 @@ test("private CEF bridge carries an explicit shared-host browser route", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("NativeCefRuntime attaches to the UFO main host without spawning it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-attached-host-"));
+  const devtoolsSocket = join(root, "devtools.sock");
+  const controlSocket = join(root, "control.sock");
+  const server = createServer((socket) => {
+    socket.setEncoding("utf8");
+    socket.once("data", (chunk) => {
+      const request = JSON.parse(String(chunk).trim());
+      socket.end(`${JSON.stringify({
+        id: request.id,
+        result: {
+          Browser: "UFO-Browser/attached",
+          "Protocol-Version": "1.3",
+          UserAgent: "UFO-Browser",
+        },
+      })}\n`);
+    });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(devtoolsSocket, resolve);
+    });
+    const runtime = new NativeCefRuntime({ devtoolsSocket, controlSocket });
+    const version = await runtime.attach({ startupTimeoutMs: 1_000 });
+    assert.equal(version.Browser, "UFO-Browser/attached");
+    assert.equal(runtime.isRunning(), true);
+    await runtime.stop();
+    assert.equal(runtime.isRunning(), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});

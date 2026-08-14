@@ -10,6 +10,9 @@ class UfoCefApp final : public CefApp, public CefBrowserProcessHandler {
     return this;
   }
 
+  void OnBeforeCommandLineProcessing(
+      const CefString& process_type,
+      CefRefPtr<CefCommandLine> command_line) override;
   void OnContextInitialized() override;
   CefRefPtr<CefClient> GetDefaultClient() override;
 

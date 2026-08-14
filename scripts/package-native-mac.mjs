@@ -49,12 +49,11 @@ async function main() {
     const source = join(frameworkRoot, helper);
     if (await exists(source)) await run("/usr/bin/ditto", [source, join(appRoot, "Contents/Frameworks", helper)]);
   }
-  // Keep the CEF executable under Contents/MacOS. Its generated rpath is
-  // @executable_path/../Frameworks; moving it to Resources would make the
-  // installed DMG unable to locate Chromium Embedded Framework.framework.
-  await cp(join(hostApp, "Contents/MacOS/ufo-cef-host"), join(appRoot, "Contents/MacOS/ufo-cef-host"));
+  // The CEF host is the UFO product executable itself. There is no outer
+  // launcher and no second browser-host process; its generated rpath still
+  // resolves the bundled Chromium framework from Contents/Frameworks.
+  await cp(join(hostApp, "Contents/MacOS/ufo-cef-host"), join(appRoot, "Contents/MacOS/UFO-Browser"));
   await cp("dist/main/native-cef-agent.js", join(appRoot, "Contents/Resources/native-cef-agent.js"));
-  await cp("dist/main/native-cef-application.js", join(appRoot, "Contents/Resources/native-cef-application.js"));
   await cp("dist/main/profile-sync-storage-revision-worker.js", join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js"));
   await cp("dist/bin/ufo-keychain-helper", join(appRoot, "Contents/Resources/ufo-keychain-helper"));
   await cp("dist/agent/ufo-browser.js", join(appRoot, "Contents/Resources/ufo-browser.js"));
@@ -64,12 +63,10 @@ async function main() {
   await cp(process.execPath, join(appRoot, "Contents/Resources/node"));
   await cp("skills/ufo-browser", join(appRoot, "Contents/Resources/skills/ufo-browser"), { recursive: true });
   await cp("resources/icon.icns", join(appRoot, "Contents/Resources/icon.icns"));
-  await run("/usr/bin/xcrun", ["clang++", "-std=c++17", "-fobjc-arc", "native/cef-host/native-launcher.mm", "-framework", "AppKit", "-O2", "-o", join(appRoot, "Contents/MacOS/ufo-browser-native")]);
-  await writeFile(join(appRoot, "Contents/Resources/native-launch-env.sh"), `export UFO_BROWSER_NATIVE_AGENT_SCRIPT="$PWD/Contents/Resources/native-cef-application.js"\n`);
   await writeFile(join(appRoot, "Contents/Resources/native-launch.json"), `${JSON.stringify({ version, product: "UFO-Browser", cef: true })}\n`);
   await writeFile(join(appRoot, "Contents/Info.plist"), plist());
   await chmod(join(appRoot, "Contents/Resources/node"), 0o755);
-  await chmod(join(appRoot, "Contents/MacOS/ufo-cef-host"), 0o755);
+  await chmod(join(appRoot, "Contents/MacOS/UFO-Browser"), 0o755);
   await chmod(join(appRoot, "Contents/Resources/ufo-browser"), 0o755);
   await chmod(join(appRoot, "Contents/Resources/x-browser"), 0o755);
   const dmg = join(outputRoot, `UFO-Browser-${version}-native.dmg`);
@@ -83,7 +80,7 @@ function plist() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleDisplayName</key><string>UFO-Browser</string>
-<key>CFBundleExecutable</key><string>ufo-browser-native</string>
+<key>CFBundleExecutable</key><string>UFO-Browser</string>
 <key>CFBundleIdentifier</key><string>com.ufobrowser.app.native</string>
 <key>CFBundleName</key><string>UFO-Browser</string>
 <key>CFBundlePackageType</key><string>APPL</string>

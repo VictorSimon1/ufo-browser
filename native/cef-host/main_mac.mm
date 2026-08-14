@@ -28,6 +28,161 @@ static volatile sig_atomic_t g_termination_requested = 0;
 static int g_signal_pipe[2] = {-1, -1};
 static std::thread g_signal_thread;
 static std::atomic<bool> g_signal_thread_stop{false};
+static NSTask* g_agent_task = nil;
+static bool g_stopping_agent = false;
+
+static NSString* UfoResourcePath(NSString* name) {
+  return [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:name];
+}
+
+static bool IsPackagedUfoProduct() {
+  return [[NSFileManager defaultManager] isExecutableFileAtPath:UfoResourcePath(@"node")] &&
+      [[NSFileManager defaultManager] fileExistsAtPath:UfoResourcePath(@"native-cef-agent.js")];
+}
+
+static NSString* EnvironmentValue(NSString* name, NSString* fallback) {
+  NSString* value = NSProcessInfo.processInfo.environment[name];
+  return value.length ? value : fallback;
+}
+
+static bool StartPackagedAgentService() {
+  if (!IsPackagedUfoProduct()) return true;
+
+  NSFileManager* files = NSFileManager.defaultManager;
+  NSString* user_data = EnvironmentValue(
+      @"UFO_BROWSER_NATIVE_USER_DATA",
+      [NSHomeDirectory() stringByAppendingPathComponent:
+          @"Library/Application Support/UFO-Browser"]);
+  NSString* runtime_root = [NSTemporaryDirectory()
+      stringByAppendingPathComponent:[NSString stringWithFormat:
+          @"ufo-browser-native-%d", getpid()]];
+  NSString* control_root = [runtime_root stringByAppendingPathComponent:@"control"];
+  NSString* devtools_root = [runtime_root stringByAppendingPathComponent:@"devtools"];
+  NSString* overview_control = [control_root stringByAppendingPathComponent:@"overview.sock"];
+  NSString* presentation = [control_root stringByAppendingPathComponent:@"presentation.sock"];
+  NSString* devtools = [devtools_root stringByAppendingPathComponent:@"shared-host.sock"];
+  NSString* info_file = [user_data stringByAppendingPathComponent:@"overview.json"];
+  NSString* agent_socket = [user_data stringByAppendingPathComponent:@"ufo-browser.sock"];
+  NSError* directory_error = nil;
+  [files createDirectoryAtPath:user_data
+   withIntermediateDirectories:YES
+                    attributes:@{NSFilePosixPermissions: @0700}
+                         error:&directory_error];
+  [files createDirectoryAtPath:control_root
+   withIntermediateDirectories:YES
+                    attributes:@{NSFilePosixPermissions: @0700}
+                         error:&directory_error];
+  [files createDirectoryAtPath:devtools_root
+   withIntermediateDirectories:YES
+                    attributes:@{NSFilePosixPermissions: @0700}
+                         error:&directory_error];
+  if (directory_error) {
+    NSLog(@"UFO failed to prepare its native runtime: %@", directory_error);
+    return false;
+  }
+  [files removeItemAtPath:info_file error:nil];
+
+  NSMutableDictionary* environment =
+      [[[NSProcessInfo processInfo] environment] mutableCopy];
+  environment[@"UFO_BROWSER_NATIVE_ATTACHED_HOST"] = @"1";
+  environment[@"UFO_BROWSER_NATIVE_HOST_PID"] =
+      [NSString stringWithFormat:@"%d", getpid()];
+  environment[@"UFO_BROWSER_NATIVE_SHARED_HOST"] = @"1";
+  environment[@"UFO_BROWSER_NATIVE_OVERVIEW_MODE"] = @"external";
+  environment[@"UFO_BROWSER_NATIVE_USER_DATA"] = user_data;
+  environment[@"UFO_BROWSER_SOCKET"] = agent_socket;
+  environment[@"UFO_BROWSER_OVERVIEW_INFO_FILE"] = info_file;
+  environment[@"UFO_BROWSER_CONTROL_SOCKETS"] = control_root;
+  environment[@"UFO_BROWSER_OVERVIEW_CONTROL_SOCKET"] = overview_control;
+  environment[@"UFO_BROWSER_PRESENTATION_SOCKET"] = presentation;
+  environment[@"UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT"] = devtools_root;
+  environment[@"UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET"] = devtools;
+  environment[@"UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER"] =
+      UfoResourcePath(@"profile-sync-storage-revision-worker.js");
+  environment[@"UFO_BROWSER_NATIVE_KEYCHAIN_HELPER"] =
+      UfoResourcePath(@"ufo-keychain-helper");
+  environment[@"UFO_BROWSER_NATIVE_RENDERER_ROOT"] = UfoResourcePath(@"renderer");
+  environment[@"UFO_BROWSER_NATIVE_WORKING_DIR"] = NSBundle.mainBundle.bundlePath;
+  environment[@"UFO_CEF_HOST"] = NSBundle.mainBundle.executablePath;
+
+  NSTask* task = [[NSTask alloc] init];
+  task.launchPath = UfoResourcePath(@"node");
+  task.arguments = @[UfoResourcePath(@"native-cef-agent.js")];
+  task.currentDirectoryPath = NSBundle.mainBundle.bundlePath;
+  task.environment = environment;
+  [environment release];
+  task.standardOutput = [NSFileHandle fileHandleWithStandardOutput];
+  task.standardError = [NSFileHandle fileHandleWithStandardError];
+  NSError* launch_error = nil;
+  if (![task launchAndReturnError:&launch_error]) {
+    NSLog(@"UFO failed to start its Agent service: %@", launch_error);
+    [task release];
+    return false;
+  }
+  g_agent_task = task;
+  task.terminationHandler = ^(NSTask* finished) {
+    (void)finished;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (g_stopping_agent || g_termination_requested) return;
+      if (auto* handler = UfoCefHandler::GetInstance()) {
+        handler->CloseAllBrowsers(true);
+      } else {
+        [NSApp terminate:nil];
+      }
+    });
+  };
+
+  NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
+  NSString* overview_url = nil;
+  while ([deadline timeIntervalSinceNow] > 0 && task.isRunning) {
+    NSData* data = [NSData dataWithContentsOfFile:info_file];
+    if (data.length) {
+      NSDictionary* info = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+      NSString* candidate = [info isKindOfClass:NSDictionary.class] ? info[@"url"] : nil;
+      if ([candidate isKindOfClass:NSString.class] &&
+          [candidate hasPrefix:@"http://127.0.0.1:"]) {
+        overview_url = candidate;
+        break;
+      }
+    }
+    [NSThread sleepForTimeInterval:0.05];
+  }
+  if (!overview_url.length) {
+    NSLog(@"UFO Agent service did not publish the Overview URL");
+    g_stopping_agent = true;
+    if (task.isRunning) [task terminate];
+    [task release];
+    g_agent_task = nil;
+    g_stopping_agent = false;
+    return false;
+  }
+
+  setenv("UFO_BROWSER_NATIVE_ATTACHED_HOST", "1", 1);
+  setenv("UFO_BROWSER_ATTACHED_OVERVIEW_URL", overview_url.UTF8String, 1);
+  setenv("UFO_BROWSER_NATIVE_USER_DATA", user_data.UTF8String, 1);
+  setenv("UFO_BROWSER_OVERVIEW_CONTROL_SOCKET", overview_control.UTF8String, 1);
+  setenv("UFO_BROWSER_PRESENTATION_SOCKET", presentation.UTF8String, 1);
+  setenv("UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET", devtools.UTF8String, 1);
+  return true;
+}
+
+static void StopPackagedAgentService() {
+  NSTask* task = g_agent_task;
+  if (!task) return;
+  g_agent_task = nil;
+  g_stopping_agent = true;
+  if (task.isRunning) {
+    [task terminate];
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    while (task.isRunning && [deadline timeIntervalSinceNow] > 0) {
+      [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                               beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    if (task.isRunning) [task interrupt];
+  }
+  [task release];
+  g_stopping_agent = false;
+}
 
 static void HandleTerminationSignal(int signal_number) {
   (void)signal_number;
@@ -167,7 +322,8 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
       // while an Agent controls the Space. Deliver events to that transparent
       // panel; its full-size view swallows everything outside the control
       // capsule and routes only takeover/termination through UFO state.
-      if (UfoAgentOverlayOwnsWindow(event.window)) {
+      if (UfoAgentOverlayOwnsWindow(event.window) ||
+          UfoCefChromeControlsOwnWindow(event.window)) {
         [super sendEvent:event];
         return;
       }
@@ -231,10 +387,24 @@ int main(int argc, char* argv[]) {
     if (!CreateSignalPipe()) return 1;
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
     command_line->InitFromArgv(argc, argv);
+    if (!StartPackagedAgentService()) {
+      StopSignalPump();
+      return 1;
+    }
 
     CefSettings settings;
     settings.no_sandbox = true;
-    const auto user_data_dir = command_line->GetSwitchValue("user-data-dir");
+    NSString* helper_executable = [NSBundle.mainBundle.bundlePath
+        stringByAppendingPathComponent:
+            @"Contents/Frameworks/ufo-cef-host Helper.app/Contents/MacOS/ufo-cef-host Helper"];
+    if ([NSFileManager.defaultManager isExecutableFileAtPath:helper_executable]) {
+      CefString(&settings.browser_subprocess_path) = helper_executable.UTF8String;
+    }
+    auto user_data_dir = command_line->GetSwitchValue("user-data-dir");
+    if (user_data_dir.empty()) {
+      const char* attached_user_data = std::getenv("UFO_BROWSER_NATIVE_USER_DATA");
+      if (attached_user_data && *attached_user_data) user_data_dir = attached_user_data;
+    }
     if (!user_data_dir.empty()) {
       // Chrome-style CEF owns its profile directory. The Node AgentHost passes
       // one directory per native Profile/Space in later integration stages.
@@ -246,6 +416,7 @@ int main(int argc, char* argv[]) {
     ConfigureDevelopmentDevTools(command_line, &settings);
     CefRefPtr<UfoCefApp> app(new UfoCefApp());
     if (!CefInitialize(main_args, settings, app.get(), nullptr)) {
+      StopPackagedAgentService();
       StopSignalPump();
       return CefGetExitCode();
     }
@@ -262,6 +433,7 @@ int main(int argc, char* argv[]) {
     CefRunMessageLoop();
     StopSignalPump();
     CefShutdown();
+    StopPackagedAgentService();
     delegate = nil;
   }
   return 0;

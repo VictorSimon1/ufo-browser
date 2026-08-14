@@ -60,21 +60,25 @@ and private implementation are not product dependencies.
 Agent CLI / Skill
        |
        v
-UFO Agent Service (Node, standalone)
+UFO-Browser main executable (CEF browser host)
+       |
+       +-- Overview + every Space (one shared CEF main process)
+       |
+       +-- UFO Agent Service (managed internal child service)
        |
        | private Unix socket + validated Task Space lease
-       v
-CEF Native Host (C++/Objective-C++)
-       |
        v
 CEF Chrome Runtime (native tabs, omnibox, profile menu, dialogs, page)
 ```
 
-The standalone Node Agent service and the CEF Native Host are separate runtime
-components in one UFO application process tree. All Spaces live in the same
-CEF Host process. A Space is an isolated request context, target route, and
+The packaged bundle launches the CEF Native Host directly as `UFO-Browser`.
+It starts and owns the Node Agent service, which attaches back to that existing
+host and cannot launch another browser host. All Spaces live in the same UFO
+CEF main process. A Space is an isolated request context, target route, and
 internally managed Chrome surface—not a new application/CEF process. The
 native presentation invariant is one human-presented UFO surface at a time.
+CEF's GPU/Renderer/Utility helpers are required Chromium subprocesses; they do
+not own UFO scheduling or represent separately launched Spaces.
 
 The production direction is a per-runtime private Unix-socket CEF DevTools
 bridge. Its browser-level and page-level slices are verified for
@@ -156,23 +160,24 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    CLI disconnect, Agent input/screenshot still work behind it, takeover keeps
    the Space open, and termination ends the task and returns ownership to the
    user.
-6. **Electron removal and packaging** — build the CEF host plus standalone
-   Agent Service, copy the framework/helpers/resources,
+6. **Electron removal and packaging** — build the UFO CEF main executable plus
+   its managed Agent Service, copy the framework/helpers/resources,
    sign the complete app bundle, and produce the normal drag-to-Applications
    DMG. The install flow then syncs CLI and Skills exactly as the Electron
    installer does today.
 
-   The Native CEF launcher/package is the formal macOS product path:
+   The Native CEF package is the formal macOS product path:
 
    ```bash
    npm run package:native:mac
    ```
 
    It creates `release-native/UFO-Browser.app` and a drag-install DMG without
-   Electron Builder or an Electron runtime. The bundle contains the AppKit
-   launcher, standalone Node Agent, CEF host, CEF Framework/Helpers, UFO CLI
-   and Skill. The launcher starts the Agent first, waits for its Overview API
-   rendezvous file, and then starts the native CEF Overview window. The
+   Electron Builder or an Electron runtime. The bundle contains one
+   `UFO-Browser` CEF main executable, its managed Node Agent service, CEF
+   Framework/Helpers, UFO CLI and Skill. The main executable starts the Agent,
+   waits for its Overview API rendezvous file, and then initializes its own
+   native CEF Overview window. The
    post-install flow detects this native bundle and synchronizes the CLI and
    Skills into the installed Agent directories.
 
@@ -188,6 +193,17 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    deeply nested directory. Run `npm run native:cef:presentation:smoke` for the
    create/open/close/return lifecycle gate, including the assertion that the
    presented-window count never exceeds one.
+
+   Native titlebar controls follow the same presentation state. Each Space
+   window records its own Space name, Profile name, and presentation socket,
+   but the AppKit Spaces/Space-Profile panels are attached only when that
+   window becomes the one presented surface. A warm background Space or popup
+   can therefore be created/closed without stealing or removing the controls
+   from the visible Space. The shared Host intentionally uses the per-window
+   role rather than its process-wide `--overview` switch; otherwise every
+   Space created inside the Overview Host would incorrectly lose its controls.
+   While an Agent owns the Space, these UFO controls remain above the blocking
+   overlay and interactive; the Chromium toolbar and page stay locked.
 
    Native Profile Cookie sync is also connected to the CEF Agent. A running
    persistent Space gets an independent Cookie checkpoint and receives source
@@ -206,13 +222,12 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    `profiles.json`, imported Chrome partitions, browser state, and the default
    Agent CLI socket continue to work after switching shells. Development
    smoke tests set `UFO_BROWSER_NATIVE_USER_DATA` to an isolated temporary
-   root. The packaged CEF host lives at `Contents/MacOS/ufo-cef-host`, beside the
-   AppKit launcher. This is intentional: CEF's generated executable rpath is
-   relative to `Contents/MacOS`, so moving the host into `Resources` would
-   break Framework loading after a drag-install. The launcher starts the
-   standalone Agent with the bundled Node runtime, then the Agent starts the
-   single shared CEF Host that owns Overview and all Space surfaces. No
-   Electron process is required by the native bundle.
+   root. The packaged CEF host is the bundle main executable at
+   `Contents/MacOS/UFO-Browser`. Keeping it in `Contents/MacOS` preserves CEF's
+   framework rpath after a drag-install. It starts the managed Agent with the
+   bundled Node runtime; the Agent attaches to the existing host and cannot
+   launch another CEF main process. No Electron or outer launcher process is
+   required by the native bundle.
 
 ## Build and run
 
@@ -241,8 +256,9 @@ npm run package:native
 ```
 
 This produces `release-native/UFO-Browser-<version>-native.dmg`. The bundle
-contains the CEF framework, native Chrome host, standalone Node Agent, CLI,
-and Skill. Installing it does not start Electron; the existing
+contains the CEF framework, the `UFO-Browser` native Chrome main executable,
+its managed Agent service, CLI, and Skill. Installing it does not start
+Electron; the existing
 `install:mac` flow detects the native bundle and synchronizes the CLI and
 Skills from it.
 

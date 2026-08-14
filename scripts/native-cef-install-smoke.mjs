@@ -11,11 +11,10 @@ const appRoot = join(installRoot, "UFO-Browser.app");
 const isolatedHome = join(installRoot, "home");
 const isolatedBin = join(isolatedHome, ".local/bin");
 await copyBundle(sourceApp, appRoot);
-const launcher = join(appRoot, "Contents/MacOS/ufo-browser-native");
+const launcher = join(appRoot, "Contents/MacOS/UFO-Browser");
 const userData = join(installRoot, "UserData");
 for (const path of [
   launcher,
-  join(appRoot, "Contents/MacOS/ufo-cef-host"),
   join(appRoot, "Contents/Resources/renderer/overview.html"),
   join(appRoot, "Contents/Resources/native-cef-agent.js"),
   join(appRoot, "Contents/Resources/skills/ufo-browser/SKILL.md"),
@@ -87,7 +86,17 @@ try {
   if (processes.some((line) => /(^|\s)(electron|Electron)(\s|$)/.test(line))) {
     throw new Error(`Native installation launched Electron: ${processes.join("\n")}`);
   }
-  console.log(JSON.stringify({ installedApp: appRoot, nativeOnly: true }));
+  const productExecutable = join(appRoot, "Contents/MacOS/UFO-Browser");
+  const productHosts = processes.filter((line) => line.includes(productExecutable));
+  if (productHosts.length !== 1) {
+    throw new Error(`Expected exactly one UFO CEF main process, found ${productHosts.length}: ${productHosts.join("\n")}`);
+  }
+  if (processes.some((line) =>
+    line.includes(`${appRoot}/Contents/MacOS/ufo-cef-host`) ||
+    line.includes(`${appRoot}/Contents/MacOS/ufo-browser-native`))) {
+    throw new Error(`Native installation launched a legacy outer/CEF host process: ${processes.join("\n")}`);
+  }
+  console.log(JSON.stringify({ installedApp: appRoot, nativeOnly: true, oneUfoMainProcess: true }));
 } finally {
   if (app.exitCode === null) app.kill("SIGTERM");
   await waitForExit(app, 5_000).catch(() => undefined);

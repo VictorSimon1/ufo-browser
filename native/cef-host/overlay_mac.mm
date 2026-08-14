@@ -329,6 +329,15 @@ static NSRect UfoOverlayTakeOverRect(NSRect capsule) {
 - (BOOL)canBecomeMainWindow { return NO; }
 @end
 
+@interface UfoChromeControlsMetadata : NSObject
+@property(nonatomic, copy) NSString* spaceName;
+@property(nonatomic, copy) NSString* profileName;
+@property(nonatomic, copy) NSString* socketPath;
+@end
+
+@implementation UfoChromeControlsMetadata
+@end
+
 static UfoOverlayPanel* gPanel;
 static NSWindow* gHostWindow;
 static id gMoveObserver;
@@ -341,6 +350,27 @@ static UfoSpaceControllerPanel* gSpaceControllerPanel;
 static NSWindow* gSpaceControllerHostWindow;
 static id gSpaceControllerMoveObserver;
 static id gSpaceControllerResizeObserver;
+static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* gChromeControlsMetadata;
+
+static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* ChromeControlsMetadata() {
+  if (!gChromeControlsMetadata) {
+    gChromeControlsMetadata = [[NSMapTable alloc]
+        initWithKeyOptions:NSPointerFunctionsWeakMemory | NSPointerFunctionsObjectPersonality
+              valueOptions:NSPointerFunctionsStrongMemory
+                  capacity:0];
+  }
+  return gChromeControlsMetadata;
+}
+
+static UfoChromeControlsMetadata* MetadataForHost(NSWindow* host, BOOL create) {
+  if (!host) return nil;
+  UfoChromeControlsMetadata* metadata = [ChromeControlsMetadata() objectForKey:host];
+  if (!metadata && create) {
+    metadata = [[[UfoChromeControlsMetadata alloc] init] autorelease];
+    [ChromeControlsMetadata() setObject:metadata forKey:host];
+  }
+  return metadata;
+}
 
 void RemoveOverlay() {
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
@@ -427,6 +457,115 @@ void RemoveSpaceController() {
   gSpaceControllerHostWindow = nil;
 }
 
+static void InstallShellControls(NSWindow* host, NSString* socketPath) {
+  if (!host || !socketPath.length) {
+    RemoveShellControls();
+    return;
+  }
+  if (gShellPanel && gShellHostWindow == host) {
+    gShellPanel.buttonView.socketPath = socketPath;
+    gShellPanel.ignoresMouseEvents = host.ignoresMouseEvents;
+    gShellPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
+    PositionShellButton();
+    return;
+  }
+  RemoveShellControls();
+  gShellHostWindow = [host retain];
+  gShellPanel = [[UfoShellPanel alloc] initWithContentRect:NSMakeRect(0, 0, 34.0, 30.0)
+                                                  styleMask:NSWindowStyleMaskBorderless
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:NO];
+  gShellPanel.hostWindow = host;
+  gShellPanel.opaque = NO;
+  gShellPanel.backgroundColor = NSColor.clearColor;
+  gShellPanel.hasShadow = NO;
+  gShellPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
+  gShellPanel.ignoresMouseEvents = host.ignoresMouseEvents;
+  // UFO's Spaces affordance must remain usable above the Agent input-blocking
+  // panel; Chromium's toolbar/page stay below both layers.
+  gShellPanel.level = host.level + 2;
+  gShellPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+                                    NSWindowCollectionBehaviorFullScreenAuxiliary;
+  UfoShellButtonView* button = [[UfoShellButtonView alloc] initWithFrame:NSMakeRect(0, 0, 34.0, 30.0)];
+  button.socketPath = socketPath;
+  gShellPanel.buttonView = button;
+  gShellPanel.contentView = button;
+  [host addChildWindow:gShellPanel ordered:NSWindowAbove];
+  PositionShellButton();
+  [gShellPanel orderFront:nil];
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  gShellMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+    (void)note;
+    PositionShellButton();
+  }];
+  gShellResizeObserver = [center addObserverForName:NSWindowDidResizeNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+    (void)note;
+    PositionShellButton();
+  }];
+}
+
+static void InstallSpaceController(NSWindow* host,
+                                   UfoChromeControlsMetadata* metadata) {
+  if (!host || !metadata.socketPath.length || !metadata.spaceName.length) {
+    RemoveSpaceController();
+    return;
+  }
+  if (gSpaceControllerPanel && gSpaceControllerHostWindow == host) {
+    gSpaceControllerPanel.controllerView.spaceName = metadata.spaceName;
+    gSpaceControllerPanel.controllerView.profileName = metadata.profileName;
+    gSpaceControllerPanel.controllerView.socketPath = metadata.socketPath;
+    gSpaceControllerPanel.ignoresMouseEvents = host.ignoresMouseEvents;
+    gSpaceControllerPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
+    [gSpaceControllerPanel.controllerView setNeedsDisplay:YES];
+    PositionSpaceController();
+    return;
+  }
+  RemoveSpaceController();
+  gSpaceControllerHostWindow = [host retain];
+  gSpaceControllerPanel = [[UfoSpaceControllerPanel alloc] initWithContentRect:NSMakeRect(0, 0, 240.0, 30.0)
+                                                                        styleMask:NSWindowStyleMaskBorderless
+                                                                          backing:NSBackingStoreBuffered
+                                                                            defer:NO];
+  gSpaceControllerPanel.hostWindow = host;
+  gSpaceControllerPanel.opaque = NO;
+  gSpaceControllerPanel.backgroundColor = NSColor.clearColor;
+  gSpaceControllerPanel.hasShadow = NO;
+  gSpaceControllerPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
+  gSpaceControllerPanel.ignoresMouseEvents = host.ignoresMouseEvents;
+  gSpaceControllerPanel.level = host.level + 2;
+  gSpaceControllerPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+                                              NSWindowCollectionBehaviorFullScreenAuxiliary;
+  UfoSpaceControllerView* controller = [[UfoSpaceControllerView alloc] initWithFrame:NSMakeRect(0, 0, 240.0, 30.0)];
+  controller.spaceName = metadata.spaceName;
+  controller.profileName = metadata.profileName;
+  controller.socketPath = metadata.socketPath;
+  gSpaceControllerPanel.controllerView = controller;
+  gSpaceControllerPanel.contentView = controller;
+  [host addChildWindow:gSpaceControllerPanel ordered:NSWindowAbove];
+  PositionSpaceController();
+  [gSpaceControllerPanel orderFront:nil];
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  gSpaceControllerMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+    (void)note;
+    PositionSpaceController();
+  }];
+  gSpaceControllerResizeObserver = [center addObserverForName:NSWindowDidResizeNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
+    (void)note;
+    PositionSpaceController();
+  }];
+}
+
+static void PresentChromeControlsForHost(NSWindow* host) {
+  UfoChromeControlsMetadata* metadata = MetadataForHost(host, NO);
+  if (!metadata || !metadata.socketPath.length) {
+    RemoveShellControls();
+    RemoveSpaceController();
+    return;
+  }
+  InstallShellControls(host, metadata.socketPath);
+  InstallSpaceController(host, metadata);
+}
+
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
   NSView* view = (NSView*)cef_view_handle;
   if (!view) return;
@@ -445,6 +584,11 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
     host.ignoresMouseEvents = !presented;
     if (presented) {
       [host orderFrontRegardless];
+      // Chrome controls are registered when a Space window is created but
+      // physically attached only when that window becomes UFO's one presented
+      // surface. This prevents a warm/background Space from stealing the
+      // controls merely because its BrowserView was created later.
+      PresentChromeControlsForHost(host);
     } else {
       [host orderFront:nil];
     }
@@ -460,6 +604,11 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
         gShellPanel.ignoresMouseEvents = !presented;
         gShellPanel.animator.alphaValue = presented ? 1.0 : 0.0;
         PositionShellButton();
+      }
+      if (gSpaceControllerPanel && gSpaceControllerHostWindow == host) {
+        gSpaceControllerPanel.ignoresMouseEvents = !presented;
+        gSpaceControllerPanel.animator.alphaValue = presented ? 1.0 : 0.0;
+        PositionSpaceController();
       }
     } completionHandler:nil];
     [view release];
@@ -477,59 +626,25 @@ bool UfoCefWindowIsPresented(void* cef_view_handle) {
 
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {
   NSView* retainedCefView = [(NSView*)cef_view_handle retain];
-  const char* socket = presentation_socket ?: "";
-  NSString* socketPath = [NSString stringWithUTF8String:socket];
+  const std::string socketValue = presentation_socket ?: "";
   dispatch_async(dispatch_get_main_queue(), ^{
     NSView* cefView = retainedCefView;
     NSWindow* host = cefView.window;
-    if (!host || !socketPath.length) {
-      RemoveShellControls();
+    if (!host) {
       [cefView release];
       return;
     }
-    if (gShellPanel && gShellHostWindow == host) {
-      gShellPanel.buttonView.socketPath = socketPath;
-      PositionShellButton();
-      [cefView release];
-      return;
+    UfoChromeControlsMetadata* metadata = MetadataForHost(host, YES);
+    metadata.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
+    if (!metadata.socketPath.length) {
+      [ChromeControlsMetadata() removeObjectForKey:host];
+      if (gShellHostWindow == host) RemoveShellControls();
+      if (gSpaceControllerHostWindow == host) RemoveSpaceController();
+    } else if (!host.ignoresMouseEvents) {
+      PresentChromeControlsForHost(host);
     }
-    RemoveShellControls();
-    gShellHostWindow = [host retain];
-    gShellPanel = [[UfoShellPanel alloc] initWithContentRect:NSMakeRect(0, 0, 34.0, 30.0)
-                                                    styleMask:NSWindowStyleMaskBorderless
-                                                      backing:NSBackingStoreBuffered
-                                                        defer:NO];
-    gShellPanel.hostWindow = host;
-    gShellPanel.opaque = NO;
-    gShellPanel.backgroundColor = NSColor.clearColor;
-    gShellPanel.hasShadow = NO;
-    gShellPanel.alphaValue = host.ignoresMouseEvents ? 0.0 : 1.0;
-    gShellPanel.ignoresMouseEvents = host.ignoresMouseEvents;
-    gShellPanel.level = host.level + 1;
-    gShellPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
-                                      NSWindowCollectionBehaviorFullScreenAuxiliary;
-    UfoShellButtonView* button = [[UfoShellButtonView alloc] initWithFrame:NSMakeRect(0, 0, 34.0, 30.0)];
-    button.socketPath = socketPath;
-    gShellPanel.buttonView = button;
-    gShellPanel.contentView = button;
-    [host addChildWindow:gShellPanel ordered:NSWindowAbove];
-    PositionShellButton();
-    [gShellPanel orderFront:nil];
-    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-    gShellMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
-      (void)note;
-      PositionShellButton();
-    }];
-    gShellResizeObserver = [center addObserverForName:NSWindowDidResizeNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
-      (void)note;
-      PositionShellButton();
-    }];
     [cefView release];
   });
-}
-
-void UfoCefShellControlsClear() {
-  dispatch_async(dispatch_get_main_queue(), ^{ RemoveShellControls(); });
 }
 
 void UfoCefSpaceControllerSet(void* cef_view_handle,
@@ -537,63 +652,63 @@ void UfoCefSpaceControllerSet(void* cef_view_handle,
                               const char* profile_name,
                               const char* presentation_socket) {
   NSView* retainedCefView = [(NSView*)cef_view_handle retain];
-  NSString* space = [NSString stringWithUTF8String:space_name ?: "Space"];
-  NSString* profile = [NSString stringWithUTF8String:profile_name ?: "Default"];
-  NSString* socket = [NSString stringWithUTF8String:presentation_socket ?: ""];
+  const std::string spaceValue = space_name ?: "Space";
+  const std::string profileValue = profile_name ?: "Default";
+  const std::string socketValue = presentation_socket ?: "";
   dispatch_async(dispatch_get_main_queue(), ^{
     NSView* cefView = retainedCefView;
     NSWindow* host = cefView.window;
-    if (!host || !socket.length) {
-      RemoveSpaceController();
+    if (!host) {
       [cefView release];
       return;
     }
-    if (gSpaceControllerPanel && gSpaceControllerHostWindow == host) {
-      gSpaceControllerPanel.controllerView.spaceName = space;
-      gSpaceControllerPanel.controllerView.profileName = profile;
-      gSpaceControllerPanel.controllerView.socketPath = socket;
-      [gSpaceControllerPanel.controllerView setNeedsDisplay:YES];
-      PositionSpaceController();
-      [cefView release];
-      return;
+    UfoChromeControlsMetadata* metadata = MetadataForHost(host, YES);
+    metadata.spaceName = [NSString stringWithUTF8String:spaceValue.c_str()];
+    metadata.profileName = [NSString stringWithUTF8String:profileValue.c_str()];
+    metadata.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
+    if (!metadata.socketPath.length) {
+      [ChromeControlsMetadata() removeObjectForKey:host];
+      if (gShellHostWindow == host) RemoveShellControls();
+      if (gSpaceControllerHostWindow == host) RemoveSpaceController();
+    } else if (!host.ignoresMouseEvents) {
+      PresentChromeControlsForHost(host);
     }
-    RemoveSpaceController();
-    gSpaceControllerHostWindow = [host retain];
-    gSpaceControllerPanel = [[UfoSpaceControllerPanel alloc] initWithContentRect:NSMakeRect(0, 0, 240.0, 30.0)
-                                                                          styleMask:NSWindowStyleMaskBorderless
-                                                                            backing:NSBackingStoreBuffered
-                                                                              defer:NO];
-    gSpaceControllerPanel.hostWindow = host;
-    gSpaceControllerPanel.opaque = NO;
-    gSpaceControllerPanel.backgroundColor = NSColor.clearColor;
-    gSpaceControllerPanel.hasShadow = NO;
-    gSpaceControllerPanel.level = host.level + 1;
-    gSpaceControllerPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
-                                                NSWindowCollectionBehaviorFullScreenAuxiliary;
-    UfoSpaceControllerView* controller = [[UfoSpaceControllerView alloc] initWithFrame:NSMakeRect(0, 0, 240.0, 30.0)];
-    controller.spaceName = space;
-    controller.profileName = profile;
-    controller.socketPath = socket;
-    gSpaceControllerPanel.controllerView = controller;
-    gSpaceControllerPanel.contentView = controller;
-    [host addChildWindow:gSpaceControllerPanel ordered:NSWindowAbove];
-    PositionSpaceController();
-    [gSpaceControllerPanel orderFront:nil];
-    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-    gSpaceControllerMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
-      (void)note;
-      PositionSpaceController();
-    }];
-    gSpaceControllerResizeObserver = [center addObserverForName:NSWindowDidResizeNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
-      (void)note;
-      PositionSpaceController();
-    }];
     [cefView release];
   });
 }
 
-void UfoCefSpaceControllerClear() {
-  dispatch_async(dispatch_get_main_queue(), ^{ RemoveSpaceController(); });
+void UfoCefChromeControlsClear(void* cef_view_handle) {
+  NSView* cefView = (NSView*)cef_view_handle;
+  if (!cefView) return;
+  [cefView retain];
+  void (^update)(void) = ^{
+    NSWindow* host = cefView.window;
+    if (host) {
+      [ChromeControlsMetadata() removeObjectForKey:host];
+      if (gShellHostWindow == host) RemoveShellControls();
+      if (gSpaceControllerHostWindow == host) RemoveSpaceController();
+    }
+    [cefView release];
+  };
+  if (NSThread.isMainThread) update();
+  else dispatch_async(dispatch_get_main_queue(), update);
+}
+
+bool UfoCefChromeControlsArePresentedForWindow(void* cef_view_handle) {
+  NSView* view = (NSView*)cef_view_handle;
+  if (!view || !view.window) return false;
+  NSWindow* host = view.window;
+  return gShellPanel && gShellHostWindow == host && gShellPanel.parentWindow == host &&
+      gShellPanel.alphaValue > 0.5 && !gShellPanel.ignoresMouseEvents &&
+      gSpaceControllerPanel && gSpaceControllerHostWindow == host &&
+      gSpaceControllerPanel.parentWindow == host &&
+      gSpaceControllerPanel.alphaValue > 0.5 &&
+      !gSpaceControllerPanel.ignoresMouseEvents;
+}
+
+bool UfoCefChromeControlsOwnWindow(void* ns_window) {
+  NSWindow* window = (NSWindow*)ns_window;
+  return window && (window == gShellPanel || window == gSpaceControllerPanel);
 }
 
 void UfoAgentOverlaySet(void* cef_view_handle,

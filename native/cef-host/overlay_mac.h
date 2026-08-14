@@ -27,13 +27,14 @@ bool UfoCefWindowIsPresented(void* cef_view_handle);
 // sends presentation commands to UFO over a private Unix socket and is never
 // part of the CEF page/compositor screenshot path.
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket);
-void UfoCefShellControlsClear();
 
 void UfoCefSpaceControllerSet(void* cef_view_handle,
                               const char* space_name,
                               const char* profile_name,
                               const char* presentation_socket);
-void UfoCefSpaceControllerClear();
+void UfoCefChromeControlsClear(void* cef_view_handle);
+bool UfoCefChromeControlsArePresentedForWindow(void* cef_view_handle);
+bool UfoCefChromeControlsOwnWindow(void* ns_window);
 
 #ifdef __cplusplus
 }

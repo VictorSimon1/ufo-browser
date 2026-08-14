@@ -14,6 +14,9 @@ Chrome-style page window with no toolbar.
 The surrounding Space controller is still owned by UFO: Space name, Profile,
 and return-to-Spaces are drawn by AppKit in the native titlebar. It is not an
 HTML overlay and never participates in page screenshots or Agent/CDP input.
+Each warm Space keeps only its own controller metadata. The actual AppKit
+panels are mounted on the one human-presented Space and move with presentation,
+so background Space/popup lifecycle cannot disturb the visible controls.
 
 When an Agent owns the presented Space, an outer AppKit panel blocks human
 page/toolbar input while leaving CEF screenshots and DevTools input untouched.
@@ -70,6 +73,11 @@ presented through the private control socket only when Overview opens or
 focuses the Space. Pass `--show-on-start` only for a standalone host diagnostic.
 This avoids cold-start flash and focus steal before the Presentation
 Coordinator applies the single-visible-surface state.
+
+In a packaged build this host binary is the `UFO-Browser.app` main executable,
+not a child launched by a wrapper app. It owns an internal Node Agent service;
+that service attaches to the host's private sockets and never starts another
+CEF browser process.
 
 The port is a temporary prototype transport. It must not be enabled in a
 release build; the production bridge will be a private Unix-socket/CEF

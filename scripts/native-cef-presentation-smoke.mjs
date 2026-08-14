@@ -81,8 +81,34 @@ try {
   if (spacePresentation.overviewPresented ||
       spacePresentation.presentedWindowCount !== 1 ||
       spacePresentation.visibleSpaceId !== spaceId ||
-      !spacePresentation.presentedSpaceIds?.includes(spaceId)) {
+      !spacePresentation.presentedSpaceIds?.includes(spaceId) ||
+      !spacePresentation.chromeControlsPresented ||
+      spacePresentation.chromeControlsSpaceId !== spaceId) {
     throw new Error(`Space must be the only presented Native window: ${JSON.stringify(spacePresentation)}`);
+  }
+  const openCreated = await fetch(`${spacesUrl}/${createdSpaceId}/open`, { method: "POST" }).then((response) => response.json());
+  if (!openCreated.ok) throw new Error(`open created Space failed: ${JSON.stringify(openCreated)}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
+  const createdPresentation = await presentationStatus(controlSocket);
+  if (createdPresentation.visibleSpaceId !== createdSpaceId ||
+      createdPresentation.chromeControlsSpaceId !== createdSpaceId) {
+    throw new Error(`Chrome controls did not follow the second warm Space: ${JSON.stringify(createdPresentation)}`);
+  }
+  const reopen = await fetch(`${spacesUrl}/${spaceId}/open`, { method: "POST" }).then((response) => response.json());
+  if (!reopen.ok) throw new Error(`reopen Space failed: ${JSON.stringify(reopen)}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
+  const reopenedPresentation = await presentationStatus(controlSocket);
+  if (reopenedPresentation.visibleSpaceId !== spaceId ||
+      reopenedPresentation.chromeControlsSpaceId !== spaceId) {
+    throw new Error(`Chrome controls did not return to the first warm Space: ${JSON.stringify(reopenedPresentation)}`);
+  }
+  const closeCreated = await fetch(`${spacesUrl}/${createdSpaceId}/close`, { method: "POST" }).then((response) => response.json());
+  if (!closeCreated.ok) throw new Error(`close background Space failed: ${JSON.stringify(closeCreated)}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+  const afterBackgroundClose = await presentationStatus(controlSocket);
+  if (afterBackgroundClose.visibleSpaceId !== spaceId ||
+      afterBackgroundClose.chromeControlsSpaceId !== spaceId) {
+    throw new Error(`Closing a background Space removed the presented controls: ${JSON.stringify(afterBackgroundClose)}`);
   }
   const close = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
   if (!close.ok) throw new Error(`close Space failed: ${JSON.stringify(close)}`);
@@ -90,11 +116,10 @@ try {
   const returnedPresentation = await presentationStatus(controlSocket);
   if (!returnedPresentation.overviewPresented ||
       returnedPresentation.presentedWindowCount !== 1 ||
-      returnedPresentation.visibleSpaceId !== 0) {
+      returnedPresentation.visibleSpaceId !== 0 ||
+      returnedPresentation.chromeControlsPresented) {
     throw new Error(`Closing the visible Space must return to one Overview window: ${JSON.stringify(returnedPresentation)}`);
   }
-  const closeCreated = await fetch(`${spacesUrl}/${createdSpaceId}/close`, { method: "POST" }).then((response) => response.json());
-  if (!closeCreated.ok) throw new Error(`close created Space failed: ${JSON.stringify(closeCreated)}`);
   console.log(JSON.stringify({
     spaceId,
     createdSpaceId,
@@ -102,6 +127,8 @@ try {
     opened: true,
     closed: true,
     onePresentedWindow: true,
+    chromeControlsFollowWarmSpace: true,
+    backgroundClosePreservesControls: true,
   }));
 } finally {
   if (cli && cli.exitCode === null) cli.kill("SIGTERM");

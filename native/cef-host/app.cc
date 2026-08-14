@@ -1,5 +1,6 @@
 #include "native/cef-host/app.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -18,6 +19,14 @@
 #include "native/cef-host/overlay_mac.h"
 
 namespace {
+
+void AppendEnvironmentSwitch(CefRefPtr<CefCommandLine> command_line,
+                             const char* environment_name,
+                             const char* switch_name) {
+  const char* value = std::getenv(environment_name);
+  if (!value || !*value || command_line->HasSwitch(switch_name)) return;
+  command_line->AppendSwitchWithValue(switch_name, value);
+}
 
 class UfoWindowDelegate final : public CefWindowDelegate {
  public:
@@ -62,7 +71,11 @@ class UfoWindowDelegate final : public CefWindowDelegate {
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), false);
     }
-    if (show_shell_controls_ && !command_line->HasSwitch("overview")) {
+    // In the shared-host product the process itself starts in Overview mode,
+    // but Space windows created later still require their native controls.
+    // `show_shell_controls_` is the per-window role; the process-level
+    // --overview switch must not suppress controls for every Space.
+    if (show_shell_controls_) {
       const auto presentation_socket = presentation_socket_.empty()
           ? command_line->GetSwitchValue("presentation-socket").ToString()
           : presentation_socket_;
@@ -110,8 +123,7 @@ class UfoWindowDelegate final : public CefWindowDelegate {
   }
 
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
-    UfoCefShellControlsClear();
-    UfoCefSpaceControllerClear();
+    UfoCefChromeControlsClear(window->GetWindowHandle());
     if (auto* handler = UfoCefHandler::GetInstance()) {
       if (space_id_ > 0) {
         handler->SetSpaceAgentConnectionActive(space_id_, false);
@@ -292,6 +304,27 @@ std::string CreateSharedSpaceFromCommand(
 }
 
 }  // namespace
+
+void UfoCefApp::OnBeforeCommandLineProcessing(
+    const CefString& process_type,
+    CefRefPtr<CefCommandLine> command_line) {
+  if (!process_type.empty()) return;
+  if (const char* attached = std::getenv("UFO_BROWSER_NATIVE_ATTACHED_HOST");
+      attached && std::string(attached) == "1") {
+    command_line->AppendSwitch("overview");
+  }
+  AppendEnvironmentSwitch(command_line, "UFO_BROWSER_ATTACHED_OVERVIEW_URL",
+                          "url");
+  AppendEnvironmentSwitch(command_line, "UFO_BROWSER_NATIVE_USER_DATA",
+                          "user-data-dir");
+  AppendEnvironmentSwitch(command_line, "UFO_BROWSER_OVERVIEW_CONTROL_SOCKET",
+                          "control-socket");
+  AppendEnvironmentSwitch(command_line, "UFO_BROWSER_PRESENTATION_SOCKET",
+                          "presentation-socket");
+  AppendEnvironmentSwitch(command_line,
+                          "UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET",
+                          "devtools-socket");
+}
 
 void UfoCefApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();

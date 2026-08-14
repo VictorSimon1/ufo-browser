@@ -9,6 +9,11 @@ assert.match(source, /IsNativeTitlebarPoint\(NSWindow\* window/);
 assert.match(source, /IsTitlebarDragEvent\(NSEvent\* event/);
 assert.match(source, /g_titlebar_drag_window/);
 assert.match(source, /if \(IsTitlebarDragEvent\(event\)\) \{\s*\[super sendEvent:event\];/s);
+assert.match(source, /UfoCefChromeControlsOwnWindow\(event\.window\)/);
 assert.doesNotMatch(source, /if \(humanInput\) return;/);
 
-console.log(JSON.stringify({ nativeTitlebarDrag: true, pageInputStillBlocked: true }));
+console.log(JSON.stringify({
+  nativeTitlebarDrag: true,
+  pageInputStillBlocked: true,
+  spacesControlsRemainInteractive: true,
+}));

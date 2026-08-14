@@ -304,6 +304,7 @@ export class NativeCefPrivateConnection implements NativeCdpConnectionLike {
 
 export class NativeCefRuntime {
   private process?: ChildProcess;
+  private attached = false;
   private readonly connections = new Set<NativeCdpConnection>();
   private port?: number;
   private versionInfo?: NativeCefVersion;
@@ -313,7 +314,7 @@ export class NativeCefRuntime {
   constructor(private readonly defaults: NativeCefRuntimeOptions = {}) {}
 
   isRunning() {
-    return Boolean(this.process && this.process.exitCode === null && !this.process.killed);
+    return this.attached || Boolean(this.process && this.process.exitCode === null && !this.process.killed);
   }
 
   getPort() {
@@ -359,6 +360,37 @@ export class NativeCefRuntime {
       return this.versionInfo;
     } catch (error) {
       await this.stop();
+      throw error;
+    }
+  }
+
+  /**
+   * Attach the Agent service to the CEF host that is already the UFO product
+   * main process. This is the packaged-app direction: Node never launches a
+   * second browser host, it only connects to the private control/CDP sockets
+   * owned by the running UFO-Browser executable.
+   */
+  async attach(options: NativeCefRuntimeOptions = {}) {
+    if (this.isRunning()) return this.version();
+    const merged = { ...this.defaults, ...options };
+    if (!merged.devtoolsSocket) {
+      throw new Error("Attached Native CEF host requires a private DevTools socket");
+    }
+    if (!merged.controlSocket) {
+      throw new Error("Attached Native CEF host requires a control socket");
+    }
+    this.port = merged.port;
+    this.controlSocketPath = resolve(merged.controlSocket);
+    this.devtoolsSocketPath = resolve(merged.devtoolsSocket);
+    this.attached = true;
+    try {
+      this.versionInfo = await this.waitForVersion(merged.startupTimeoutMs ?? 15_000);
+      return this.versionInfo;
+    } catch (error) {
+      this.attached = false;
+      this.port = undefined;
+      this.controlSocketPath = undefined;
+      this.devtoolsSocketPath = undefined;
       throw error;
     }
   }
@@ -468,6 +500,10 @@ export class NativeCefRuntime {
     this.port = undefined;
     this.controlSocketPath = undefined;
     this.devtoolsSocketPath = undefined;
+    if (this.attached) {
+      this.attached = false;
+      return;
+    }
     if (!child || child.killed) return;
     await new Promise<void>((resolveStop) => {
       const timer = setTimeout(() => {

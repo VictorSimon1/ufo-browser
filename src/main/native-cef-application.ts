@@ -287,7 +287,7 @@ async function findFreePort() {
 
 function resolveCefExecutable() {
   const bundleRoot = process.env.UFO_BROWSER_NATIVE_WORKING_DIR;
-  if (bundleRoot) return join(bundleRoot, "Contents/MacOS/ufo-cef-host");
+  if (bundleRoot) return join(bundleRoot, "Contents/MacOS/UFO-Browser");
   const candidates = [
     join(process.cwd(), "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),
     join(process.cwd(), "native/cef-host/build/Release/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),

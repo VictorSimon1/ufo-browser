@@ -500,6 +500,7 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       int presented_count = 0;
       auto presented_spaces = CefListValue::Create();
       auto active_spaces = CefListValue::Create();
+      int chrome_controls_space_id = 0;
       const bool overview_presented =
           main_window_ && !main_window_->IsClosed() &&
           UfoCefWindowIsPresented(main_window_->GetWindowHandle());
@@ -511,6 +512,10 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
         if (!window || window->IsClosed() ||
             !UfoCefWindowIsPresented(window->GetWindowHandle())) {
           continue;
+        }
+        if (UfoCefChromeControlsArePresentedForWindow(
+                window->GetWindowHandle())) {
+          chrome_controls_space_id = candidate_id;
         }
         presented_spaces->SetInt(presented_spaces->GetSize(), candidate_id);
         presented_count += 1;
@@ -543,6 +548,9 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       response->SetBool("agentOverlayPresented", overlay_presented);
       response->SetBool("agentOverlayActionsAvailable",
                         overlay_actions_available);
+      response->SetBool("chromeControlsPresented",
+                        chrome_controls_space_id > 0);
+      response->SetInt("chromeControlsSpaceId", chrome_controls_space_id);
       auto value = CefValue::Create();
       value->SetDictionary(response);
       return JsonString(value);

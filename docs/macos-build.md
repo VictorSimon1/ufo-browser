@@ -35,7 +35,7 @@ npm run native:cef:install:smoke
 npm run package:mac:test
 ```
 
-Native 包由 CEF host、AppKit launcher、独立 Node Agent 和系统 `hdiutil` 生成，不包含 Electron、`app.asar` 或 Electron Builder 运行时。CEF 二进制来自本地 `test/cef-runtime`，需要时运行 `npm run native:cef:fetch`。
+Native 包由作为 App 主可执行文件的 CEF host、其管理的 Node Agent 服务和系统 `hdiutil` 生成，不再包含外层 AppKit launcher，也不包含 Electron、`app.asar` 或 Electron Builder 运行时。Node Agent 只附着到已运行的 UFO CEF host，不能再启动第二个浏览器主进程。CEF 二进制来自本地 `test/cef-runtime`，需要时运行 `npm run native:cef:fetch`。
 
 旧 Electron 回退包仅用于迁移测试：
 
@@ -61,7 +61,7 @@ npm run package:mac
 该命令依次执行：
 
 1. 构建 Native CEF Agent、renderer 和 CLI。
-2. 构建 CEF Chrome host 和 AppKit launcher。
+2. 构建作为 `UFO-Browser` 主可执行文件的 CEF Chrome host。
 3. 生成不含 Electron/app.asar 的 `release-native/UFO-Browser.app` 和拖拽安装 DMG。
 4. 运行 Native bundle、relocated install、CLI/Skill sync 和 Electron-free 进程树 smoke。
 5. 安装流程从 App 内 Skill 目录同步 Claude、Codex 和其他已安装 Agent。

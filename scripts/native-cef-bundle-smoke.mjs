@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const appRoot = join(root, "release-native/UFO-Browser.app");
-const launcher = join(appRoot, "Contents/MacOS/ufo-browser-native");
+const launcher = join(appRoot, "Contents/MacOS/UFO-Browser");
 const cli = join(appRoot, "Contents/Resources/ufo-browser");
 const storageWorker = join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js");
 await access(launcher);
@@ -15,6 +15,9 @@ const forbiddenNativeResources = ["app.asar", "electron", "Electron"];
 const bundleEntries = await walk(appRoot);
 const forbidden = bundleEntries.filter((path) => forbiddenNativeResources.some((name) => path.toLowerCase().includes(name.toLowerCase())));
 if (forbidden.length) throw new Error(`Native bundle contains Electron resources: ${forbidden.join("\n")}`);
+if (bundleEntries.some((path) => path.endsWith("/ufo-browser-native") || path.endsWith("/ufo-cef-host"))) {
+  throw new Error("Native bundle still contains a separate launcher or CEF host executable");
+}
 
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-bundle-smoke-"));
 const app = spawn(launcher, [], {
@@ -54,7 +57,7 @@ try {
   if (exitCode !== 0 || !stdout.includes("Example Domain") || !stdout.includes("ego-browser-shot-")) {
     throw new Error(`Native bundle CLI failed (${exitCode})\n${stdout}\n${stderr}\n${appStderr}`);
   }
-  console.log(JSON.stringify({ appRoot, socket, agent: true, screenshot: true }));
+  console.log(JSON.stringify({ appRoot, socket, oneUfoMainProcess: true, agent: true, screenshot: true }));
 } finally {
   if (app.exitCode === null) app.kill("SIGTERM");
   await waitForExit(app, 5_000).catch(() => undefined);

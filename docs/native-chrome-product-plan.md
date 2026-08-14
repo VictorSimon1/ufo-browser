@@ -30,6 +30,13 @@ The final product is one UFO native host, not an Overview process plus one
 Space scheduler, Overview surface, presentation state, and all human/Agent
 input policy. CEF is embedded in that host as the page/compositor layer.
 
+In the packaged product the `UFO-Browser` bundle executable is that CEF host;
+there is no outer AppKit launcher and no separately launched browser host. The
+Node Agent service is an internal child service attached to the already-running
+UFO host over private sockets and is forbidden from spawning another CEF main
+process. Chromium GPU/Renderer/Utility helpers remain normal Chromium child
+processes and are not Space hosts.
+
 Each logical Space still gets its own CEF `CefRequestContext`/profile data
 root and its own CDP target route. Isolation is logical and persistent-data
 safe; it must not be implemented by launching another UFO/CEF application or
@@ -60,8 +67,11 @@ Already covered by the Native vertical slice:
   silently fall back to a page-only shell;
 - native Spaces button routed through a private presentation socket so a human
   can return to Overview without bypassing the UFO presentation coordinator;
+- per-window native Space/Profile metadata with controls attached only to the
+  currently presented warm Space, so background creation, popup close, and
+  Space switching cannot steal or remove the visible UFO controls;
 - native tabs, omnibox, navigation, profile menu, dialogs, and popup lifecycle;
-- standalone Node Agent service and the existing `ufo-browser nodejs` protocol;
+- UFO-owned Node Agent child service and the existing `ufo-browser nodejs` protocol;
 - isolated persistent/temporary Spaces and profile-aware CEF user-data roots;
 - Chrome login-state import, Cookie writes, storage checkpoints, and sync;
 - Overview API/renderer, global four-second preview cadence, and presentation

@@ -91,15 +91,13 @@ async function verifyInstalledApp(appRoot) {
   const native = bundleId === "com.ufobrowser.app.native";
   const required = native
     ? [
-        "Contents/MacOS/ufo-browser-native",
+        "Contents/MacOS/UFO-Browser",
         "Contents/Resources/node",
         "Contents/Resources/native-cef-agent.js",
-        "Contents/Resources/native-cef-application.js",
         "Contents/Resources/renderer/overview.html",
         "Contents/Resources/renderer/overview.js",
         "Contents/Resources/renderer/styles.css",
         "Contents/Resources/profile-sync-storage-revision-worker.js",
-        "Contents/MacOS/ufo-cef-host",
         "Contents/Resources/ufo-browser",
         "Contents/Resources/x-browser",
         "Contents/Resources/skills/ufo-browser/SKILL.md",
