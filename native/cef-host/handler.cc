@@ -1,9 +1,11 @@
 #include "native/cef-host/handler.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
 #include <sstream>
 #include <utility>
 #include <sys/socket.h>
@@ -11,6 +13,7 @@
 #include <unistd.h>
 
 #include "include/cef_app.h"
+#include "include/cef_id_mappers.h"
 #include "include/cef_parser.h"
 #include "include/cef_values.h"
 #include "include/cef_devtools_message_observer.h"
@@ -124,12 +127,64 @@ void UfoCefHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
   if (window) window->SetTitle(title);
 }
 
+bool UfoCefHandler::OnBeforeDownload(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefDownloadItem> download_item,
+    const CefString& suggested_name,
+    CefRefPtr<CefBeforeDownloadCallback> callback) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser || !callback) return false;
+  std::string download_dir;
+  {
+    std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+    const auto request_context = browser->GetHost()->GetRequestContext();
+    const auto cache_path = request_context
+        ? request_context->GetCachePath().ToString()
+        : std::string();
+    const auto context_configured = context_download_dirs_.find(cache_path);
+    if (!cache_path.empty() && context_configured != context_download_dirs_.end()) {
+      download_dir = context_configured->second;
+    }
+    const auto configured = browser_download_dirs_.find(browser->GetIdentifier());
+    if (download_dir.empty() && configured != browser_download_dirs_.end()) {
+      download_dir = configured->second;
+    } else if (download_dir.empty()) {
+      const auto owner = browser_spaces_.find(browser->GetIdentifier());
+      if (owner != browser_spaces_.end()) {
+        const auto primary = space_browsers_.find(owner->second);
+        if (primary != space_browsers_.end()) {
+          const auto inherited = browser_download_dirs_.find(primary->second);
+          if (inherited != browser_download_dirs_.end()) {
+            download_dir = inherited->second;
+          }
+        }
+      }
+    }
+  }
+  if (download_dir.empty()) return false;
+  const auto safe_name = std::filesystem::path(suggested_name.ToString()).filename();
+  std::filesystem::create_directories(download_dir);
+  callback->Continue((std::filesystem::path(download_dir) / safe_name).string(),
+                     false);
+  return true;
+}
+
 void UfoCefHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   browsers_.push_back(browser);
   const auto target_id = std::to_string(browser->GetIdentifier());
   std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
   devtools_target_browsers_[target_id] = browser->GetIdentifier();
+  const int opener_id = browser->GetHost()->GetOpenerIdentifier();
+  if (opener_id > 0) {
+    const auto opener_space = browser_spaces_.find(opener_id);
+    if (opener_space != browser_spaces_.end()) {
+      browser_spaces_[browser->GetIdentifier()] = opener_space->second;
+      // Keep the Space route pinned to its primary Browser. A popup belongs
+      // to the same logical Space, but must not replace the Browser-level CDP
+      // endpoint used to enumerate and create targets for that Space.
+    }
+  }
 }
 
 bool UfoCefHandler::DoClose(CefRefPtr<CefBrowser> browser) {
@@ -154,9 +209,14 @@ void UfoCefHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   {
     std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
     devtools_target_browsers_.erase(std::to_string(browser->GetIdentifier()));
+    browser_download_dirs_.erase(browser->GetIdentifier());
     const auto space_it = browser_spaces_.find(browser->GetIdentifier());
     if (space_it != browser_spaces_.end()) {
-      space_browsers_.erase(space_it->second);
+      const auto primary_it = space_browsers_.find(space_it->second);
+      if (primary_it != space_browsers_.end() &&
+          primary_it->second == browser->GetIdentifier()) {
+        space_browsers_.erase(primary_it);
+      }
       browser_spaces_.erase(space_it);
     }
   }
@@ -171,6 +231,13 @@ void UfoCefHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                               int http_status_code) {
   CEF_REQUIRE_UI_THREAD();
   if (frame && frame->IsMain()) {
+    const int space_id = GetBrowserSpaceId(browser);
+    if (space_id > 0) {
+      frame->ExecuteJavaScript(
+          std::string("globalThis.__ufoSpaceId=") +
+              std::to_string(space_id) + ";",
+          frame->GetURL(), 0);
+    }
     LOG(INFO) << "UFO native Chrome loaded " << frame->GetURL().ToString()
               << " status=" << http_status_code;
   }
@@ -243,6 +310,19 @@ void UfoCefHandler::RegisterBrowserSpace(CefRefPtr<CefBrowser> browser,
   std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
   browser_spaces_[browser->GetIdentifier()] = space_id;
   space_browsers_[space_id] = browser->GetIdentifier();
+}
+
+void UfoCefHandler::RegisterPopupBrowser(CefRefPtr<CefBrowser> parent,
+                                         CefRefPtr<CefBrowser> popup) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!parent || !popup) return;
+  std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+  const auto owner = browser_spaces_.find(parent->GetIdentifier());
+  if (owner == browser_spaces_.end()) return;
+  // A popup is another CefBrowser inside the same UFO Host and logical Space.
+  // It intentionally does not replace space_browsers_[spaceId], which remains
+  // the primary Browser-level endpoint for native tab creation/enumeration.
+  browser_spaces_[popup->GetIdentifier()] = owner->second;
 }
 
 void UfoCefHandler::RegisterSpaceWindow(int space_id,
@@ -412,6 +492,63 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
         it->second->IsClosed()) {
       return "error space-not-found";
     }
+    if (operation == "list-space-browsers") {
+      int primary_browser_id = 0;
+      std::vector<CefRefPtr<CefBrowser>> space_browsers;
+      {
+        std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+        const auto primary = space_browsers_.find(space_id);
+        if (primary != space_browsers_.end()) {
+          primary_browser_id = primary->second;
+        }
+        for (const auto& browser : browsers_) {
+          const auto owner = browser_spaces_.find(browser->GetIdentifier());
+          if (owner != browser_spaces_.end() && owner->second == space_id) {
+            space_browsers.push_back(browser);
+          }
+        }
+      }
+      auto response = CefDictionaryValue::Create();
+      response->SetBool("ok", true);
+      response->SetInt("spaceId", space_id);
+      auto entries = CefListValue::Create();
+      for (const auto& browser : space_browsers) {
+        auto entry = CefDictionaryValue::Create();
+        const int browser_id = browser->GetIdentifier();
+        entry->SetInt("browserId", browser_id);
+        entry->SetString("route", "browser:" + std::to_string(browser_id));
+        entry->SetBool("primary", browser_id == primary_browser_id);
+        const auto frame = browser->GetMainFrame();
+        entry->SetString("url", frame ? frame->GetURL() : CefString());
+        entries->SetDictionary(entries->GetSize(), entry);
+      }
+      response->SetList("browsers", entries);
+      auto value = CefValue::Create();
+      value->SetDictionary(response);
+      return JsonString(value);
+    }
+    if (operation == "create-space-tab") {
+      int primary_browser_id = 0;
+      {
+        std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+        const auto primary = space_browsers_.find(space_id);
+        if (primary != space_browsers_.end()) {
+          primary_browser_id = primary->second;
+        }
+      }
+      for (const auto& browser : browsers_) {
+        if (browser->GetIdentifier() != primary_browser_id) continue;
+        const int command_id = cef_id_for_command_id_name("IDC_NEW_TAB");
+        if (command_id <= 0 ||
+            !browser->GetHost()->CanExecuteChromeCommand(command_id)) {
+          return "error new-tab-command-unavailable";
+        }
+        browser->GetHost()->ExecuteChromeCommand(
+            command_id, CEF_WOD_NEW_FOREGROUND_TAB);
+        return "ok";
+      }
+      return "error primary-browser-not-found";
+    }
     auto window = it->second;
     if (operation == "show-space") {
       window->Show();
@@ -480,7 +617,8 @@ void UfoCefHandler::StartDevToolsSocket(const std::string& path) {
         break;
       }
       auto client = std::make_shared<DevToolsClient>(fd);
-      client->route_id = "client-" + std::to_string(reinterpret_cast<uintptr_t>(client.get()));
+      client->route_id = "client-" +
+          std::to_string(next_devtools_client_id_.fetch_add(1));
       {
         std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
         devtools_clients_.push_back(client);
@@ -516,8 +654,29 @@ void UfoCefHandler::HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& 
                               method);
     }
   }
+  // Remove the logical client before closing its fd. Otherwise macOS may
+  // immediately reuse the descriptor for the control socket while the stale
+  // DevToolsClient is still present, causing CDP JSON to be written into an
+  // unrelated control response.
+  {
+    std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
+    devtools_clients_.erase(
+        std::remove(devtools_clients_.begin(), devtools_clients_.end(), client),
+        devtools_clients_.end());
+  }
+  const auto route_id = client->route_id;
+  CefPostTask(TID_UI, base::BindOnce(
+      &UfoCefHandler::RemoveDevToolsRoute, this, route_id));
   ::shutdown(client->fd, SHUT_RDWR);
   ::close(client->fd);
+  client->fd = -1;
+}
+
+void UfoCefHandler::RemoveDevToolsRoute(const std::string& route_id) {
+  CEF_REQUIRE_UI_THREAD();
+  devtools_registrations_.erase(route_id);
+  std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
+  devtools_outer_results_.erase(route_id);
 }
 
 void UfoCefHandler::DispatchDevToolsMessage(
@@ -542,6 +701,37 @@ void UfoCefHandler::DispatchDevToolsMessage(
                     ",\"error\":{\"message\":\"Native CEF browser route is not ready\"}}");
           }
           return;
+        }
+        if (method == "Browser.setDownloadBehavior") {
+          const auto params = message->GetDictionary("params");
+          const auto behavior = params
+              ? params->GetString("behavior").ToString()
+              : std::string();
+          const auto download_path = params
+              ? params->GetString("downloadPath").ToString()
+              : std::string();
+          std::lock_guard<std::mutex> lock(handler->devtools_targets_mutex_);
+          if ((behavior == "allow" || behavior == "allowAndName") &&
+              !download_path.empty()) {
+            handler->browser_download_dirs_[browser->GetIdentifier()] =
+                download_path;
+            const auto context = browser->GetHost()->GetRequestContext();
+            const auto cache_path = context
+                ? context->GetCachePath().ToString()
+                : std::string();
+            if (!cache_path.empty()) {
+              handler->context_download_dirs_[cache_path] = download_path;
+            }
+          } else if (behavior == "deny" || behavior == "default") {
+            handler->browser_download_dirs_.erase(browser->GetIdentifier());
+            const auto context = browser->GetHost()->GetRequestContext();
+            const auto cache_path = context
+                ? context->GetCachePath().ToString()
+                : std::string();
+            if (!cache_path.empty()) {
+              handler->context_download_dirs_.erase(cache_path);
+            }
+          }
         }
         auto observer = CefRefPtr<UfoDevToolsObserver>(
             new UfoDevToolsObserver(handler, client->route_id));
@@ -623,8 +813,16 @@ void UfoCefHandler::PublishDevToolsMessage(const std::string& route_id,
   for (const auto& client : devtools_clients_) {
     if (client->route_id != route_id) continue;
     std::lock_guard<std::mutex> write_lock(client->write_mutex);
-    ::write(client->fd, framed.data(), framed.size());
+    if (client->fd >= 0) ::write(client->fd, framed.data(), framed.size());
   }
+}
+
+int UfoCefHandler::GetBrowserSpaceId(CefRefPtr<CefBrowser> browser) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!browser) return 0;
+  std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+  const auto it = browser_spaces_.find(browser->GetIdentifier());
+  return it == browser_spaces_.end() ? 0 : it->second;
 }
 
 bool UfoCefHandler::ConsumeDevToolsOuterResult(const std::string& route_id, int id) {

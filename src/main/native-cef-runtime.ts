@@ -12,6 +12,9 @@ export type NativeCefTarget = {
   parentId?: string;
   parentFrameId?: string;
   openerId?: string;
+  browserContextId?: string;
+  /** Native shared-host metadata, stripped from the CDP protocol itself. */
+  ufoSpaceId?: number;
   webSocketDebuggerUrl?: string;
 };
 
@@ -55,6 +58,13 @@ export type NativeCefSharedSpaceSpec = {
   name?: string;
   profileName?: string;
   visible?: boolean;
+};
+
+type NativeCefSpaceBrowser = {
+  browserId: number;
+  route: string;
+  primary: boolean;
+  url: string;
 };
 
 type PendingCommand = {
@@ -378,6 +388,8 @@ export class NativeCefRuntime {
           parentId: target.parentId,
           parentFrameId: target.parentFrameId,
           openerId: target.openerId,
+          browserContextId: target.browserContextId,
+          ufoSpaceId: Number.isInteger(target.ufoSpaceId) ? target.ufoSpaceId : undefined,
         }));
       } finally { await connection.close(); }
     }
@@ -495,12 +507,28 @@ export class NativeCefRuntime {
       | "focus-space"
       | "close-space"
       | "status-space"
+      | "create-space-tab"
       | "agent-active-space-on"
       | "agent-active-space-off",
   ) {
     const response = await this.sendControlPayload(JSON.stringify({ command, spaceId }));
     if (response.startsWith("error ")) throw new Error(response);
     return response;
+  }
+
+  async listSharedSpaceBrowsers(spaceId: number): Promise<NativeCefSpaceBrowser[]> {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "list-space-browsers",
+      spaceId,
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    let result: any;
+    try {
+      result = JSON.parse(response);
+    } catch (error) {
+      throw new Error(`Invalid Native CEF Space browser response ${JSON.stringify(response)}: ${String(error)}`);
+    }
+    return Array.isArray(result?.browsers) ? result.browsers : [];
   }
 
   private async sendControlPayload(payload: string) {
@@ -572,6 +600,10 @@ export class NativeCefRuntime {
 export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
   private started = false;
   private readonly browserRoute: string;
+  private readonly ownedTargetIds = new Set<string>();
+  private readonly targetProbeAt = new Map<string, number>();
+  private readonly directTargetRoutes = new Map<string, string>();
+  private browserContextId?: string;
 
   constructor(
     private readonly host: NativeCefRuntime,
@@ -613,15 +645,94 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
       const connection = await this.host.connectBrowser(this.browserRoute);
       try {
         const result = await connection.send("Target.getTargets");
-        return (result?.targetInfos || []).map((target: any) => ({
-          id: target.targetId,
-          type: target.type,
-          title: target.title,
-          url: target.url,
-          parentId: target.parentId,
-          parentFrameId: target.parentFrameId,
-          openerId: target.openerId,
-        }));
+        const infos = result?.targetInfos || [];
+        const selected = new Set<string>();
+        for (const target of infos) {
+          if (this.ownedTargetIds.has(target.targetId) ||
+              target.ufoSpaceId === this.space.id) {
+            selected.add(target.targetId);
+          }
+        }
+        // Chrome Runtime's Target.getTargets is process-wide even when the
+        // request is sent through a browser route. On first discovery, use a
+        // small page-side marker injected by the native host to associate each
+        // target with its logical Space. This avoids guessing by URL, which
+        // breaks when two Spaces are both on Google or a restored page.
+        for (const target of infos) {
+          if (target.type !== "page" || selected.has(target.targetId)) continue;
+          const lastProbe = this.targetProbeAt.get(target.targetId) || 0;
+          if (Date.now() - lastProbe < 500) continue;
+          this.targetProbeAt.set(target.targetId, Date.now());
+          const owner = await probeTargetSpace(connection, target.targetId);
+          if (owner === this.space.id) {
+            this.ownedTargetIds.add(target.targetId);
+            selected.add(target.targetId);
+          }
+        }
+        for (const target of infos) {
+          if (selected.has(target.targetId) && target.browserContextId) {
+            this.browserContextId ||= String(target.browserContextId);
+          }
+        }
+        if (this.browserContextId) {
+          for (const target of infos) {
+            if (target.browserContextId === this.browserContextId) {
+              selected.add(target.targetId);
+            }
+          }
+        }
+        // window.open targets declare their opener before their page marker is
+        // necessarily available. Keep following the opener chain so a popup
+        // becomes visible to Agent APIs in the first enumeration cycle.
+        let addedOpener = true;
+        while (addedOpener) {
+          addedOpener = false;
+          for (const target of infos) {
+            if (!selected.has(target.targetId) && target.openerId && selected.has(target.openerId)) {
+              selected.add(target.targetId);
+              addedOpener = true;
+            }
+          }
+        }
+        for (const target of infos) {
+          if (target.type === "iframe" && selected.has(target.parentId)) {
+            selected.add(target.targetId);
+          }
+        }
+        const targets: NativeCefTarget[] = infos
+          .filter((target: any) => selected.has(target.targetId))
+          .map((target: any) => ({
+            id: target.targetId,
+            type: target.type,
+            title: target.title,
+            url: target.url,
+            parentId: target.parentId,
+            parentFrameId: target.parentFrameId,
+            openerId: target.openerId,
+            browserContextId: target.browserContextId,
+            ufoSpaceId: this.space.id,
+          }));
+        // Chrome Runtime creates window.open()/popup surfaces as sibling
+        // CefBrowser instances. They live in this same UFO process and share
+        // the Space RequestContext, but Chromium does not expose them through
+        // the primary Browser's Target.getTargets result. Publish a stable
+        // synthetic page target backed by that CefBrowser's direct DevTools
+        // endpoint so Agent tab/popup APIs see the complete logical Space.
+        const spaceBrowsers = await this.host.listSharedSpaceBrowsers(this.space.id);
+        this.directTargetRoutes.clear();
+        for (const browser of spaceBrowsers) {
+          if (browser.primary) continue;
+          const id = `cef-browser:${browser.browserId}`;
+          this.directTargetRoutes.set(id, browser.route);
+          targets.push({
+            id,
+            type: "page",
+            title: "",
+            url: browser.url || "about:blank",
+            ufoSpaceId: this.space.id,
+          });
+        }
+        return targets;
       } catch (error) {
         lastError = error;
       } finally {
@@ -633,15 +744,52 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
   }
 
   override connect(targetId?: string) {
+    const directRoute = targetId ? this.directTargetRoutes.get(targetId) : undefined;
+    if (directRoute) return this.host.connectBrowser(directRoute);
     return this.host.connect(targetId, this.browserRoute);
   }
 
   override connectRaw(targetId: string) {
+    const directRoute = this.directTargetRoutes.get(targetId);
+    if (directRoute) return this.host.connectBrowser(directRoute);
     return this.host.connectRaw(targetId, this.browserRoute);
   }
 
   override connectBrowser() {
     return this.host.connectBrowser(this.browserRoute);
+  }
+
+  rememberTargetId(targetId: string) {
+    if (targetId) this.ownedTargetIds.add(targetId);
+  }
+
+  async createTarget(url: string) {
+    const before = new Set(
+      (await this.targets())
+        .filter((target) => target.type === "page")
+        .map((target) => target.id),
+    );
+    await this.host.controlSharedSpace(this.space.id, "create-space-tab");
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const target = (await this.targets()).find(
+        (candidate) => candidate.type === "page" && !before.has(candidate.id),
+      );
+      if (target) {
+        this.rememberTargetId(target.id);
+        if (url && url !== "about:blank") {
+          const connection = await this.connect(target.id);
+          try {
+            await connection.send("Page.navigate", { url });
+          } finally {
+            await connection.close();
+          }
+        }
+        return { targetId: target.id };
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    }
+    throw new Error("Native CEF Chrome command did not create a Space tab");
   }
 
   override async stop() {
@@ -669,6 +817,29 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
 
   override hasExited() {
     return !this.isRunning();
+  }
+}
+
+async function probeTargetSpace(
+  connection: { send(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<any> },
+  targetId: string,
+) {
+  try {
+    const attached = await connection.send("Target.attachToTarget", {
+      targetId,
+      flatten: true,
+    });
+    const sessionId = String(attached?.sessionId || "");
+    if (!sessionId) return undefined;
+    const result = await connection.send("Runtime.evaluate", {
+      expression: "globalThis.__ufoSpaceId",
+      returnByValue: true,
+    }, sessionId);
+    await connection.send("Target.detachFromTarget", { sessionId });
+    const value = result?.result?.value;
+    return Number.isInteger(value) ? Number(value) : undefined;
+  } catch {
+    return undefined;
   }
 }
 

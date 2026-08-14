@@ -222,9 +222,13 @@ export class NativeCefTaskSpaceManager {
     const space = this.getSpaceOrThrow(spaceId);
     const runtime = await this.ensureRuntime(spaceId);
     const browser = await this.ensureBrowserConnection(spaceId, runtime);
-    const created = await browser.send("Target.createTarget", { url });
+    const created = runtime instanceof NativeCefSharedSpaceRuntime
+      ? await runtime.createTarget(url)
+      : await browser.send("Target.createTarget", { url });
     if (!created?.targetId) throw new Error("Native CEF did not create a tab target");
+    (runtime as NativeCefSharedSpaceRuntime).rememberTargetId?.(String(created.targetId));
     const target = await waitForTarget(runtime, created.targetId, 15_000);
+    (runtime as NativeCefSharedSpaceRuntime).rememberTargetId?.(target.id);
     await waitForRendererNavigation(runtime, target.id, url, 15_000);
     const tab = this.newTab(target.url || url);
     tab.targetId = target.id;
@@ -259,7 +263,9 @@ export class NativeCefTaskSpaceManager {
     space.tabs.splice(index, 1);
     if (space.tabs.length === 0) {
       const replacement = this.newTab("https://www.google.com/");
-      const created = await browser.send("Target.createTarget", { url: replacement.url });
+      const created = runtime instanceof NativeCefSharedSpaceRuntime
+        ? await runtime.createTarget(replacement.url)
+        : await browser.send("Target.createTarget", { url: replacement.url });
       replacement.targetId = created.targetId;
       await waitForTarget(runtime, replacement.targetId, 15_000);
       space.tabs.push(replacement);
@@ -436,6 +442,7 @@ export class NativeCefTaskSpaceManager {
       await runtime.stop();
       throw new Error("Native CEF did not expose a page target");
     }
+    (runtime as NativeCefSharedSpaceRuntime).rememberTargetId?.(target.id);
     await waitForRendererNavigation(runtime, target.id, tab.url, 15_000);
     const previousTargetId = tab.targetId;
     tab.targetId = target.id;

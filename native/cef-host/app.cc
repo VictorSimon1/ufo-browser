@@ -163,8 +163,12 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
     // Browser popups/dialogs are real Chrome windows and should be visible to
     // a human immediately. Agent-created popup targets remain controllable
     // through CDP even if their page later receives the outer Agent overlay.
+    if (auto* handler = UfoCefHandler::GetInstance()) {
+      handler->RegisterPopupBrowser(browser_view->GetBrowser(),
+                                    popup_browser_view->GetBrowser());
+    }
     CefWindow::CreateTopLevelWindow(
-        new UfoWindowDelegate(popup_browser_view, true, false));
+        new UfoWindowDelegate(popup_browser_view, true, false, false));
     return true;
   }
 

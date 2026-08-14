@@ -16,6 +16,8 @@ type NativeSession = {
 export class NativeCefBroker implements AgentCdpBrokerHost {
   private readonly sessions = new Map<string, NativeSession>();
   private readonly senders = new Map<string, (payload: string) => void>();
+  private readonly connectionSpaces = new Map<string, Set<number>>();
+  private readonly browserEventSubscriptions = new Map<number, { unsubscribe: () => void }>();
 
   constructor(private readonly manager: NativeCefTaskSpaceManager) {}
 
@@ -25,6 +27,9 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
 
   removeConnection(connectionId: string) {
     this.senders.delete(connectionId);
+    const spaces = this.connectionSpaces.get(connectionId) ?? new Set<number>();
+    this.connectionSpaces.delete(connectionId);
+    for (const spaceId of spaces) this.releaseUnusedBrowserEvents(spaceId);
     for (const [sessionId, session] of this.sessions) {
       if (session.connectionId !== connectionId) continue;
       session.unsubscribe();
@@ -34,6 +39,8 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
   }
 
   releaseConnectionSpace(connectionId: string, spaceId: number) {
+    this.connectionSpaces.get(connectionId)?.delete(spaceId);
+    this.releaseUnusedBrowserEvents(spaceId);
     for (const [sessionId, session] of this.sessions) {
       if (session.connectionId !== connectionId || session.spaceId !== spaceId) continue;
       session.unsubscribe();
@@ -43,6 +50,9 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
   }
 
   async send(connectionId: string, spaceId: number, generation: number, payload: string) {
+    let spaces = this.connectionSpaces.get(connectionId);
+    if (!spaces) this.connectionSpaces.set(connectionId, spaces = new Set());
+    spaces.add(spaceId);
     const message = JSON.parse(payload);
     const result = await this.dispatch(connectionId, spaceId, generation, message.method, message.params || {}, message.sessionId);
     this.emit(connectionId, JSON.stringify({ id: message.id, result }));
@@ -53,11 +63,19 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
     if (method === "Browser.getVersion") return runtime.version();
     if (method === "Browser.setDownloadBehavior") {
       const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
+      this.ensureBrowserEvents(spaceId, browser);
       return browser.send(method, params);
     }
     if (method === "Target.getTargets") {
-      const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
-      const result = await browser.send("Target.getTargets");
+      const targetInfos = (await runtime.targets()).map((target) => ({
+        targetId: target.id,
+        type: target.type,
+        title: target.title,
+        url: target.url,
+        parentId: target.parentId,
+        parentFrameId: target.parentFrameId,
+        openerId: target.openerId,
+      }));
       // Reconcile asynchronously. Target enumeration is a control-plane
       // query and must return immediately even while the durable Space state
       // store is flushing a popup/title update; serializing the save here can
@@ -67,8 +85,8 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
       // popup visible to listTabs immediately while save() remains queued in
       // the background. Previously listTabs could observe a stale Space after
       // window.open() because every refresh was fire-and-forget.
-      await this.manager.refreshTabsFromTargetInfos(spaceId, result?.targetInfos ?? []);
-      return { targetInfos: result?.targetInfos ?? [] };
+      await this.manager.refreshTabsFromTargetInfos(spaceId, targetInfos);
+      return { targetInfos };
     }
     if (method === "Target.createTarget") {
       const tab = await this.manager.createTab(spaceId, String(params.url || "about:blank"));
@@ -86,27 +104,27 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
     if (method === "Target.attachToTarget") {
       const targetId = String(params.targetId || "");
       const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
-      const targets = (await browser.send("Target.getTargets")).targetInfos ?? [];
-      const target = targets.find((candidate: any) => candidate.targetId === targetId) ?? targets.find((candidate: any) => candidate.type === "page");
+      const targets = await runtime.targets();
+      const target = targets.find((candidate) => candidate.id === targetId) ?? targets.find((candidate) => candidate.type === "page");
       if (!target) throw new Error(`target not found: ${targetId}`);
       const synthetic = `ufo-cef-${randomUUID()}`;
       if (target.type === "page") {
-        const connection = await runtime.connect(target.targetId);
+        const connection = await runtime.connect(target.id);
         await waitForConnectionUrl(connection, target.url);
         const unsubscribe = connection.onEvent((event: any) => {
           this.emit(connectionId, JSON.stringify({ method: event.method, params: event.params, sessionId: synthetic }));
         });
-        this.sessions.set(synthetic, { connectionId, spaceId, targetId: target.targetId, generation, connection, unsubscribe });
+        this.sessions.set(synthetic, { connectionId, spaceId, targetId: target.id, generation, connection, unsubscribe });
         return { sessionId: synthetic };
       }
-      const attached = await browser.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+      const attached = await browser.send("Target.attachToTarget", { targetId: target.id, flatten: true });
       const upstreamSessionId = attached?.sessionId;
-      if (!upstreamSessionId) throw new Error(`Native CEF did not attach target: ${target.targetId}`);
+      if (!upstreamSessionId) throw new Error(`Native CEF did not attach target: ${target.id}`);
       const unsubscribe = browser.onEvent((event: any) => {
         if (event.sessionId !== upstreamSessionId) return;
         this.emit(connectionId, JSON.stringify({ method: event.method, params: event.params, sessionId: synthetic }));
       });
-      this.sessions.set(synthetic, { connectionId, spaceId, targetId: target.targetId, generation, connection: browser, unsubscribe, upstreamSessionId });
+      this.sessions.set(synthetic, { connectionId, spaceId, targetId: target.id, generation, connection: browser, unsubscribe, upstreamSessionId });
       return { sessionId: synthetic };
     }
     if (method === "Target.setDiscoverTargets" || method === "Target.setAutoAttach") {
@@ -129,6 +147,50 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
 
   private emit(connectionId: string, payload: string) {
     this.senders.get(connectionId)?.(payload);
+  }
+
+  private ensureBrowserEvents(spaceId: number, browser: any) {
+    if (this.browserEventSubscriptions.has(spaceId)) return;
+    const unsubscribe = browser.onEvent((event: any) => {
+      if (event?.method === "Page.downloadWillBegin" || event?.method === "Page.downloadProgress") {
+        this.emitToSpace(spaceId, event);
+      } else if (event?.method === "Browser.downloadWillBegin") {
+        this.emitToSpace(spaceId, {
+          method: "Page.downloadWillBegin",
+          params: event.params,
+        });
+      } else if (event?.method === "Browser.downloadProgress") {
+        this.emitToSpace(spaceId, {
+          method: "Page.downloadProgress",
+          params: event.params,
+        });
+      }
+    });
+    this.browserEventSubscriptions.set(spaceId, { unsubscribe });
+  }
+
+  private emitToSpace(spaceId: number, event: any) {
+    for (const [connectionId, spaces] of this.connectionSpaces) {
+      if (!spaces.has(spaceId)) continue;
+      const matching = [...this.sessions.entries()].filter(
+        ([, session]) => session.connectionId === connectionId && session.spaceId === spaceId,
+      );
+      const rootSessions = matching.filter(([, session]) => !session.upstreamSessionId);
+      const recipients = rootSessions.length > 0 ? rootSessions : matching.slice(-1);
+      if (recipients.length === 0) {
+        this.emit(connectionId, JSON.stringify(event));
+        continue;
+      }
+      for (const [sessionId] of recipients) {
+        this.emit(connectionId, JSON.stringify({ ...event, sessionId }));
+      }
+    }
+  }
+
+  private releaseUnusedBrowserEvents(spaceId: number) {
+    if ([...this.connectionSpaces.values()].some((spaces) => spaces.has(spaceId))) return;
+    this.browserEventSubscriptions.get(spaceId)?.unsubscribe();
+    this.browserEventSubscriptions.delete(spaceId);
   }
 
   // The manager keeps this method intentionally narrow: only the broker can
