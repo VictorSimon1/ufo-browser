@@ -52,6 +52,7 @@
     "native:cef:smoke": "npm run build:native && node scripts/native-cef-smoke.mjs",
     "native:cef:version:smoke": "npm run build:native && node scripts/native-cef-version-smoke.mjs",
     "native:cef:chrome-shell:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-chrome-shell-smoke.mjs",
+    "native:cef:titlebar:smoke": "npm run native:cef:build && node scripts/native-cef-titlebar-smoke.mjs",
     "native:cef:private:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-private-smoke.mjs",
     "native:cef:agent": "npm run build:native && node dist/main/native-cef-agent.js",
     "native:cef:agent:smoke": "npm run build:native && node scripts/native-cef-agent-smoke.mjs",
