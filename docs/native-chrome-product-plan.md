@@ -37,11 +37,13 @@ UFO host over private sockets and is forbidden from spawning another CEF main
 process. Chromium GPU/Renderer/Utility helpers remain normal Chromium child
 processes and are not Space hosts.
 
-Each persistent UFO Profile maps to a real Chrome Runtime ProfileManager
-directory and each Space keeps its own CDP/browser route. Spaces using the same
-Profile intentionally share that Profile's Cookie/storage RequestContext but
-remain separate native windows and Agent routes. Temporary/internal Spaces may
-still use custom OTR RequestContexts. Isolation must not be implemented by
+Each persistent UFO Profile maps to a real Chrome Runtime profile directory and
+each Space keeps its own CDP/browser route. CEF 151's native Chrome Runtime has
+one supported process-wide Chrome BrowserContext, so the packaged host binds it
+to the selected default UFO Profile before CEF initialization. Spaces remain
+separate native windows, durable records, ownership domains, and Agent routes;
+temporary/internal non-Chrome surfaces may still use custom RequestContexts.
+Isolation must not be implemented by
 leaving one long-running UFO/CEF application per Space. The Presentation
 Coordinator exposes exactly one managed Space/Overview surface to the human at
 a time; background Spaces remain alive only when their lifecycle requires it.
@@ -84,6 +86,10 @@ Already covered by the Native vertical slice:
   the imported Chrome Profile for a real Space, verifies its Cookie state
   through the Agent page route, restarts UFO, and verifies that the same Space
   retains the login state;
+- packaged-host Profile binding: the bundle smoke preselects a persistent
+  Profile and verifies that CEF's actual `profile-directory` is
+  `UFO-<profileId>`, so imported storage is used by the renderer rather than
+  merely copied beside it;
 - Overview API/renderer, global four-second preview cadence, and presentation
   transitions;
 - outer AppKit Agent-control overlay and native input interception;
@@ -97,6 +103,10 @@ Already covered by the Native vertical slice:
 - stable primary/direct-tab routing, so the initial Chrome bootstrap tab is
   never mistaken for a requested Space page and closing the first native tab
   does not orphan the Space's Agent/CDP route while other Chrome tabs remain;
+- bounded first-navigation repair: if Chrome publishes a target URL before its
+  renderer leaves `about:blank`, UFO reissues that Space's requested navigation
+  once and waits for the exact page to become interactive before creation is
+  considered complete;
 - real-Profile target isolation based on exact CEF WebContents routes and raw
   frame/opener relationships. OOPIF/iframe targets are remapped to the stable
   UFO tab id, so Agent snapshots and frameLocator calls include cross-origin
@@ -117,15 +127,15 @@ chrome.
 The branch adds a version smoke that asserts the actual Chromium version
 returned by the running CEF host and command-line tests that protect this split.
 
-### Phase 2 — Private CEF Agent transport
+### Phase 2 — Private Agent transport
 
-Replace the development-only loopback DevTools HTTP/WebSocket adapter with a
-per-runtime Unix-socket bridge backed by `CefBrowserHost::SendDevToolsMessage`
-and `CefDevToolsMessageObserver`. The browser-level and page-level slices now
-cover version/target discovery, flattened attachment, OOPIF routing,
-evaluation, navigation, screenshots, input, popup/download behavior, and page
-events. The Node side keeps the existing `CdpTransport` and multiplexed Agent
-protocol, so Skill callers do not change.
+Keep UFO's Agent Unix socket as the only external automation surface. The
+packaged CEF 151 host gives only its managed Node child a random loopback
+DevTools endpoint so the Agent can attach to the exact page WebSocket without
+binding commands to Chromium's internal top-chrome renderer. The CEF
+Unix-socket bridge remains available for diagnostics and host metadata. The
+Node side keeps the existing `CdpTransport` and multiplexed Agent protocol, so
+Skill callers do not change.
 
 ### Phase 3 — Full lifecycle and profile acceptance
 
@@ -169,34 +179,25 @@ population stays bounded. This protects the native Chrome feel from a subtle
 regression where every preview/Agent target query opened another direct frame
 route and increased compositor cost.
 
-The private bridge can be exercised by setting
-`UFO_CEF_PRIVATE_BRIDGE=1` in an isolated development run. The current smoke
-deliberately gates only browser-level commands; the normal Agent path remains
-the default until page-target attachment, OOPIF routing, event subscriptions,
-and screenshot/input commands all pass the parity suite.
+The private bridge can still be exercised in an isolated development run.
+Packaged CEF 151 uses its managed child's random loopback page targets for the
+normal Agent path; AppKit window capture supplies screenshots without including
+the human-only Agent overlay.
 
 ## CEF Chrome Profile architecture
 
 The native Chrome Product Shell is now the Native product default. Set
 `UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL=0` only for a diagnostic comparison
 with the former application-owned CEF toolbar.
-Custom `CefRequestContext(cache_path)` objects become OTR contexts in Chrome
-Runtime, so persistent Spaces no longer use them. UFO instead maps each UFO
-Profile to a real Chromium ProfileManager directory (`Default`, `UFO-<id>`,
-and so on).
+Custom `CefRequestContext(cache_path)` objects are not used for native Chrome
+windows in CEF 151 because multiple independent Chrome BrowserContexts can
+leave the internal top-chrome renderer waiting for browser-info. UFO instead
+maps each persistent Profile to a real directory (`Default`, `UFO-<id>`, and so
+on) and starts the packaged host's one global BrowserContext on the validated
+default Profile directory. No ProcessSingleton forwarder or second CEF main
+process is launched.
 
-To open another Profile without creating another long-lived browser host, the
-primary UFO process registers the pending Space and starts a short-lived copy
-of its own executable with `--profile-directory`. Chromium's ProcessSingleton
-forwards that request into the running UFO CEF process and the forwarder exits
-(CEF exit code 24). The resulting native Chrome window, RequestContext, tabs,
-Agent route, overlay, close lifecycle, and presentation state all live in the
-original UFO process. The profile probe verifies persistent Cookies across
-restart, Profile isolation, two Spaces sharing one Profile, and tab-route
-ownership.
-
-Real Chrome Profiles intentionally share a Chromium `browserContextId`.
-UFO therefore never uses context-wide target expansion for these Spaces;
-ownership follows the exact CefBrowser route plus frame/opener relationships.
+Target ownership follows the exact public page target created after each Space
+request, plus frame/opener relationships and UFO's native browser registry.
 This keeps Overview and sibling Spaces out of Agent tab enumeration even when
-they reuse the same Profile and login state.
+the process-wide BrowserContext and target list are shared.

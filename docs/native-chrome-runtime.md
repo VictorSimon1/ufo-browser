@@ -46,9 +46,11 @@ The following remains owned by UFO-Browser and is not copied from Ego Lite:
 
 The release target uses one shared UFO CEF host process for Overview and every
 Space. A Space never launches another `ufo-cef-host` application or CEF main
-process. Isolated Space RequestContexts are held by separate Chromium-owned
-native Chrome windows inside that
-single Host. UFO's Presentation Coordinator guarantees that exactly one of
+process. CEF 151 Chrome Runtime uses the one supported process-wide Chrome
+BrowserContext; the packaged host binds that context to UFO's selected default
+Profile directory before `CefInitialize`, while UFO keeps Space identity,
+ownership, tabs, and Agent routes separate. UFO's Presentation Coordinator
+guarantees that exactly one of
 those managed surfaces is presented to the human. Agent-owned background
 Spaces stay compositor-awake for uninterrupted CDP input and screenshots;
 ordinary warm background Spaces keep their Chromium state but are ordered out
@@ -95,14 +97,16 @@ the route. This keeps the native Chrome compositor and DevTools browser-info
 manager from being churned by preview cadence, while preserving exact
 Profile/Space isolation and recovery when a tab or frame is genuinely replaced.
 
-The production direction is a per-runtime private Unix-socket CEF DevTools
-bridge. Its browser-level and page-level slices are verified for
+The packaged CEF 151 host allocates a random loopback DevTools port and passes
+it only to its managed Node Agent child. External tools still see only UFO's
+private Agent Unix socket. Exact page WebSockets are used because CEF 151 can
+bind browser-level `SendDevToolsMessage` calls to its internal top-chrome
+renderer; the private bridge remains available for standalone diagnostics.
+The transport is verified for
 `Browser.getVersion`, `Target.getTargets`, flattened `Target.attachToTarget`,
 `Runtime.evaluate`, `Page.enable`, navigation readiness, and screenshots. The
-bridge is now the default for Native Task Spaces. Set
-`UFO_CEF_PRIVATE_BRIDGE=0` only for legacy diagnostics that explicitly need the
-temporary loopback DevTools HTTP endpoint. OOPIF, popup, download, and
-screenshot paths are covered by Native smoke tests. Page events now flow
+OOPIF, popup, download, and screenshot paths are covered by Native smoke tests.
+Page events now flow
 through the same flattened synthetic sessions used by the Agent; console,
 page-error, and Network request delivery are covered by a Native event smoke.
 Packaged Native
@@ -134,27 +138,32 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    bootstrap, `pageInfo`, `js`, `snapshotText`, screenshot capture, navigation,
    and completion.
 3. **Profiles and login state** — persistent Spaces use real Chrome Runtime
-   ProfileManager directories beneath the shared UFO user-data root. Two
-   Spaces selecting the same UFO Profile share login state while keeping
-   separate native windows and Agent routes; different Profiles have isolated,
-   restart-persistent Cookies and storage. A short-lived executable invocation
-   asks Chromium's ProcessSingleton to create the Profile window in the
-   already-running UFO CEF host, then exits. Native Spaces seed an unused
-   Profile directory once from the selected UFO Profile and route Cookie
+   Profile directories beneath the shared UFO user-data root. Before the
+   packaged host initializes CEF, it validates `profiles.json` and binds the
+   process-wide Chrome BrowserContext to the selected default Profile's
+   `UFO-<profileId>` directory. This makes Cookies, IndexedDB, Local Storage,
+   Service Workers, and other imported browser state belong to the context that
+   renders the Space instead of an unused staging directory. Native Spaces
+   seed a fresh Profile directory once from the selected UFO Profile and route Cookie
    operations through the CEF/CDP adapter. The seed allowlists Chromium
    login/storage datasets, skips encrypted Cookie databases,
    password/history/extension data and singleton locks, and writes
    `.ufo-profile-seed.json` so an active native Profile is never overwritten.
    Decrypted Cookie import is also a one-time Profile initialization and writes
    `.ufo-cookie-seed.json`; only a matching marker with `reason: "imported"`
-   counts as complete. Older migration markers are retried automatically, and
-   the initial page is re-navigated before presentation so its first visible
-   request uses the newly imported login state. Opening another Space with the
+   counts as complete. Older migration markers are retried automatically. If
+   `/json/list` publishes the requested URL before its renderer commits, UFO
+   performs one bounded re-navigation and does not finish Space creation until
+   the exact page Session reports an interactive/complete document. This
+   removes the first-open `about:blank`/manual-click failure while ensuring the
+   first visible request uses newly imported login state. Opening another Space with the
    same Profile never repeats the full Cookie transaction. Chromium-normalized legacy Cookie
    attributes may produce a partial verification warning during that first
    seed, but cannot make a Space flash and fall back to Overview. Later source
    changes use the normal hash/checkpoint Profile Sync path.
-   Chrome import and UFO Profile
+   A Profile imported or made default while UFO is already running receives
+   Cookie injection immediately; its complete storage directory becomes the
+   process BrowserContext on the next normal app start. Chrome import and UFO Profile
    clone create a short-lived, toolbar-free RequestContext inside the same UFO
    CEF Host; they no longer launch a second browser main process against the
    target directory. The internal transaction surface is never presented and
