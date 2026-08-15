@@ -18,18 +18,24 @@ await new Promise((resolveListen) => fixture.listen(0, "127.0.0.1", () => {
   resolveListen();
 }));
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-popup-"));
+const devtoolsPort = await allocateLoopbackPort();
 const runtime = new NativeCefRuntime({
   executable: join(resolve("."), "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host"),
   userDataDir: userData,
   url: `http://127.0.0.1:${port}/`,
-  devtoolsSocket: join(userData, "devtools.sock"),
+  // CEF 151 can route browser-level private bridge requests to its internal
+  // top-chrome renderer after window.open(). The packaged product deliberately
+  // gives only its managed Agent child a random loopback endpoint and attaches
+  // to exact page targets, so this parity smoke must exercise that same path.
+  port: devtoolsPort,
   useMockKeychain: true,
 });
 try {
   await runtime.start({ startupTimeoutMs: 15_000 });
   const browser = await runtime.connectBrowser();
   console.error("popup:browser-ready");
-  const page = (await browser.send("Target.getTargets")).targetInfos.find((target) => target.type === "page");
+  const page = (await withTimeout(browser.send("Target.getTargets"), 10_000, "initial targets"))
+    .targetInfos.find((target) => target.type === "page");
   console.error("popup:target", page?.targetId);
   assert.ok(page, "main page target missing");
   const pageConnection = await runtime.connect(page.targetId);
@@ -41,7 +47,8 @@ try {
   });
   console.error("popup:opened");
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
-  const targets = (await browser.send("Target.getTargets")).targetInfos;
+  const targets = (await withTimeout(browser.send("Target.getTargets"), 10_000, "popup targets"))
+    .targetInfos;
   console.error("popup:targets", targets.map((target) => ({ id: target.targetId, type: target.type, title: target.title })));
   const popup = targets.find((target) => target.type === "page" && target.openerId === page.targetId);
   assert.ok(popup, `popup target missing: ${JSON.stringify(targets)}`);
@@ -56,4 +63,27 @@ try {
 } finally {
   await runtime.stop();
   fixture.close();
+}
+
+async function allocateLoopbackPort() {
+  const server = createServer();
+  await new Promise((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  const selected = address && typeof address !== "string" ? address.port : 0;
+  await new Promise((resolveClose) => server.close(resolveClose));
+  if (!selected) throw new Error("popup smoke could not allocate DevTools port");
+  return selected;
+}
+
+function withTimeout(operation, timeoutMs, label) {
+  let timer;
+  return Promise.race([
+    operation,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
