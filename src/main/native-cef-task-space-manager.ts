@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { BrowserProfileRegistry } from "./profile-registry.js";
 import { BrowserStateStore } from "./state-store.js";
@@ -65,6 +65,7 @@ export class NativeCefTaskSpaceManager {
   private presentationHooks?: NativeCefPresentationHooks;
   private nextInternalSpaceId = 0x7fffffff;
   private readonly internalSpaceIds = new Set<number>();
+  private readonly cookieSeedLocks = new Map<string, Promise<void>>();
 
   constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {
     this.sharedHost = options.sharedHost;
@@ -376,15 +377,24 @@ export class NativeCefTaskSpaceManager {
       ? join(this.options.chromeUserDataRoot!, chromeProfileDirectory!)
       : join(this.options.partitionsRoot, this.runtimeDataDirectory(space));
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
+    let requiresInitialCookieSeed = false;
     if (space.profileMode === "persistent") {
       const sourceRoot = this.options.sourcePartitionsRoot
         ? this.profileSourceRoot(this.options.profiles.getOrThrow(space.profileId))
         : undefined;
-      await seedNativeCefProfile({
+      const profileSeed = await seedNativeCefProfile({
         sourceRoot,
         targetRoot: dataDir,
         sourceProfileId: space.profileId,
       });
+      requiresInitialCookieSeed = profileSeed.seeded;
+      if (!profileSeed.seeded) {
+        // Builds before the Cookie seed marker already attempted the import on
+        // every open. Treat an existing Profile seed marker as the migration
+        // boundary instead of repeating a large Cookie transaction that can
+        // make a Space flash and return to Overview on normalized attributes.
+        await this.writeCookieSeedMarker(space.profileId, dataDir, profileSeed.reason);
+      }
       await this.options.onBeforeRuntimeStart?.(space.id, space.profileId, dataDir);
     }
     const runtimeOptions: NativeCefRuntimeOptions = {
@@ -450,13 +460,10 @@ export class NativeCefTaskSpaceManager {
       await mkdir(dirname(runtimeOptions.devtoolsSocket), { recursive: true, mode: 0o700 });
     }
     await runtime.start();
-    if (space.profileMode === "persistent" && this.options.seedCookies) {
-      const target = await this.createNativeCookieTarget(runtime, space);
-      try {
-        await this.options.seedCookies(space.profileId, target);
-      } finally {
-        await target.dispose();
-      }
+    if (space.profileMode === "persistent" &&
+        requiresInitialCookieSeed &&
+        this.options.seedCookies) {
+      await this.seedCookiesOnce(space.profileId, runtime, space, dataDir);
     }
     const target = await waitForPageTarget(runtime, tab.url, 15_000);
     if (!target) {
@@ -486,6 +493,64 @@ export class NativeCefTaskSpaceManager {
   getRuntime(spaceId: number) {
     const space = this.getSpaceOrThrow(spaceId);
     return this.runtimes.get(this.runtimeKey(space));
+  }
+
+  /**
+   * Cookie import is a first-run operation for a Native Profile directory.
+   * Real Chrome Profile Spaces share that directory, so repeating the full
+   * source Cookie write for every Space open is both wasteful and unsafe: the
+   * browser may normalize attributes that cannot round-trip byte-for-byte.
+   * Serialize concurrent first opens and leave a small local marker only after
+   * the transaction has completed. Later source changes are handled by the
+   * Profile Sync checkpoint path, never by re-seeding on every launch.
+   */
+  private async seedCookiesOnce(
+    profileId: string,
+    runtime: NativeCefRuntime,
+    space: SpaceRecord,
+    dataDir: string,
+  ) {
+    const markerPath = join(dataDir, ".ufo-cookie-seed.json");
+    if (await isRegularFile(markerPath)) return;
+    const inFlight = this.cookieSeedLocks.get(dataDir);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+    const operation = (async () => {
+      if (await isRegularFile(markerPath)) return;
+      const target = await this.createNativeCookieTarget(runtime, space);
+      try {
+        await this.options.seedCookies?.(profileId, target);
+      } finally {
+        await target.dispose();
+      }
+      await this.writeCookieSeedMarker(profileId, dataDir, "imported");
+    })();
+    this.cookieSeedLocks.set(dataDir, operation);
+    try {
+      await operation;
+    } finally {
+      if (this.cookieSeedLocks.get(dataDir) === operation) {
+        this.cookieSeedLocks.delete(dataDir);
+      }
+    }
+  }
+
+  private async writeCookieSeedMarker(
+    profileId: string,
+    dataDir: string,
+    reason: string,
+  ) {
+    const markerPath = join(dataDir, ".ufo-cookie-seed.json");
+    if (await isRegularFile(markerPath)) return;
+    await writeFile(markerPath, `${JSON.stringify({
+      version: 1,
+      profileId,
+      reason,
+      seededAt: Date.now(),
+    })}\n`, { mode: 0o600 });
+    await chmod(markerPath, 0o600);
   }
 
   listRunningSpaces(profileId?: string) {
@@ -855,6 +920,16 @@ async function findFreePort() {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   if (!port) throw new Error("unable to allocate Native CEF Profile operation port");
   return port;
+}
+
+async function isRegularFile(path: string) {
+  try {
+    const info = await lstat(path);
+    return info.isFile() && !info.isSymbolicLink();
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function waitForPageTarget(runtime: NativeCefRuntime, expectedUrl: string, timeoutMs: number) {

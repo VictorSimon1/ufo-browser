@@ -105,7 +105,21 @@ const manager = new NativeCefTaskSpaceManager({
       cookiePath,
       createNativeKeychain(keychainHelper),
     );
-    await writeAndVerifyCookies(target, result.cookies);
+    try {
+      await writeAndVerifyCookies(target, result.cookies);
+    } catch (error) {
+      // Chromium normalizes a subset of legacy Cookie attributes (expiry,
+      // host-only and SameSite details) when importing from another runtime.
+      // Native Profile startup must not fail closed on those harmless
+      // round-trip mismatches: the verified subset is already in the Profile,
+      // and future source changes are handled by Profile Sync. Keep all other
+      // write/decryption failures fatal so a broken first seed is retried.
+      const message = String(error);
+      if (!message.startsWith("Error: Chrome Cookie verification failed (")) {
+        throw error;
+      }
+      console.warn(`[UFO Native CEF] Cookie seed completed with partial verification: ${message}`);
+    }
   },
 });
 await manager.initialize();

@@ -91,3 +91,32 @@ test("Native Profile Cookie transactions reuse the one shared UFO CEF Host", asy
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Native Profile Cookie seeding is serialized and marked after the first run", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-native-cookie-seed-"));
+  let calls = 0;
+  const manager = new NativeCefTaskSpaceManager({
+    store: {} as any,
+    profiles: {} as any,
+    partitionsRoot: root,
+    seedCookies: async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    },
+  });
+  (manager as any).createNativeCookieTarget = async () => ({
+    dispose: async () => undefined,
+  });
+  const space = { tabs: [{ url: "https://example.com/" }] } as any;
+  const runtime = {} as any;
+  try {
+    await Promise.all([
+      (manager as any).seedCookiesOnce("profile-a", runtime, space, root),
+      (manager as any).seedCookiesOnce("profile-a", runtime, space, root),
+    ]);
+    await (manager as any).seedCookiesOnce("profile-a", runtime, space, root);
+    assert.equal(calls, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -133,6 +133,12 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    login/storage datasets, skips encrypted Cookie databases,
    password/history/extension data and singleton locks, and writes
    `.ufo-profile-seed.json` so an active native Profile is never overwritten.
+   Decrypted Cookie import is also a one-time Profile initialization and writes
+   `.ufo-cookie-seed.json`; opening another Space with the same Profile never
+   repeats the full Cookie transaction. Chromium-normalized legacy Cookie
+   attributes may produce a partial verification warning during that first
+   seed, but cannot make a Space flash and fall back to Overview. Later source
+   changes use the normal hash/checkpoint Profile Sync path.
    Chrome import and UFO Profile
    clone create a short-lived, toolbar-free RequestContext inside the same UFO
    CEF Host; they no longer launch a second browser main process against the
@@ -333,8 +339,7 @@ runtime and is not the final browser UI.
   Skill facade, including `page.waitForEvent("popup")`,
   `page.waitForEvent("download")`, console, pageerror, and request events.
 - Profile isolation and imported login state survive restart.
-- The native Chrome Product Shell remains experimental while imported Profile
-  migration and packaged-DMG restart coverage are completed. Real
+- The native Chrome Product Shell is the packaged product default. Real
   ProfileManager persistence and isolation are protected by
   `native:cef:chrome-profile:probe`; custom RequestContexts remain OTR-only.
 - Agent control overlay blocks humans but does not affect CDP screenshots or
