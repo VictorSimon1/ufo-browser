@@ -102,6 +102,10 @@ class UfoCefHandler final : public CefClient,
   int devtools_socket_fd_ = -1;
   std::atomic<bool> devtools_running_{false};
   std::thread devtools_accept_thread_;
+  // Client sockets are closed during shutdown, but their worker threads must
+  // also be joined before the handler is destroyed.  A detached worker can
+  // otherwise post a UI callback with a dangling UfoCefHandler pointer.
+  std::vector<std::thread> devtools_client_threads_;
   std::mutex devtools_clients_mutex_;
   std::vector<std::shared_ptr<DevToolsClient>> devtools_clients_;
   std::map<std::string, CefRefPtr<CefRegistration>> devtools_registrations_;

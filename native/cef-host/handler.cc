@@ -35,8 +35,8 @@ std::string JsonString(CefRefPtr<CefValue> value) {
 
 class UfoDevToolsObserver final : public CefDevToolsMessageObserver {
  public:
-  UfoDevToolsObserver(UfoCefHandler* handler, std::string route_id)
-      : handler_(handler), route_id_(std::move(route_id)) {}
+  UfoDevToolsObserver(CefRefPtr<UfoCefHandler> handler, std::string route_id)
+      : handler_(std::move(handler)), route_id_(std::move(route_id)) {}
 
   bool OnDevToolsMessage(CefRefPtr<CefBrowser> browser,
                          const void* message,
@@ -89,7 +89,10 @@ class UfoDevToolsObserver final : public CefDevToolsMessageObserver {
   }
 
  private:
-  UfoCefHandler* handler_;
+  // Keep the owner alive for the lifetime of CEF's observer callbacks.  The
+  // previous raw pointer could be called after app shutdown and crash in
+  // ConsumeDevToolsOuterResult/PublishDevToolsMessage.
+  CefRefPtr<UfoCefHandler> handler_;
   const std::string route_id_;
   IMPLEMENT_REFCOUNTING(UfoDevToolsObserver);
 };
@@ -1253,7 +1256,10 @@ void UfoCefHandler::StartDevToolsSocket(const std::string& path) {
         std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
         devtools_clients_.push_back(client);
       }
-      std::thread([this, client]() { HandleDevToolsClient(client); }).detach();
+      // Keep the worker joinable. StopDevToolsSocket() closes the client fds
+      // and joins all workers before the handler can be destroyed.
+      devtools_client_threads_.emplace_back(
+          [this, client]() { HandleDevToolsClient(client); });
     }
   });
 }
@@ -1295,8 +1301,11 @@ void UfoCefHandler::HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& 
         devtools_clients_.end());
   }
   const auto route_id = client->route_id;
+  // The worker is joined during shutdown, but the UI task may execute later.
+  // Retain the ref-counted handler until that task has run.
+  CefRefPtr<UfoCefHandler> self(this);
   CefPostTask(TID_UI, base::BindOnce(
-      &UfoCefHandler::RemoveDevToolsRoute, this, route_id));
+      &UfoCefHandler::RemoveDevToolsRoute, std::move(self), route_id));
   ::shutdown(client->fd, SHUT_RDWR);
   ::close(client->fd);
   client->fd = -1;
@@ -1315,8 +1324,10 @@ void UfoCefHandler::DispatchDevToolsMessage(
     const std::string& target_id,
     const std::string& browser_route,
     const std::string& method) {
+  CefRefPtr<UfoCefHandler> self(this);
   CefPostTask(TID_UI, base::BindOnce(
-      [](UfoCefHandler* handler, std::shared_ptr<DevToolsClient> client,
+      [](CefRefPtr<UfoCefHandler> handler,
+         std::shared_ptr<DevToolsClient> client,
          CefRefPtr<CefDictionaryValue> message, std::string target_id,
          std::string browser_route, std::string method) {
         auto browser = handler->FindDevToolsBrowser(target_id, browser_route);
@@ -1402,7 +1413,7 @@ void UfoCefHandler::DispatchDevToolsMessage(
         const auto encoded = JsonString(root);
         browser->GetHost()->SendDevToolsMessage(encoded.data(), encoded.size());
         LOG(INFO) << "Private DevTools method " << method << " target=" << target_id;
-      }, base::Unretained(this), client, message, target_id, browser_route,
+      }, std::move(self), client, message, target_id, browser_route,
       method));
 }
 
@@ -1484,12 +1495,24 @@ void UfoCefHandler::StopDevToolsSocket() {
     devtools_socket_fd_ = -1;
   }
   if (devtools_accept_thread_.joinable()) devtools_accept_thread_.join();
-  std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
-  for (const auto& client : devtools_clients_) {
-    ::shutdown(client->fd, SHUT_RDWR);
-    ::close(client->fd);
+  {
+    std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
+    for (const auto& client : devtools_clients_) {
+      if (client->fd >= 0) {
+        ::shutdown(client->fd, SHUT_RDWR);
+        ::close(client->fd);
+        client->fd = -1;
+      }
+    }
   }
-  devtools_clients_.clear();
+  for (auto& worker : devtools_client_threads_) {
+    if (worker.joinable()) worker.join();
+  }
+  devtools_client_threads_.clear();
+  {
+    std::lock_guard<std::mutex> lock(devtools_clients_mutex_);
+    devtools_clients_.clear();
+  }
   if (!devtools_socket_path_.empty()) ::unlink(devtools_socket_path_.c_str());
 }
 
