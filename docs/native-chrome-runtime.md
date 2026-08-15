@@ -83,6 +83,18 @@ native presentation invariant is one human-presented UFO surface at a time.
 CEF's GPU/Renderer/Utility helpers are required Chromium subprocesses; they do
 not own UFO scheduling or represent separately launched Spaces.
 
+### Target enumeration budget
+
+Real Chrome Profiles need one direct `Page.getFrameTree` lookup per exact CEF
+WebContents route to map Chromium's process-wide target list back to a UFO
+Space. That lookup is cached by `browserId`: normal navigation and repeated
+Agent/Overview polling reuse the cached root/frame graph, while a missing root
+target gets a short renderer-replacement grace period and then one fresh probe.
+New OOPIFs are discovered from the process-wide parent graph without reopening
+the route. This keeps the native Chrome compositor and DevTools browser-info
+manager from being churned by preview cadence, while preserving exact
+Profile/Space isolation and recovery when a tab or frame is genuinely replaced.
+
 The production direction is a per-runtime private Unix-socket CEF DevTools
 bridge. Its browser-level and page-level slices are verified for
 `Browser.getVersion`, `Target.getTargets`, flattened `Target.attachToTarget`,

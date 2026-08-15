@@ -10,6 +10,7 @@ import {
   collectNativeDomFrameIds,
   NativeCefPrivateConnection,
   NativeCefRuntime,
+  NativeCefSharedSpaceRuntime,
   prioritizeNativeSpaceBrowsers,
 } from "../main/native-cef-runtime.js";
 
@@ -109,6 +110,86 @@ test("Native Chrome DOM routing recovers OOPIF owner frame ids", () => {
       { nodeName: "DIV", shadowRoots: [{ frameId: "shadow-frame" }] },
     ],
   }), new Set(["oopif-owner", "shadow-frame"]));
+});
+
+test("Native Chrome Profile target enumeration caches direct frame routes", async () => {
+  const host = new NativeCefRuntime();
+  let directFrameTreeCalls = 0;
+  let iframeCount = 1;
+  const rootTarget = {
+    targetId: "root-frame",
+    type: "page",
+    title: "Example",
+    url: "https://example.com/",
+  };
+  const hostConnection = {
+    async send(method: string) {
+      if (method === "Target.getTargets") {
+        const targets: any[] = [rootTarget];
+        for (let index = 0; index < iframeCount; index += 1) {
+          targets.push({
+            targetId: `iframe-${index}`,
+            type: "iframe",
+            title: "",
+            url: `https://frame-${index}.example/`,
+            parentId: index === 0 ? "root-frame" : `iframe-${index - 1}`,
+          });
+        }
+        return { targetInfos: targets };
+      }
+      throw new Error(`unexpected host method ${method}`);
+    },
+    onEvent() { return () => {}; },
+    async close() {},
+  };
+  const directConnection = {
+    async send(method: string) {
+      assert.equal(method, "Page.getFrameTree");
+      directFrameTreeCalls += 1;
+      const childFrames = Array.from({ length: iframeCount }, (_, index) => ({
+        frame: { id: `iframe-${index}` },
+        childFrames: [],
+      }));
+      return {
+        frameTree: {
+          frame: { id: "root-frame" },
+          childFrames,
+        },
+      };
+    },
+    onEvent() { return () => {}; },
+    async close() {},
+  };
+  (host as any).isRunning = () => true;
+  (host as any).usesPrivateBridge = () => true;
+  (host as any).version = async () => ({ Browser: "test" });
+  (host as any).createSharedSpace = async () => ({ ok: true });
+  (host as any).listSharedSpaceBrowsers = async () => [{
+    browserId: 7,
+    route: "browser:7",
+    primary: true,
+    url: "https://example.com/",
+  }];
+  (host as any).connectBrowser = async (route?: string) =>
+    route === "browser:7" ? directConnection : hostConnection;
+
+  const runtime = new NativeCefSharedSpaceRuntime(host, {
+    id: 91,
+    url: "https://example.com/",
+    cachePath: "/tmp/ufo-test-profile",
+    chromeProfileDirectory: "Default",
+  });
+  await runtime.start();
+  const first = await runtime.targets();
+  const second = await runtime.targets();
+  assert.equal(directFrameTreeCalls, 1);
+  assert.ok(first.some((target) => target.id === "cef-browser:7"));
+  assert.ok(second.some((target) => target.id === "iframe-0"));
+
+  iframeCount = 2;
+  const third = await runtime.targets();
+  assert.equal(directFrameTreeCalls, 1);
+  assert.ok(third.some((target) => target.id === "iframe-1"));
 });
 
 test("private CEF bridge carries an explicit shared-host browser route", async () => {

@@ -683,6 +683,15 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
   private readonly ownedTargetIds = new Set<string>();
   private readonly targetProbeAt = new Map<string, number>();
   private readonly directTargetRoutes = new Map<string, string>();
+  // A real Chrome Profile exposes a process-wide Target.getTargets result,
+  // while each exact WebContents route has its own frame tree. Probing every
+  // route on every targets() call opens a short-lived DevTools connection and
+  // can make Chromium's browser-info manager time out under preview/Agent
+  // polling. Root frame ids are stable across ordinary navigation, so keep a
+  // route-scoped frame tree and only reprobe when a browser is new or its root
+  // target has genuinely disappeared.
+  private readonly directBrowserFrames = new Map<number, NativeBrowserFrameRoute>();
+  private readonly directBrowserFrameMissingSince = new Map<number, number>();
   private browserContextId?: string;
 
   constructor(
@@ -744,7 +753,7 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
           await this.host.listSharedSpaceBrowsers(this.space.id),
         );
         const directBrowserFrames = realChromeProfile
-          ? await inspectNativeSpaceBrowserFrames(this.host, spaceBrowsers)
+          ? await this.resolveDirectBrowserFrames(spaceBrowsers, infos)
           : new Map<number, NativeBrowserFrameRoute>();
         const directRootTargets = new Map<string, string>();
         for (const browser of spaceBrowsers) {
@@ -823,9 +832,20 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
             }
           }
         }
-        for (const target of infos) {
-          if (target.type === "iframe" && selected.has(target.parentId)) {
-            selected.add(target.targetId);
+        // The cached direct frame tree intentionally avoids a DevTools probe
+        // on every poll. New OOPIFs can still appear between polls, so follow
+        // the target parent graph until it reaches a fixed point and include
+        // those children without reopening the browser route.
+        let addedFrame = true;
+        while (addedFrame) {
+          addedFrame = false;
+          for (const target of infos) {
+            if (target.type === "iframe" &&
+                !selected.has(target.targetId) &&
+                selected.has(target.parentId)) {
+              selected.add(target.targetId);
+              addedFrame = true;
+            }
           }
         }
         const remapParentTarget = (targetId: unknown) =>
@@ -906,6 +926,61 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
     }
     throw new Error(`Native CEF shared Space route did not become ready: ${String(lastError || this.browserRoute)}`);
+  }
+
+  private async resolveDirectBrowserFrames(
+    browsers: readonly NativeCefSpaceBrowser[],
+    infos: readonly any[],
+  ) {
+    const availableTargetIds = new Set(
+      infos
+        .map((target: any) => target?.targetId)
+        .filter((targetId: unknown): targetId is string =>
+          typeof targetId === "string" && targetId.length > 0),
+    );
+    const activeBrowserIds = new Set(browsers.map((browser) => browser.browserId));
+    for (const browserId of this.directBrowserFrames.keys()) {
+      if (!activeBrowserIds.has(browserId)) {
+        this.directBrowserFrames.delete(browserId);
+        this.directBrowserFrameMissingSince.delete(browserId);
+      }
+    }
+
+    const routes = new Map<number, NativeBrowserFrameRoute>();
+    for (const browser of browsers) {
+      const cached = this.directBrowserFrames.get(browser.browserId);
+      if (cached?.rootId && availableTargetIds.has(cached.rootId)) {
+        this.directBrowserFrameMissingSince.delete(browser.browserId);
+        routes.set(browser.browserId, cached);
+        continue;
+      }
+
+      // Target.getTargets can briefly omit a target while Chromium is
+      // replacing a renderer. Keep the last exact frame graph for a short
+      // grace period instead of opening another DevTools route on every poll.
+      // If the root remains absent past the grace period, refresh it once.
+      if (cached) {
+        const missingSince = this.directBrowserFrameMissingSince.get(browser.browserId) ?? Date.now();
+        this.directBrowserFrameMissingSince.set(browser.browserId, missingSince);
+        if (Date.now() - missingSince < 1_000) {
+          routes.set(browser.browserId, cached);
+          continue;
+        }
+      }
+
+      const fresh = await inspectNativeSpaceBrowserFrame(this.host, browser);
+      if (fresh.rootId) {
+        this.directBrowserFrames.set(browser.browserId, fresh);
+        this.directBrowserFrameMissingSince.delete(browser.browserId);
+        routes.set(browser.browserId, fresh);
+      } else {
+        // Do not retain a closed browser's synthetic target forever. The
+        // shared host will publish it again when the route becomes ready.
+        this.directBrowserFrames.delete(browser.browserId);
+        this.directBrowserFrameMissingSince.delete(browser.browserId);
+      }
+    }
+    return routes;
   }
 
   override connect(targetId?: string) {
@@ -1020,30 +1095,26 @@ export function prioritizeNativeSpaceBrowsers(
  * while a direct browser route is scoped to one tab. We use that scoped route
  * to map the raw UUID page/iframe graph back to the stable UFO tab target.
  */
-async function inspectNativeSpaceBrowserFrames(
+async function inspectNativeSpaceBrowserFrame(
   host: NativeCefRuntime,
-  browsers: readonly NativeCefSpaceBrowser[],
+  browser: NativeCefSpaceBrowser,
 ) {
-  const routes = new Map<number, NativeBrowserFrameRoute>();
-  for (const browser of browsers) {
-    const frameRoute: NativeBrowserFrameRoute = { frameIds: new Set<string>() };
-    let connection: NativeCdpConnectionLike | undefined;
-    try {
-      connection = await host.connectBrowser(browser.route);
-      const frameTree = await connection.send("Page.getFrameTree");
-      const tree = frameTree?.frameTree || frameTree?.result?.frameTree;
-      collectNativeFrameIds(tree, frameRoute.frameIds);
-      const rootId = tree?.frame?.id;
-      if (typeof rootId === "string" && rootId) frameRoute.rootId = rootId;
-    } catch {
-      // A tab can disappear between list-space-browsers and this probe. The
-      // next targets() pass will retry it, while other tabs remain usable.
-    } finally {
-      await connection?.close().catch(() => undefined);
-    }
-    routes.set(browser.browserId, frameRoute);
+  const frameRoute: NativeBrowserFrameRoute = { frameIds: new Set<string>() };
+  let connection: NativeCdpConnectionLike | undefined;
+  try {
+    connection = await host.connectBrowser(browser.route);
+    const frameTree = await connection.send("Page.getFrameTree");
+    const tree = frameTree?.frameTree || frameTree?.result?.frameTree;
+    collectNativeFrameIds(tree, frameRoute.frameIds);
+    const rootId = tree?.frame?.id;
+    if (typeof rootId === "string" && rootId) frameRoute.rootId = rootId;
+  } catch {
+    // A tab can disappear between list-space-browsers and this probe. The
+    // next targets() pass will retry it, while other tabs remain usable.
+  } finally {
+    await connection?.close().catch(() => undefined);
   }
-  return routes;
+  return frameRoute;
 }
 
 export function collectNativeFrameIds(frameTree: any, result = new Set<string>()) {
