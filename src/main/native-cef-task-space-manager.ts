@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { BrowserProfileRegistry } from "./profile-registry.js";
 import { BrowserStateStore } from "./state-store.js";
@@ -377,7 +377,6 @@ export class NativeCefTaskSpaceManager {
       ? join(this.options.chromeUserDataRoot!, chromeProfileDirectory!)
       : join(this.options.partitionsRoot, this.runtimeDataDirectory(space));
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
-    let requiresInitialCookieSeed = false;
     if (space.profileMode === "persistent") {
       const sourceRoot = this.options.sourcePartitionsRoot
         ? this.profileSourceRoot(this.options.profiles.getOrThrow(space.profileId))
@@ -387,14 +386,6 @@ export class NativeCefTaskSpaceManager {
         targetRoot: dataDir,
         sourceProfileId: space.profileId,
       });
-      requiresInitialCookieSeed = profileSeed.seeded;
-      if (!profileSeed.seeded) {
-        // Builds before the Cookie seed marker already attempted the import on
-        // every open. Treat an existing Profile seed marker as the migration
-        // boundary instead of repeating a large Cookie transaction that can
-        // make a Space flash and return to Overview on normalized attributes.
-        await this.writeCookieSeedMarker(space.profileId, dataDir, profileSeed.reason);
-      }
       await this.options.onBeforeRuntimeStart?.(space.id, space.profileId, dataDir);
     }
     const runtimeOptions: NativeCefRuntimeOptions = {
@@ -460,9 +451,7 @@ export class NativeCefTaskSpaceManager {
       await mkdir(dirname(runtimeOptions.devtoolsSocket), { recursive: true, mode: 0o700 });
     }
     await runtime.start();
-    if (space.profileMode === "persistent" &&
-        requiresInitialCookieSeed &&
-        this.options.seedCookies) {
+    if (space.profileMode === "persistent" && this.options.seedCookies) {
       await this.seedCookiesOnce(space.profileId, runtime, space, dataDir);
     }
     const target = await waitForPageTarget(runtime, tab.url, 15_000);
@@ -511,14 +500,14 @@ export class NativeCefTaskSpaceManager {
     dataDir: string,
   ) {
     const markerPath = join(dataDir, ".ufo-cookie-seed.json");
-    if (await isRegularFile(markerPath)) return;
+    if (await this.hasCompletedCookieSeed(markerPath, profileId)) return;
     const inFlight = this.cookieSeedLocks.get(dataDir);
     if (inFlight) {
       await inFlight;
       return;
     }
     const operation = (async () => {
-      if (await isRegularFile(markerPath)) return;
+      if (await this.hasCompletedCookieSeed(markerPath, profileId)) return;
       const target = await this.createNativeCookieTarget(runtime, space);
       try {
         await this.options.seedCookies?.(profileId, target);
@@ -543,7 +532,6 @@ export class NativeCefTaskSpaceManager {
     reason: string,
   ) {
     const markerPath = join(dataDir, ".ufo-cookie-seed.json");
-    if (await isRegularFile(markerPath)) return;
     await writeFile(markerPath, `${JSON.stringify({
       version: 1,
       profileId,
@@ -551,6 +539,20 @@ export class NativeCefTaskSpaceManager {
       seededAt: Date.now(),
     })}\n`, { mode: 0o600 });
     await chmod(markerPath, 0o600);
+  }
+
+  private async hasCompletedCookieSeed(markerPath: string, profileId: string) {
+    try {
+      const marker = JSON.parse(await readFile(markerPath, "utf8"));
+      return marker?.version === 1 &&
+        marker?.profileId === profileId &&
+        marker?.reason === "imported";
+    } catch {
+      // Missing, malformed, and markers written by the old Profile-storage
+      // migration are not proof that Cookies were imported. Retry safely and
+      // only replace the marker after the Cookie transaction succeeds.
+      return false;
+    }
   }
 
   listRunningSpaces(profileId?: string) {
