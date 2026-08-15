@@ -80,8 +80,19 @@ try {
   if (!created.space?.id) throw new Error(`Native Overview create Space failed: ${JSON.stringify(created)}`);
   const createdSpaceId = Number(created.space.id);
   if (createdSpaceId === spaceId) throw new Error("Overview create endpoint reused an existing Space");
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+  const autoCreatedPresentation = await presentationStatus(controlSocket);
+  if (autoCreatedPresentation.overviewPresented ||
+      autoCreatedPresentation.visibleSpaceId !== createdSpaceId ||
+      !autoCreatedPresentation.presentedSpaceIds?.includes(createdSpaceId) ||
+      !hasSpaceControls(autoCreatedPresentation, createdSpaceId)) {
+    throw new Error(`Newly created Space was not presented immediately: ${JSON.stringify(autoCreatedPresentation)}`);
+  }
   const before = await fetch(spacesUrl).then((response) => response.json());
   if (!before.spaces?.some((space) => space.id === spaceId) || !before.spaces?.some((space) => space.id === createdSpaceId)) throw new Error("Space missing from Overview API");
+  const showOverviewAfterCreate = await sendSocket(presentationSocket, "show-overview");
+  if (showOverviewAfterCreate !== "ok") throw new Error(`show Overview after create failed: ${showOverviewAfterCreate}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
   const preview = await fetch(`${spacesUrl}/${spaceId}/preview`).then((response) => response.json());
   if (!String(preview.dataUrl || "").startsWith("data:image/jpeg;base64,")) {
     throw new Error(`Native Overview preview failed: ${JSON.stringify(preview).slice(0, 500)}`);
