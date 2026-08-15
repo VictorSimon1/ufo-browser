@@ -1006,19 +1006,68 @@ async function waitForPageTarget(runtime: NativeCefRuntime, expectedUrl: string,
 async function waitForRendererNavigation(runtime: NativeCefRuntime, targetId: string, expectedUrl: string, timeoutMs: number) {
   const connection = await runtime.connect(targetId);
   const deadline = Date.now() + timeoutMs;
+  const repairAt = Date.now() + 500;
+  let navigationReissued = false;
+  let lastUrl = "";
   try {
+    await sendCdpWithTimeout(connection, "Page.enable", {}, 2_000)
+      .catch(() => undefined);
     while (Date.now() < deadline) {
-      const result = await connection.send("Runtime.evaluate", {
-        expression: "location.href",
+      const result = await sendCdpWithTimeout(connection, "Runtime.evaluate", {
+        expression: "({ href: location.href, ready: document.readyState })",
         returnByValue: true,
-      }).catch(() => undefined);
-      const url = result?.result?.value;
-      if (typeof url === "string" && url !== "about:blank" && (!expectedUrl || url === expectedUrl || url.startsWith(expectedUrl))) return;
+      }, 2_000).catch(() => undefined);
+      const value = result?.result?.value;
+      const url = typeof value?.href === "string" ? value.href : "";
+      lastUrl = url || lastUrl;
+      if (url && url !== "about:blank" &&
+          (!expectedUrl || url === expectedUrl || url.startsWith(expectedUrl)) &&
+          (value?.ready === "interactive" || value?.ready === "complete")) {
+        return;
+      }
+      // Chrome Runtime can publish the final URL in /json/list before the
+      // page renderer behind that target has committed anything. Without a
+      // bounded repair, the first Agent session attaches to about:blank and
+      // the human has to click/reload the Space before it becomes usable.
+      // Reissue only the Space's own requested navigation and only once.
+      if (!navigationReissued && expectedUrl && Date.now() >= repairAt) {
+        navigationReissued = true;
+        await sendCdpWithTimeout(
+          connection,
+          "Page.navigate",
+          { url: expectedUrl },
+          3_000,
+        ).catch(() => undefined);
+      }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
     }
+    throw new Error(
+      `Native CEF renderer did not commit ${expectedUrl || "a page"}; last URL: ${lastUrl || "unknown"}`,
+    );
   } finally {
     await connection.close();
   }
+}
+
+function sendCdpWithTimeout(
+  connection: { send(method: string, params?: Record<string, unknown>): Promise<any> },
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs: number,
+) {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    connection.send(method, params),
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Native CEF CDP timed out: ${method}`)),
+        timeoutMs,
+      );
+      timer.unref?.();
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 async function navigateAfterCookieSeed(
