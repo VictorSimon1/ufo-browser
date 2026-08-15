@@ -65,7 +65,7 @@ export class NativeCefTaskSpaceManager {
   private presentationHooks?: NativeCefPresentationHooks;
   private nextInternalSpaceId = 0x7fffffff;
   private readonly internalSpaceIds = new Set<number>();
-  private readonly cookieSeedLocks = new Map<string, Promise<void>>();
+  private readonly cookieSeedLocks = new Map<string, Promise<boolean>>();
 
   constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {
     this.sharedHost = options.sharedHost;
@@ -451,8 +451,9 @@ export class NativeCefTaskSpaceManager {
       await mkdir(dirname(runtimeOptions.devtoolsSocket), { recursive: true, mode: 0o700 });
     }
     await runtime.start();
+    let cookiesSeeded = false;
     if (space.profileMode === "persistent" && this.options.seedCookies) {
-      await this.seedCookiesOnce(space.profileId, runtime, space, dataDir);
+      cookiesSeeded = await this.seedCookiesOnce(space.profileId, runtime, space, dataDir);
     }
     const target = await waitForPageTarget(runtime, tab.url, 15_000);
     if (!target) {
@@ -460,6 +461,14 @@ export class NativeCefTaskSpaceManager {
       throw new Error("Native CEF did not expose a page target");
     }
     (runtime as NativeCefSharedSpaceRuntime).rememberTargetId?.(target.id);
+    if (cookiesSeeded) {
+      // The native Chrome window begins navigating as soon as it is created.
+      // First-run Cookie import happens through that live target, so its
+      // initial Google request cannot have included the newly written login
+      // state. Re-navigate before presentation instead of making the user
+      // reload a visibly logged-out first page.
+      await navigateAfterCookieSeed(runtime, target.id, tab.url, 15_000);
+    }
     await waitForRendererNavigation(runtime, target.id, tab.url, 15_000);
     const previousTargetId = tab.targetId;
     tab.targetId = target.id;
@@ -500,14 +509,13 @@ export class NativeCefTaskSpaceManager {
     dataDir: string,
   ) {
     const markerPath = join(dataDir, ".ufo-cookie-seed.json");
-    if (await this.hasCompletedCookieSeed(markerPath, profileId)) return;
+    if (await this.hasCompletedCookieSeed(markerPath, profileId)) return false;
     const inFlight = this.cookieSeedLocks.get(dataDir);
     if (inFlight) {
-      await inFlight;
-      return;
+      return inFlight;
     }
     const operation = (async () => {
-      if (await this.hasCompletedCookieSeed(markerPath, profileId)) return;
+      if (await this.hasCompletedCookieSeed(markerPath, profileId)) return false;
       const target = await this.createNativeCookieTarget(runtime, space);
       try {
         await this.options.seedCookies?.(profileId, target);
@@ -515,10 +523,11 @@ export class NativeCefTaskSpaceManager {
         await target.dispose();
       }
       await this.writeCookieSeedMarker(profileId, dataDir, "imported");
+      return true;
     })();
     this.cookieSeedLocks.set(dataDir, operation);
     try {
-      await operation;
+      return await operation;
     } finally {
       if (this.cookieSeedLocks.get(dataDir) === operation) {
         this.cookieSeedLocks.delete(dataDir);
@@ -968,6 +977,37 @@ async function waitForRendererNavigation(runtime: NativeCefRuntime, targetId: st
       }).catch(() => undefined);
       const url = result?.result?.value;
       if (typeof url === "string" && url !== "about:blank" && (!expectedUrl || url === expectedUrl || url.startsWith(expectedUrl))) return;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
+  } finally {
+    await connection.close();
+  }
+}
+
+async function navigateAfterCookieSeed(
+  runtime: NativeCefRuntime,
+  targetId: string,
+  url: string,
+  timeoutMs: number,
+) {
+  const connection = await runtime.connect(targetId);
+  const deadline = Date.now() + timeoutMs;
+  try {
+    await connection.send("Page.enable");
+    await connection.send("Page.navigate", { url });
+    while (Date.now() < deadline) {
+      const result = await connection.send("Runtime.evaluate", {
+        expression: "({ href: location.href, ready: document.readyState })",
+        returnByValue: true,
+      }).catch(() => undefined);
+      const value = result?.result?.value;
+      const href = value?.href;
+      if (typeof href === "string" &&
+          href !== "about:blank" &&
+          (!url || href === url || href.startsWith(url)) &&
+          (value?.ready === "interactive" || value?.ready === "complete")) {
+        return;
+      }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
     }
   } finally {

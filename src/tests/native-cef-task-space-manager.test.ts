@@ -110,12 +110,14 @@ test("Native Profile Cookie seeding is serialized and marked after the first run
   const space = { tabs: [{ url: "https://example.com/" }] } as any;
   const runtime = {} as any;
   try {
-    await Promise.all([
+    const concurrent = await Promise.all([
       (manager as any).seedCookiesOnce("profile-a", runtime, space, root),
       (manager as any).seedCookiesOnce("profile-a", runtime, space, root),
     ]);
-    await (manager as any).seedCookiesOnce("profile-a", runtime, space, root);
+    const alreadySeeded = await (manager as any).seedCookiesOnce("profile-a", runtime, space, root);
     assert.equal(calls, 1);
+    assert.deepEqual(concurrent, [true, true]);
+    assert.equal(alreadySeeded, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
