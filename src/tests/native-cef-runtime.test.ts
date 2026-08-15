@@ -192,6 +192,51 @@ test("Native Chrome Profile target enumeration caches direct frame routes", asyn
   assert.ok(third.some((target) => target.id === "iframe-1"));
 });
 
+test("Native Chrome Profile target enumeration falls back when the direct frame probe stalls", async () => {
+  const host = new NativeCefRuntime();
+  const hostConnection = {
+    async send(method: string) {
+      if (method === "Target.getTargets") return { targetInfos: [] };
+      throw new Error(`unexpected host method ${method}`);
+    },
+    onEvent() { return () => {}; },
+    async close() {},
+  };
+  const directConnection = {
+    async send(method: string) {
+      assert.equal(method, "Page.getFrameTree");
+      return new Promise(() => {});
+    },
+    onEvent() { return () => {}; },
+    async close() {},
+  };
+  (host as any).isRunning = () => true;
+  (host as any).usesPrivateBridge = () => true;
+  (host as any).version = async () => ({ Browser: "test" });
+  (host as any).createSharedSpace = async () => ({ ok: true });
+  (host as any).listSharedSpaceBrowsers = async () => [{
+    browserId: 8,
+    route: "browser:8",
+    primary: true,
+    url: "https://example.com/",
+  }];
+  (host as any).connectBrowser = async (route?: string) =>
+    route === "browser:8" ? directConnection : hostConnection;
+
+  const runtime = new NativeCefSharedSpaceRuntime(host, {
+    id: 92,
+    url: "https://example.com/",
+    cachePath: "/tmp/ufo-test-profile-stalled",
+    chromeProfileDirectory: "Default",
+  });
+  await runtime.start();
+  const startedAt = Date.now();
+  const targets = await runtime.targets();
+  assert.ok(Date.now() - startedAt < 1_500);
+  assert.ok(targets.some((target) =>
+    target.id === "cef-browser:8" && target.url === "https://example.com/"));
+});
+
 test("private CEF bridge carries an explicit shared-host browser route", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-private-route-"));
   const socketPath = join(root, "devtools.sock");

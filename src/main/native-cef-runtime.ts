@@ -1135,7 +1135,15 @@ async function inspectNativeSpaceBrowserFrame(
   let connection: NativeCdpConnectionLike | undefined;
   try {
     connection = await host.connectBrowser(browser.route);
-    const frameTree = await connection.send("Page.getFrameTree");
+    // A newly forwarded Chrome Runtime window can publish its CefBrowser
+    // route before Chromium's browser-info handshake is ready. Never let that
+    // optional exact-frame probe block the Agent target list indefinitely;
+    // callers can immediately use the stable synthetic direct-browser target
+    // and a later enumeration will populate the frame graph.
+    const frameTree = await withNativeProbeTimeout(
+      connection.send("Page.getFrameTree"),
+      500,
+    );
     const tree = frameTree?.frameTree || frameTree?.result?.frameTree;
     collectNativeFrameIds(tree, frameRoute.frameIds);
     const rootId = tree?.frame?.id;
@@ -1147,6 +1155,18 @@ async function inspectNativeSpaceBrowserFrame(
     await connection?.close().catch(() => undefined);
   }
   return frameRoute;
+}
+
+function withNativeProbeTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Native CEF direct frame probe timed out")), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 export function collectNativeFrameIds(frameTree: any, result = new Set<string>()) {

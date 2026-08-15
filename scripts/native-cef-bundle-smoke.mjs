@@ -2,6 +2,7 @@ import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { createConnection } from "node:net";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
@@ -23,6 +24,12 @@ if (forbidden.length) throw new Error(`Native bundle contains Electron resources
 if (bundleEntries.some((path) => path.endsWith("/ufo-browser-native") || path.endsWith("/ufo-cef-host"))) {
   throw new Error("Native bundle still contains a separate launcher or CEF host executable");
 }
+const fixture = createServer((_request, response) => {
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.end("<!doctype html><title>Native Bundle Fixture</title><h1>Native Bundle Fixture</h1>");
+});
+await new Promise((resolveListen) => fixture.listen(0, "127.0.0.1", resolveListen));
+const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`;
 
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-bundle-smoke-"));
 const app = spawn(launcher, [], {
@@ -53,14 +60,14 @@ try {
   agent.stdout.on("data", (chunk) => { stdout += chunk; });
   agent.stderr.on("data", (chunk) => { stderr += chunk; });
   agent.stdin.end(
-    "const task = await bootstrapTaskSpace({ name: 'native bundle smoke', url: 'https://example.com/' })\n" +
+    `const task = await bootstrapTaskSpace({ name: 'native bundle smoke', url: ${JSON.stringify(fixtureUrl)} })\n` +
     "cliLog(`UFO_BUNDLE_SPACE:${task.id}`)\n" +
     "cliLog((await pageInfo()).title)\n" +
     "cliLog(await captureScreenshot())\n",
   );
   const exitCode = await waitForExit(agent, 30_000, "packaged CLI", () =>
     `stdout:\n${stdout}\nstderr:\n${stderr}\napp stderr:\n${appStderr}`);
-  if (exitCode !== 0 || !stdout.includes("Example Domain") || !stdout.includes("ego-browser-shot-")) {
+  if (exitCode !== 0 || !stdout.includes("Native Bundle Fixture") || !stdout.includes("ego-browser-shot-")) {
     throw new Error(`Native bundle CLI failed (${exitCode})\n${stdout}\n${stderr}\n${appStderr}`);
   }
   const spaceId = Number(stdout.match(/UFO_BUNDLE_SPACE:(\d+)/)?.[1]);
@@ -117,6 +124,7 @@ try {
 } finally {
   if (app.exitCode === null) app.kill("SIGTERM");
   await waitForExit(app, 5_000, "packaged UFO host cleanup", () => appStderr).catch(() => undefined);
+  await new Promise((resolveClose) => fixture.close(resolveClose));
   await rm(userData, { recursive: true, force: true });
 }
 
