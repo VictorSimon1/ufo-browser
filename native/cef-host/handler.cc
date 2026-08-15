@@ -219,30 +219,49 @@ void UfoCefHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   {
     std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
     devtools_target_browsers_[target_id] = browser->GetIdentifier();
-    auto pending = pending_native_spaces_.find(cache_path);
-    if (pending == pending_native_spaces_.end() || pending->second.empty()) {
-      // Native Chrome windows use CEF 151's process-wide BrowserContext, so
-      // their reported cache path is the global root rather than the selected
-      // Profile staging directory used as the creation key. Space creation is
-      // serialized by the manager; consume the one pending native window in
-      // that same order and keep its logical Profile metadata on the Space.
-      pending = std::find_if(
-          pending_native_spaces_.begin(), pending_native_spaces_.end(),
-          [](const auto& entry) { return !entry.second.empty(); });
-    }
-    if (!cache_path.empty() && pending != pending_native_spaces_.end() &&
-        !pending->second.empty()) {
-      pending_native_space = pending->second.front();
-      pending->second.pop_front();
-      if (pending->second.empty()) pending_native_spaces_.erase(pending);
-      native_context_spaces_[cache_path].insert(
-          pending_native_space.space_id);
+    const auto bind_primary_space = [&](PendingNativeSpace spec) {
+      pending_native_space = std::move(spec);
+      if (!cache_path.empty()) {
+        native_context_spaces_[cache_path].insert(
+            pending_native_space.space_id);
+      }
       browser_spaces_[browser->GetIdentifier()] =
           pending_native_space.space_id;
       space_browsers_[pending_native_space.space_id] =
           browser->GetIdentifier();
       is_native_space_primary = true;
+    };
+    const auto pending_context = std::find_if(
+        pending_native_context_spaces_.begin(),
+        pending_native_context_spaces_.end(),
+        [&](const PendingNativeContextSpace& pending) {
+          return request_context && pending.request_context &&
+              request_context->IsSame(pending.request_context);
+        });
+    if (pending_context != pending_native_context_spaces_.end()) {
+      auto spec = std::move(pending_context->spec);
+      pending_native_context_spaces_.erase(pending_context);
+      bind_primary_space(std::move(spec));
     } else {
+      auto pending = pending_native_spaces_.find(cache_path);
+      if (pending == pending_native_spaces_.end() || pending->second.empty()) {
+        // Native Chrome windows using the already active Profile report the
+        // process-global cache path rather than the logical creation key.
+        // Persistent Profile creation is serialized, so consume the remaining
+        // pending window in creation order when the exact path is unavailable.
+        pending = std::find_if(
+            pending_native_spaces_.begin(), pending_native_spaces_.end(),
+            [](const auto& entry) { return !entry.second.empty(); });
+      }
+      if (pending != pending_native_spaces_.end() &&
+          !pending->second.empty()) {
+        auto spec = std::move(pending->second.front());
+        pending->second.pop_front();
+        if (pending->second.empty()) pending_native_spaces_.erase(pending);
+        bind_primary_space(std::move(spec));
+      }
+    }
+    if (!is_native_space_primary) {
       const int opener_id = browser->GetHost()->GetOpenerIdentifier();
       const auto opener_space = browser_spaces_.find(opener_id);
       if (opener_id > 0 && opener_space != browser_spaces_.end()) {
@@ -684,6 +703,27 @@ void UfoCefHandler::RegisterPendingNativeSpace(
   });
 }
 
+void UfoCefHandler::RegisterPendingNativeContextSpace(
+    CefRefPtr<CefRequestContext> request_context,
+    int space_id,
+    bool visible,
+    std::string url,
+    std::string space_name,
+    std::string profile_name) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!request_context || space_id <= 0) return;
+  pending_native_context_spaces_.push_back(PendingNativeContextSpace{
+      request_context,
+      PendingNativeSpace{
+          space_id,
+          visible,
+          std::move(url),
+          std::move(space_name),
+          std::move(profile_name),
+      },
+  });
+}
+
 void UfoCefHandler::CancelPendingNativeSpace(const std::string& cache_path,
                                              int space_id) {
   CEF_REQUIRE_UI_THREAD();
@@ -693,6 +733,19 @@ void UfoCefHandler::CancelPendingNativeSpace(const std::string& cache_path,
     return spec.space_id == space_id;
   });
   if (pending->second.empty()) pending_native_spaces_.erase(pending);
+}
+
+void UfoCefHandler::CancelPendingNativeContextSpace(
+    CefRefPtr<CefRequestContext> request_context,
+    int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  std::erase_if(
+      pending_native_context_spaces_,
+      [&](const PendingNativeContextSpace& pending) {
+        return pending.spec.space_id == space_id && request_context &&
+            pending.request_context &&
+            request_context->IsSame(pending.request_context);
+      });
 }
 
 void UfoCefHandler::SetMainChromeToolbarAttached(bool attached) {

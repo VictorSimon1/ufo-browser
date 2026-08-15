@@ -369,6 +369,64 @@ std::string StartupUrl() {
   return url.empty() ? "https://www.google.com/" : url.ToString();
 }
 
+class UfoTemporarySpaceRequestContextHandler final
+    : public CefRequestContextHandler {
+ public:
+  UfoTemporarySpaceRequestContextHandler(
+      CefRefPtr<UfoCefHandler> handler,
+      int space_id,
+      bool visible,
+      std::string url,
+      std::string space_name,
+      std::string profile_name)
+      : handler_(std::move(handler)),
+        space_id_(space_id),
+        visible_(visible),
+        url_(std::move(url)),
+        space_name_(std::move(space_name)),
+        profile_name_(std::move(profile_name)) {}
+
+  void OnRequestContextInitialized(
+      CefRefPtr<CefRequestContext> request_context) override {
+    CEF_REQUIRE_UI_THREAD();
+    // Empty-cache CEF contexts become unique OTR Chrome Profiles. Wait for
+    // that asynchronous BrowserContext initialization boundary before opening
+    // the native Chrome window; creating it immediately is what previously
+    // left the renderer at about:blank with browser-info timeouts.
+    CefPostTask(
+        TID_UI,
+        base::BindOnce(
+            &UfoTemporarySpaceRequestContextHandler::CreateBrowser,
+            CefRefPtr<UfoTemporarySpaceRequestContextHandler>(this),
+            request_context));
+  }
+
+ private:
+  void CreateBrowser(CefRefPtr<CefRequestContext> request_context) {
+    CEF_REQUIRE_UI_THREAD();
+    handler_->RegisterPendingNativeContextSpace(
+        request_context, space_id_, visible_, url_, space_name_, profile_name_);
+    CefWindowInfo window_info;
+    window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    window_info.hidden = !visible_;
+    CefBrowserSettings browser_settings;
+    if (!CefBrowserHost::CreateBrowser(
+            window_info, handler_, url_, browser_settings, nullptr,
+            request_context)) {
+      handler_->CancelPendingNativeContextSpace(request_context, space_id_);
+    }
+  }
+
+  CefRefPtr<UfoCefHandler> handler_;
+  const int space_id_;
+  const bool visible_;
+  const std::string url_;
+  const std::string space_name_;
+  const std::string profile_name_;
+
+  IMPLEMENT_REFCOUNTING(UfoTemporarySpaceRequestContextHandler);
+};
+
 bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
                        CefRefPtr<CefDictionaryValue> spec,
                        const std::string& presentation_socket) {
@@ -382,11 +440,13 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   const bool native_chrome_shell = chrome_shell &&
       spec->HasKey("nativeChromeShell") &&
       spec->GetBool("nativeChromeShell");
+  const bool temporary = spec->HasKey("temporary") &&
+                         spec->GetBool("temporary");
 
   const auto canonical_cache = std::filesystem::weakly_canonical(
       std::filesystem::path(cache_path));
   CefBrowserSettings browser_settings;
-  if (native_chrome_shell) {
+  if (native_chrome_shell && !temporary) {
     handler->RegisterPendingNativeSpace(
         canonical_cache.string(),
         space_id,
@@ -436,6 +496,21 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
         return launched;
       }
     }
+  }
+
+  if (native_chrome_shell && temporary) {
+    CefRequestContextSettings context_settings;
+    context_settings.persist_session_cookies = false;
+    auto context_handler = CefRefPtr<UfoTemporarySpaceRequestContextHandler>(
+        new UfoTemporarySpaceRequestContextHandler(
+            handler,
+            space_id,
+            spec->GetBool("visible"),
+            url,
+            spec->GetString("name").ToString(),
+            spec->GetString("profileName").ToString()));
+    return CefRequestContext::CreateContext(context_settings, context_handler)
+        != nullptr;
   }
 
   CefRequestContextSettings context_settings;

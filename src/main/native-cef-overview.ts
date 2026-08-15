@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { NativeCefRuntime } from "./native-cef-runtime.js";
 import type { NativeCefTaskSpaceManager } from "./native-cef-task-space-manager.js";
 import type { NativeCefProfileService } from "./native-cef-profile-service.js";
+import { temporaryPublicProfile } from "./temporary-profile.js";
 
 export type NativeCefOverviewOptions = {
   manager: NativeCefTaskSpaceManager;
@@ -141,7 +142,14 @@ export class NativeCefOverview {
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/profiles") {
-        const profiles = (this.options.profiles?.listPublic() || this.options.manager.listProfiles()).map((profile: any) => ({
+        const persistentProfiles = this.options.profiles?.listPublic() || [];
+        const profiles = [
+          temporaryPublicProfile(),
+          ...(persistentProfiles.length > 0
+            ? persistentProfiles
+            : this.options.manager.listProfiles().filter((profile: any) =>
+                String(profile.id).toLowerCase() !== "temporary")),
+        ].map((profile: any) => ({
           ...profile,
           avatarDataUrl: undefined,
         }));

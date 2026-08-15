@@ -14,6 +14,7 @@
 
 #include "include/cef_client.h"
 #include "include/cef_download_handler.h"
+#include "include/cef_request_context.h"
 #include "include/views/cef_window.h"
 
 class UfoCefHandler final : public CefClient,
@@ -63,7 +64,17 @@ class UfoCefHandler final : public CefClient,
                                   std::string url,
                                   std::string space_name,
                                   std::string profile_name);
+  void RegisterPendingNativeContextSpace(
+      CefRefPtr<CefRequestContext> request_context,
+      int space_id,
+      bool visible,
+      std::string url,
+      std::string space_name,
+      std::string profile_name);
   void CancelPendingNativeSpace(const std::string& cache_path, int space_id);
+  void CancelPendingNativeContextSpace(
+      CefRefPtr<CefRequestContext> request_context,
+      int space_id);
   void SetMainChromeToolbarAttached(bool attached);
   void SetSpaceChromeToolbarAttached(int space_id, bool attached);
   void SetPresentationSocket(std::string path);
@@ -126,6 +137,11 @@ class UfoCefHandler final : public CefClient,
     std::string profile_name;
   };
   std::map<std::string, std::deque<PendingNativeSpace>> pending_native_spaces_;
+  struct PendingNativeContextSpace {
+    CefRefPtr<CefRequestContext> request_context;
+    PendingNativeSpace spec;
+  };
+  std::vector<PendingNativeContextSpace> pending_native_context_spaces_;
   std::map<std::string, std::deque<int>> pending_context_browser_spaces_;
   std::map<std::string, std::set<int>> native_context_spaces_;
   std::map<int, CefRefPtr<CefBrowser>> native_space_browsers_;

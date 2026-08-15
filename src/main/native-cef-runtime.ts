@@ -68,6 +68,8 @@ export type NativeCefSharedSpaceSpec = {
   chromeShell?: boolean;
   /** Full Chromium-owned Chrome window with native tab strip and omnibox. */
   nativeChromeShell?: boolean;
+  /** Unique cache-less CEF OTR Profile; destroyed with this Space. */
+  temporary?: boolean;
   /** Real Chrome Runtime ProfileManager directory for persistent Spaces. */
   chromeProfileDirectory?: string;
   /** Shared Chrome user-data root owned by the single UFO CEF host. */

@@ -7,6 +7,8 @@ import type { SpaceLifecycle, SpaceOwnership, SpaceRecord, TabRecord } from "./t
 import {
   isTemporaryProfileId,
   isTemporarySpace,
+  TEMPORARY_AGENT_PROFILE_ID,
+  TEMPORARY_PROFILE_NAME,
   TEMPORARY_PROFILE_ID,
 } from "./temporary-profile.js";
 import {
@@ -115,11 +117,18 @@ export class NativeCefTaskSpaceManager {
   }
 
   listProfiles() {
-    return this.options.profiles.listPublic().map((profile) => ({
-      id: profile.id === "default" ? "Default" : profile.id,
-      isDefault: profile.isDefault,
-      name: profile.name,
-    }));
+    return [
+      {
+        id: TEMPORARY_AGENT_PROFILE_ID,
+        isDefault: false,
+        name: TEMPORARY_PROFILE_NAME,
+      },
+      ...this.options.profiles.listPublic().map((profile) => ({
+        id: profile.id === "default" ? "Default" : profile.id,
+        isDefault: profile.isDefault,
+        name: profile.name,
+      })),
+    ];
   }
 
   getSpace(spaceId: number) {
@@ -361,6 +370,16 @@ export class NativeCefTaskSpaceManager {
     this.agentOverlayState.delete(runtimeKey);
     await browser?.close().catch(() => undefined);
     await runtime?.stop().catch(() => undefined);
+    if (isTemporarySpace(space)) {
+      // The real browsing state lives in the unique cache-less CEF OTR
+      // Profile. Remove UFO's empty per-Space staging directory as part of the
+      // same close boundary so a completed Temporary Space leaves no reusable
+      // filesystem identity behind.
+      await rm(join(this.options.partitionsRoot, this.runtimeDataDirectory(space)), {
+        recursive: true,
+        force: true,
+      }).catch(() => undefined);
+    }
     this.state.spaces.splice(index, 1);
     await this.save();
     await this.presentationHooks?.onSpaceClosed?.(spaceId);
@@ -446,6 +465,7 @@ export class NativeCefTaskSpaceManager {
           profileName: runtimeOptions.profileName,
           visible: false,
           nativeChromeShell: this.options.nativeChromeProductShell,
+          temporary: space.profileMode === "temporary",
           chromeProfileDirectory,
           chromeUserDataRoot: realChromeProfile
             ? this.options.chromeUserDataRoot
