@@ -40,9 +40,13 @@ processes and are not Space hosts.
 Each persistent UFO Profile maps to a real Chrome Runtime profile directory and
 each Space keeps its own CDP/browser route. CEF 151's native Chrome Runtime has
 one supported process-wide Chrome BrowserContext, so the packaged host binds it
-to the selected default UFO Profile before CEF initialization. Spaces remain
-separate native windows, durable records, ownership domains, and Agent routes;
-temporary/internal non-Chrome surfaces may still use custom RequestContexts.
+to the selected default UFO Profile before CEF initialization. A persistent
+Space using another Profile is opened through Chromium's ProfileManager inside
+that same long-lived UFO host; the short ProcessSingleton forwarding request
+exits immediately and is not another Space host. Every Temporary Space instead
+gets its own cache-less CEF off-the-record RequestContext and still uses the
+full native Chrome Runtime window. Spaces remain separate native windows,
+durable records, ownership domains, and Agent routes.
 Isolation must not be implemented by
 leaving one long-running UFO/CEF application per Space. The Presentation
 Coordinator exposes exactly one managed Space/Overview surface to the human at
@@ -162,6 +166,7 @@ npm run native:cef:version:smoke
 npm run native:cef:private:smoke
 npm run native:cef:product-shell:smoke
 npm run native:cef:chrome-profile:probe
+npm run native:cef:temporary-profile:smoke
 npm run native:cef:agent:smoke
 npm run native:cef:profile:smoke
 npm run native:cef:app:smoke
@@ -189,13 +194,17 @@ the human-only Agent overlay.
 The native Chrome Product Shell is now the Native product default. Set
 `UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL=0` only for a diagnostic comparison
 with the former application-owned CEF toolbar.
-Custom `CefRequestContext(cache_path)` objects are not used for native Chrome
-windows in CEF 151 because multiple independent Chrome BrowserContexts can
-leave the internal top-chrome renderer waiting for browser-info. UFO instead
-maps each persistent Profile to a real directory (`Default`, `UFO-<id>`, and so
-on) and starts the packaged host's one global BrowserContext on the validated
-default Profile directory. No ProcessSingleton forwarder or second CEF main
-process is launched.
+Custom persistent `CefRequestContext(cache_path)` objects are not used for
+native Chrome windows in CEF 151 because they do not select another real Chrome
+Profile and can leave the internal top-chrome renderer waiting for
+browser-info. UFO maps each persistent Profile to a real directory (`Default`,
+`UFO-<id>`, and so on), starts the packaged host's global BrowserContext on the
+validated default Profile, and asks Chromium's in-process ProfileManager to
+open any alternate persistent Profile. The forwarding invocation is only a
+short-lived ProcessSingleton command and exits after the existing UFO host has
+accepted it. Temporary Spaces use the supported exception: one unique
+cache-less off-the-record CEF RequestContext per Space, created only after
+`OnRequestContextInitialized`, with no reusable on-disk identity.
 
 Target ownership follows the exact public page target created after each Space
 request, plus frame/opener relationships and UFO's native browser registry.

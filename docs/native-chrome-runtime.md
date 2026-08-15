@@ -46,10 +46,13 @@ The following remains owned by UFO-Browser and is not copied from Ego Lite:
 
 The release target uses one shared UFO CEF host process for Overview and every
 Space. A Space never launches another `ufo-cef-host` application or CEF main
-process. CEF 151 Chrome Runtime uses the one supported process-wide Chrome
-BrowserContext; the packaged host binds that context to UFO's selected default
-Profile directory before `CefInitialize`, while UFO keeps Space identity,
-ownership, tabs, and Agent routes separate. UFO's Presentation Coordinator
+process. CEF 151 Chrome Runtime uses one process-global BrowserContext for the
+active persistent Profile; the packaged host binds it to UFO's selected default
+Profile directory before `CefInitialize`. Alternate persistent Profiles are
+opened by Chromium's ProfileManager inside that same host. Temporary Spaces use
+unique cache-less CEF off-the-record RequestContexts and never enter the
+persistent Profile registry. UFO keeps Space identity, ownership, tabs, and
+Agent routes separate. UFO's Presentation Coordinator
 guarantees that exactly one of
 those managed surfaces is presented to the human. Agent-owned background
 Spaces stay compositor-awake for uninterrupted CDP input and screenshots;
@@ -173,7 +176,12 @@ owns no browser UI, so the Native path is Electron-free at runtime.
 4. **Task Spaces** — map each Space to a native Profile window and browser
    target in the one shared UFO Host. Keep the presented Space and Agent-owned Spaces
    compositor-awake; park ordinary warm background Space windows without
-   destroying their tabs, RequestContexts, or page state.
+   destroying their tabs, RequestContexts, or page state. A Temporary Space is
+   also a native Chrome Runtime window, but its BrowserContext is a unique
+   cache-less OTR context created only after `OnRequestContextInitialized`.
+   Cookies, Local Storage, IndexedDB, Cache Storage, Service Workers, and auth
+   state are isolated between Temporary Spaces; close removes the staging
+   directory and restart never restores the Space.
 5. **Overview and overlay** — retain low-frequency, change-driven previews and
    place the human-input blocking overlay in an outer native `NSPanel`/`NSView`
    so Agent CDP input and screenshots are never covered.
@@ -241,6 +249,11 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    create/open/close/return lifecycle gate, including assertions that the
    presented-window count never exceeds one and background compositors return
    to sleep after an on-demand preview.
+
+   Run `npm run native:cef:temporary-profile:smoke` for the Temporary Profile
+   gate. It verifies native Chrome UI, independent OTR contexts and storage,
+   Agent overlay/screenshot behavior, close cleanup, and non-restoration after
+   restart.
 
    Native titlebar controls follow the same presentation state. Each Space
    window records its own Space name, Profile name, and presentation socket,
