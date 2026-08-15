@@ -149,12 +149,19 @@ npm run native:cef:chrome-profile:probe
 npm run native:cef:agent:smoke
 npm run native:cef:profile:smoke
 npm run native:cef:app:smoke
+npm run native:cef:target-budget:smoke
 npm run native:cef:bundle:smoke
 ```
 
 The version smoke is runtime-based: it asks the actual native host for
 `Browser.getVersion` and rejects a stale CEF build even if compilation
 otherwise succeeds.
+
+`native:cef:target-budget:smoke` repeatedly enumerates a real Chrome Profile
+Space through the Agent-facing runtime and asserts that the Chromium Renderer
+population stays bounded. This protects the native Chrome feel from a subtle
+regression where every preview/Agent target query opened another direct frame
+route and increased compositor cost.
 
 The private bridge can be exercised by setting
 `UFO_CEF_PRIVATE_BRIDGE=1` in an isolated development run. The current smoke
