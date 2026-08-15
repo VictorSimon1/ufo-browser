@@ -174,6 +174,8 @@ export class NativeCefOverview {
           return;
         }
         const space = await this.options.manager.createSpace(name, "user", profileId);
+        if (this.presentation) await this.presentation.openSpace(space.id);
+        else await this.options.manager.showSpace(space.id);
         this.json(response, { space }, 201);
         return;
       }

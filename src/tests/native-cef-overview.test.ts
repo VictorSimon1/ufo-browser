@@ -58,3 +58,44 @@ test("hiding Native Overview cancels preview wakeups already waiting in its queu
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("creating a Native Space immediately presents its loaded Google window", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-native-overview-create-"));
+  const calls: any[] = [];
+  const manager = {
+    createSpace: async (name: string, ownership: string, profileId?: string) => {
+      calls.push(["create", name, ownership, profileId]);
+      return { id: 42, name, profileId, tabs: [{ url: "https://www.google.com/" }] };
+    },
+  } as any;
+  const overview = new NativeCefOverview({
+    manager,
+    userDataDir: root,
+    devtoolsPort: 0,
+    startRuntime: false,
+  });
+  overview.setPresentationController({
+    openSpace: async (spaceId: number) => { calls.push(["open", spaceId]); },
+    showOverview: async () => undefined,
+    closeSpace: async () => true,
+  });
+
+  try {
+    const info = await overview.start();
+    const response = await fetch(`${info!.url}api/spaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "New Space", profileId: "chrome-main" }),
+    });
+    assert.equal(response.status, 201);
+    assert.deepEqual(calls, [
+      ["create", "New Space", "user", "chrome-main"],
+      ["open", 42],
+    ]);
+    const result = await response.json() as any;
+    assert.equal(result.space.tabs[0].url, "https://www.google.com/");
+  } finally {
+    await overview.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
