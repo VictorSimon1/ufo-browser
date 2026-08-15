@@ -132,6 +132,8 @@ class UfoCefHandler final : public CefClient,
   bool main_chrome_toolbar_attached_ = false;
   std::set<int> chrome_toolbar_spaces_;
   std::set<int> agent_active_spaces_;
+  std::map<int, std::string> agent_task_titles_;
+  std::map<int, std::string> agent_task_details_;
   std::set<int> closing_spaces_;
   std::set<int> space_cookie_flushes_;
   int pending_application_cookie_flushes_ = 0;

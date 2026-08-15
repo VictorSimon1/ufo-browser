@@ -207,6 +207,15 @@ export class NativeCefTaskSpaceManager {
       updatedAt: Date.now(),
     };
     await this.save();
+    const runtime = this.runtimes.get(this.runtimeKey(space));
+    const host = this.sharedHost || runtime;
+    if (runtime?.isRunning() && host?.isRunning()) {
+      await host.updateSharedSpaceAgentOverlay(
+        spaceId,
+        space.agentTask.title,
+        space.agentTask.detail || "Agent 正在控制",
+      ).catch(() => undefined);
+    }
   }
 
   async createAgentTab(spaceId: number, url = "https://www.google.com/") {
@@ -480,6 +489,12 @@ export class NativeCefTaskSpaceManager {
     this.agentOverlayState.set(runtimeKey, overlayActive);
     if (overlayActive) {
       await runtime.control("agent-active-on").catch(() => undefined);
+      const host = this.sharedHost || runtime;
+      await host.updateSharedSpaceAgentOverlay(
+        spaceId,
+        space.agentTask?.title || space.name,
+        space.agentTask?.detail || "Agent 正在控制",
+      ).catch(() => undefined);
     }
     await this.save();
     if (space.profileMode === "persistent") {
@@ -781,9 +796,29 @@ export class NativeCefTaskSpaceManager {
     const runtime = this.runtimes.get(runtimeKey);
     if (runtime?.isRunning()) {
       await runtime.control(active ? "agent-active-on" : "agent-active-off").catch(() => undefined);
+      if (active) {
+        const host = this.sharedHost || runtime;
+        await host.updateSharedSpaceAgentOverlay(
+          spaceId,
+          space.agentTask?.title || space.name,
+          space.agentTask?.detail || "Agent 正在控制",
+        ).catch(() => undefined);
+      }
     }
   }
-  showAgentPointer(_spaceId: number, _x: number, _y: number) {}
+  showAgentPointer(spaceId: number, x: number, y: number) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const space = this.getSpace(spaceId);
+    if (!space || space.ownership !== "agent" || space.lifecycle !== "active") return;
+    const runtime = this.runtimes.get(this.runtimeKey(space));
+    const host = this.sharedHost || runtime;
+    if (!runtime?.isRunning() || !host?.isRunning()) return;
+    void host.showSharedSpaceAgentPointer(
+      spaceId,
+      Math.max(0, x),
+      Math.max(0, y),
+    ).catch(() => undefined);
+  }
 
   async shutdown() {
     const runtimes = [...this.runtimes.values()];

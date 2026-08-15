@@ -329,6 +329,8 @@ void UfoCefHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
       }
       native_space_browsers_.erase(closed_space_id);
       native_space_specs_.erase(closed_space_id);
+      agent_task_titles_.erase(closed_space_id);
+      agent_task_details_.erase(closed_space_id);
       space_cookie_flushes_.erase(closed_space_id);
       const auto context = native_space_contexts_.find(closed_space_id);
       if (context != native_space_contexts_.end()) {
@@ -566,7 +568,7 @@ void UfoCefHandler::SetMainWindow(CefRefPtr<CefWindow> window) {
   UfoCefProductControllerSet(main_window_->GetWindowHandle());
   if (agent_active_ && main_window_) {
     UfoAgentOverlaySet(main_window_->GetWindowHandle(), true,
-                       "Agent controlling", 0, nullptr);
+                       "Browser Agent", "Agent 正在控制", 0, nullptr);
   }
 }
 
@@ -725,7 +727,7 @@ void UfoCefHandler::SetAgentConnectionActive(bool active) {
   if (!main_window_ || main_window_->IsClosed()) return;
   if (active) {
     UfoAgentOverlaySet(main_window_->GetWindowHandle(), true,
-                       "Agent controlling", 0, nullptr);
+                       "Browser Agent", "Agent 正在控制", 0, nullptr);
   }
   else UfoAgentOverlayClear(main_window_->GetWindowHandle());
 }
@@ -766,8 +768,18 @@ void UfoCefHandler::SetVisibleSpace(int space_id) {
   if (!active) return;
   const auto current = GetSpaceWindowHandle(space_id);
   if (current) {
+    const auto spec = native_space_specs_.find(space_id);
+    const auto title = agent_task_titles_.find(space_id);
+    const auto detail = agent_task_details_.find(space_id);
+    const std::string overlay_title = title != agent_task_titles_.end()
+        ? title->second
+        : (spec != native_space_specs_.end() ? spec->second.space_name
+                                             : "Browser Agent");
+    const std::string overlay_detail = detail != agent_task_details_.end()
+        ? detail->second
+        : "Agent 正在控制";
     UfoAgentOverlaySet(current, true,
-                       "Agent controlling", space_id,
+                       overlay_title.c_str(), overlay_detail.c_str(), space_id,
                        presentation_socket_.c_str());
   }
 }
@@ -1206,6 +1218,35 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     }
     if (operation == "agent-active-space-off") {
       SetSpaceAgentConnectionActive(space_id, false);
+      return "ok";
+    }
+    if (operation == "agent-overlay-state") {
+      auto title = root->GetString("title").ToString();
+      auto detail = root->GetString("detail").ToString();
+      if (title.empty()) {
+        const auto spec = native_space_specs_.find(space_id);
+        title = spec != native_space_specs_.end()
+            ? spec->second.space_name
+            : "Browser Agent";
+      }
+      if (detail.empty()) detail = "Agent 正在控制";
+      agent_task_titles_[space_id] = title;
+      agent_task_details_[space_id] = detail;
+      if (visible_space_id_ == space_id &&
+          agent_active_spaces_.contains(space_id)) {
+        UfoAgentOverlayUpdateTask(handle, title.c_str(), detail.c_str());
+      }
+      return "ok";
+    }
+    if (operation == "agent-pointer-space") {
+      if (visible_space_id_ == space_id &&
+          agent_active_spaces_.contains(space_id)) {
+        const double x = root->GetDouble("x");
+        const double y = root->GetDouble("y");
+        auto label = root->GetString("label").ToString();
+        if (label.empty()) label = "正在浏览网页";
+        UfoAgentOverlayShowPointer(handle, x, y, label.c_str());
+      }
       return "ok";
     }
     if (operation == "status-space") return "ok";

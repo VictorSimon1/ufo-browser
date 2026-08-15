@@ -12,25 +12,55 @@
 
 @interface UfoOverlayView : NSView
 @property(nonatomic, copy) NSString* label;
+@property(nonatomic, copy) NSString* detail;
 @property(nonatomic, copy) NSString* socketPath;
 @property(nonatomic) NSInteger spaceId;
 @property(nonatomic, copy) NSString* pressedAction;
 @property(nonatomic) CGFloat phase;
+@property(nonatomic) CGFloat pointerX;
+@property(nonatomic) CGFloat pointerY;
+@property(nonatomic) CGFloat pointerTargetX;
+@property(nonatomic) CGFloat pointerTargetY;
+@property(nonatomic, copy) NSString* pointerLabel;
+@property(nonatomic) NSTimeInterval pointerVisibleUntil;
 @end
 
 static NSRect UfoOverlayCapsuleRect(NSRect bounds) {
-  const CGFloat width = MIN(430.0, MAX(360.0, bounds.size.width * 0.34));
+  const CGFloat width = MIN(486.0, MAX(360.0, bounds.size.width - 36.0));
   return NSMakeRect((NSWidth(bounds) - width) / 2.0,
-                    NSHeight(bounds) - 72.0, width, 44.0);
+                    24.0, width, 64.0);
 }
 
 static NSRect UfoOverlayTerminateRect(NSRect capsule) {
-  return NSMakeRect(NSMaxX(capsule) - 92.0, NSMinY(capsule) + 6.0, 84.0, 32.0);
+  return NSMakeRect(NSMaxX(capsule) - 94.0, NSMinY(capsule) + 13.0, 84.0, 38.0);
 }
 
 static NSRect UfoOverlayTakeOverRect(NSRect capsule) {
   const NSRect terminate = UfoOverlayTerminateRect(capsule);
-  return NSMakeRect(NSMinX(terminate) - 74.0, NSMinY(terminate), 66.0, 32.0);
+  return NSMakeRect(NSMinX(terminate) - 76.0, NSMinY(terminate), 66.0, 38.0);
+}
+
+static NSRect UfoOverlaySweepRect(NSRect bounds, CGFloat phase) {
+  const CGFloat width = MIN(156.0, MAX(96.0, NSWidth(bounds) * 0.10));
+  const CGFloat progress = std::fmod(MAX(0.0, phase), 12.0) / 12.0;
+  const CGFloat x = -width - 180.0 + progress * (NSWidth(bounds) + width + 360.0);
+  return NSMakeRect(x, -NSHeight(bounds) * 0.05, width, NSHeight(bounds) * 1.10);
+}
+
+static NSRect UfoOverlayPointerRect(UfoOverlayView* view,
+                                    CGFloat x,
+                                    CGFloat y) {
+  NSDictionary* attrs = @{
+    NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold],
+  };
+  NSString* label = view.pointerLabel.length ? view.pointerLabel : @"正在浏览网页";
+  const CGFloat labelWidth = MIN(210.0, [label sizeWithAttributes:attrs].width + 22.0);
+  const CGFloat totalWidth = 18.0 + 6.0 + labelWidth;
+  const CGFloat clampedX = MIN(MAX(8.0, x), MAX(8.0, NSWidth(view.bounds) - totalWidth - 8.0));
+  const CGFloat topY = MIN(MAX(8.0, y), MAX(8.0, NSHeight(view.bounds) - 34.0));
+  return NSMakeRect(clampedX - 4.0,
+                    NSHeight(view.bounds) - topY - 34.0,
+                    totalWidth + 8.0, 38.0);
 }
 
 @implementation UfoOverlayView
@@ -41,39 +71,120 @@ static NSRect UfoOverlayTakeOverRect(NSRect capsule) {
 
 - (void)drawRect:(NSRect)dirtyRect {
   [super drawRect:dirtyRect];
-  const CGFloat scale = self.window.backingScaleFactor ?: 1.0;
-  (void)scale;
   NSRect bounds = self.bounds;
 
-  // Transparent everywhere except for a small neutral control capsule. The
-  // view itself covers the content area and consumes human input events.
+  // Port of the original UFO/Ego-compatible renderer overlay. It is drawn in
+  // an AppKit child panel, so the human sees and is blocked by the veil while
+  // CEF screenshots and DevTools input remain completely unobstructed.
+  [[NSColor colorWithCalibratedRed:0.035 green:0.047 blue:0.071 alpha:0.34] setFill];
+  NSRectFillUsingOperation(dirtyRect, NSCompositingOperationCopy);
+
+  // Sparse neutral dot matrix. Only dots inside the dirty clip are emitted,
+  // keeping the low-frequency motion inexpensive on large Retina windows.
+  [[NSColor colorWithCalibratedRed:0.93 green:0.95 blue:1.0 alpha:0.26] setFill];
+  const CGFloat dotStep = 8.0;
+  const CGFloat startX = std::floor(NSMinX(dirtyRect) / dotStep) * dotStep;
+  const CGFloat startY = std::floor(NSMinY(dirtyRect) / dotStep) * dotStep;
+  for (CGFloat x = startX; x <= NSMaxX(dirtyRect); x += dotStep) {
+    for (CGFloat y = startY; y <= NSMaxY(dirtyRect); y += dotStep) {
+      [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x, y, 1.25, 1.25)] fill];
+    }
+  }
+
+  // Soft blue edge light without a full-screen blur or vibrancy layer.
+  [[NSColor colorWithCalibratedRed:0.34 green:0.49 blue:1.0 alpha:0.13] setStroke];
+  NSBezierPath* leftGlow = [NSBezierPath bezierPathWithOvalInRect:
+      NSMakeRect(-NSWidth(bounds) * 0.34, NSHeight(bounds) * 0.18,
+                 NSWidth(bounds) * 0.48, NSHeight(bounds) * 0.66)];
+  [leftGlow setLineWidth:72.0];
+  [leftGlow stroke];
+  NSBezierPath* rightGlow = [NSBezierPath bezierPathWithOvalInRect:
+      NSMakeRect(NSWidth(bounds) * 0.86, NSHeight(bounds) * 0.18,
+                 NSWidth(bounds) * 0.48, NSHeight(bounds) * 0.66)];
+  [rightGlow setLineWidth:72.0];
+  [rightGlow stroke];
+  [[NSColor colorWithCalibratedRed:0.42 green:0.56 blue:1.0 alpha:0.15] setStroke];
+  NSBezierPath* bottomGlow = [NSBezierPath bezierPathWithOvalInRect:
+      NSMakeRect(NSWidth(bounds) * 0.13, -NSHeight(bounds) * 0.34,
+                 NSWidth(bounds) * 0.74, NSHeight(bounds) * 0.52)];
+  [bottomGlow setLineWidth:88.0];
+  [bottomGlow stroke];
+
+  NSBezierPath* edge = [NSBezierPath bezierPathWithRect:NSInsetRect(bounds, 0.5, 0.5)];
+  [[NSColor colorWithCalibratedRed:0.83 green:0.88 blue:1.0 alpha:0.28] setStroke];
+  [edge setLineWidth:1.0];
+  [edge stroke];
+
+  const NSRect sweep = UfoOverlaySweepRect(bounds, self.phase);
+  NSGradient* sweepGradient = [[[NSGradient alloc]
+      initWithColors:@[
+        [NSColor colorWithCalibratedWhite:1.0 alpha:0.0],
+        [NSColor colorWithCalibratedRed:0.90 green:0.93 blue:1.0 alpha:0.15],
+        [NSColor colorWithCalibratedWhite:1.0 alpha:0.0],
+      ]] autorelease];
+  NSBezierPath* sweepPath = [NSBezierPath bezierPathWithRoundedRect:sweep xRadius:20.0 yRadius:20.0];
+  [sweepGradient drawInBezierPath:sweepPath angle:0.0];
+
   NSRect capsule = UfoOverlayCapsuleRect(bounds);
   CGFloat pulse = 0.5 + 0.5 * std::sin(self.phase);
-  NSColor* fill = [NSColor colorWithCalibratedWhite:0.10 alpha:0.88 - pulse * 0.04];
-  NSColor* stroke = [NSColor colorWithCalibratedWhite:1.0 alpha:0.13 + pulse * 0.06];
-  NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:capsule xRadius:17.0 yRadius:17.0];
+  NSColor* fill = [NSColor colorWithCalibratedRed:0.059 green:0.071 blue:0.098 alpha:0.965];
+  NSColor* stroke = [NSColor colorWithCalibratedWhite:1.0 alpha:0.09 + pulse * 0.015];
+  NSBezierPath* path = [NSBezierPath bezierPathWithRoundedRect:capsule xRadius:24.0 yRadius:24.0];
+  NSShadow* barShadow = [[[NSShadow alloc] init] autorelease];
+  barShadow.shadowColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.42];
+  barShadow.shadowBlurRadius = 28.0;
+  barShadow.shadowOffset = NSMakeSize(0.0, -12.0);
+  [NSGraphicsContext saveGraphicsState];
+  [barShadow set];
   [fill setFill];
   [path fill];
+  [NSGraphicsContext restoreGraphicsState];
   [stroke setStroke];
   [path setLineWidth:1.0];
   [path stroke];
 
-  NSRect dot = NSMakeRect(NSMinX(capsule) + 14.0,
-                          NSMidY(capsule) - 4.0,
-                          8.0 + pulse * 1.5,
-                          8.0 + pulse * 1.5);
-  [[NSColor colorWithCalibratedRed:0.48 green:0.76 blue:1.0 alpha:0.92] setFill];
-  [[NSBezierPath bezierPathWithOvalInRect:dot] fill];
+  // Pause mark and the gently rotating Agent orbit from the old overlay.
+  [[NSColor colorWithCalibratedWhite:0.90 alpha:0.56] setFill];
+  [[NSBezierPath bezierPathWithRoundedRect:
+      NSMakeRect(NSMinX(capsule) + 14.0, NSMidY(capsule) - 5.0, 2.0, 10.0)
+      xRadius:1.0 yRadius:1.0] fill];
+  [[NSBezierPath bezierPathWithRoundedRect:
+      NSMakeRect(NSMinX(capsule) + 19.0, NSMidY(capsule) - 5.0, 2.0, 10.0)
+      xRadius:1.0 yRadius:1.0] fill];
+  const NSPoint agentCenter = NSMakePoint(NSMinX(capsule) + 46.0, NSMidY(capsule));
+  [[NSColor colorWithCalibratedRed:0.50 green:0.94 blue:0.82 alpha:0.88] setFill];
+  for (NSInteger index = 0; index < 8; index += 1) {
+    const CGFloat angle = self.phase * 0.55 + index * (3.141592653589793 * 2.0 / 8.0);
+    const CGFloat alpha = 0.28 + 0.68 * ((CGFloat)index / 7.0);
+    [[NSColor colorWithCalibratedRed:0.78 green:1.0 blue:0.94 alpha:alpha] setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(
+        agentCenter.x + std::cos(angle) * 10.0 - 1.4,
+        agentCenter.y + std::sin(angle) * 10.0 - 1.4, 2.8, 2.8)] fill];
+  }
+  [[NSColor colorWithCalibratedRed:0.79 green:1.0 blue:0.94 alpha:0.98] setFill];
+  [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(
+      agentCenter.x - 3.0, agentCenter.y - 3.0, 6.0, 6.0)] fill];
 
   NSDictionary* attrs = @{
-    NSFontAttributeName: [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
-    NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.96 alpha:0.94],
+    NSFontAttributeName: [NSFont systemFontOfSize:14.0 weight:NSFontWeightSemibold],
+    NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:1.0 alpha:0.98],
   };
-  NSString* text = self.label.length ? self.label : @"Agent controlling";
-  NSSize textSize = [text sizeWithAttributes:attrs];
-  [text drawAtPoint:NSMakePoint(NSMinX(capsule) + 31.0,
-                                NSMidY(capsule) - textSize.height / 2.0)
-      withAttributes:attrs];
+  NSDictionary* detailAttrs = @{
+    NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium],
+    NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.86 alpha:0.78],
+  };
+  NSString* text = self.label.length ? self.label : @"Browser Agent";
+  NSString* detail = self.detail.length ? self.detail : @"Agent 正在控制";
+  const CGFloat textX = NSMinX(capsule) + 68.0;
+  const CGFloat maxTextWidth = MAX(40.0, NSMinX(UfoOverlayTakeOverRect(capsule)) - textX - 10.0);
+  while (text.length > 4 && [text sizeWithAttributes:attrs].width > maxTextWidth) {
+    text = [[text substringToIndex:text.length - 2] stringByAppendingString:@"…"];
+  }
+  while (detail.length > 4 && [detail sizeWithAttributes:detailAttrs].width > maxTextWidth) {
+    detail = [[detail substringToIndex:detail.length - 2] stringByAppendingString:@"…"];
+  }
+  [text drawAtPoint:NSMakePoint(textX, NSMidY(capsule) + 3.0) withAttributes:attrs];
+  [detail drawAtPoint:NSMakePoint(textX, NSMidY(capsule) - 16.0) withAttributes:detailAttrs];
 
   const NSRect takeOver = UfoOverlayTakeOverRect(capsule);
   const NSRect terminate = UfoOverlayTerminateRect(capsule);
@@ -82,20 +193,66 @@ static NSRect UfoOverlayTakeOverRect(NSRect capsule) {
     const NSRect button = isTakeOver ? takeOver : terminate;
     const BOOL pressed = [self.pressedAction isEqualToString:action];
     NSColor* buttonFill = isTakeOver
-        ? [NSColor colorWithCalibratedWhite:1.0 alpha:pressed ? 0.20 : 0.11]
-        : [NSColor colorWithCalibratedRed:0.72 green:0.20 blue:0.22 alpha:pressed ? 0.90 : 0.72];
-    NSBezierPath* buttonPath = [NSBezierPath bezierPathWithRoundedRect:button xRadius:10.0 yRadius:10.0];
+        ? [NSColor colorWithCalibratedWhite:1.0 alpha:pressed ? 0.13 : 0.045]
+        : [NSColor colorWithCalibratedRed:1.0 green:0.37 blue:0.28 alpha:pressed ? 0.16 : 0.035];
+    NSBezierPath* buttonPath = [NSBezierPath bezierPathWithRoundedRect:button xRadius:13.0 yRadius:13.0];
     [buttonFill setFill];
     [buttonPath fill];
+    [[NSColor colorWithCalibratedWhite:1.0 alpha:0.055] setStroke];
+    [buttonPath setLineWidth:1.0];
+    [buttonPath stroke];
     NSString* title = isTakeOver ? @"接管" : @"终止任务";
     NSDictionary* buttonAttrs = @{
-      NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold],
-      NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.98 alpha:0.96],
+      NSFontAttributeName: [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+      NSForegroundColorAttributeName: isTakeOver
+          ? [NSColor colorWithCalibratedWhite:0.98 alpha:0.96]
+          : [NSColor colorWithCalibratedRed:1.0 green:0.40 blue:0.31 alpha:0.98],
     };
     NSSize size = [title sizeWithAttributes:buttonAttrs];
     [title drawAtPoint:NSMakePoint(NSMidX(button) - size.width / 2.0,
                                    NSMidY(button) - size.height / 2.0)
          withAttributes:buttonAttrs];
+  }
+
+  if (self.pointerVisibleUntil > [NSDate timeIntervalSinceReferenceDate]) {
+    NSRect pointerRect = UfoOverlayPointerRect(self, self.pointerX, self.pointerY);
+    const CGFloat cursorX = NSMinX(pointerRect) + 4.0;
+    const CGFloat cursorY = NSMinY(pointerRect) + 12.0;
+    NSBezierPath* cursor = [NSBezierPath bezierPath];
+    [cursor moveToPoint:NSMakePoint(cursorX, cursorY + 21.0)];
+    [cursor lineToPoint:NSMakePoint(cursorX, cursorY + 4.8)];
+    [cursor lineToPoint:NSMakePoint(cursorX + 4.3, cursorY + 8.8)];
+    [cursor lineToPoint:NSMakePoint(cursorX + 7.5, cursorY + 2.1)];
+    [cursor lineToPoint:NSMakePoint(cursorX + 10.5, cursorY + 3.55)];
+    [cursor lineToPoint:NSMakePoint(cursorX + 7.4, cursorY + 10.1)];
+    [cursor lineToPoint:NSMakePoint(cursorX + 13.0, cursorY + 10.35)];
+    [cursor closePath];
+    [[NSColor colorWithCalibratedWhite:1.0 alpha:0.98] setFill];
+    [cursor fill];
+    [[NSColor colorWithCalibratedWhite:0.10 alpha:0.92] setStroke];
+    [cursor setLineWidth:1.2];
+    [cursor stroke];
+
+    NSRect labelRect = NSMakeRect(cursorX + 24.0, NSMinY(pointerRect) + 3.0,
+                                  NSWidth(pointerRect) - 32.0, 32.0);
+    NSBezierPath* labelPath = [NSBezierPath bezierPathWithRoundedRect:labelRect xRadius:13.0 yRadius:13.0];
+    [[NSColor colorWithCalibratedWhite:0.98 alpha:0.98] setFill];
+    [labelPath fill];
+    NSDictionary* pointerAttrs = @{
+      NSFontAttributeName: [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold],
+      NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.15 green:0.17 blue:0.21 alpha:1.0],
+    };
+    NSString* pointerText = self.pointerLabel.length ? self.pointerLabel : @"正在浏览网页";
+    const CGFloat pointerMaxWidth = MAX(20.0, NSWidth(labelRect) - 22.0);
+    while (pointerText.length > 4 &&
+           [pointerText sizeWithAttributes:pointerAttrs].width > pointerMaxWidth) {
+      pointerText = [[pointerText substringToIndex:pointerText.length - 2]
+          stringByAppendingString:@"…"];
+    }
+    NSSize pointerTextSize = [pointerText sizeWithAttributes:pointerAttrs];
+    [pointerText drawAtPoint:NSMakePoint(NSMinX(labelRect) + 11.0,
+                                         NSMidY(labelRect) - pointerTextSize.height / 2.0)
+              withAttributes:pointerAttrs];
   }
 }
 
@@ -1123,7 +1280,8 @@ void UfoCefRequestSpaceClose(int space_id, const char* presentation_socket) {
 
 void UfoAgentOverlaySet(void* cef_view_handle,
                         bool active,
-                        const char* label,
+                        const char* title,
+                        const char* detail,
                         int space_id,
                         const char* presentation_socket) {
   id retainedCefHandle = [(id)cef_view_handle retain];
@@ -1136,7 +1294,8 @@ void UfoAgentOverlaySet(void* cef_view_handle,
       return;
     }
     if (gPanel && gHostWindow == host) {
-      gPanel.overlayView.label = [NSString stringWithUTF8String:label ?: "Agent controlling"];
+      gPanel.overlayView.label = [NSString stringWithUTF8String:title ?: "Browser Agent"];
+      gPanel.overlayView.detail = [NSString stringWithUTF8String:detail ?: "Agent 正在控制"];
       gPanel.overlayView.spaceId = space_id;
       gPanel.overlayView.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
       PositionOverlay();
@@ -1163,7 +1322,8 @@ void UfoAgentOverlaySet(void* cef_view_handle,
     gPanel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehaviorFullScreenAuxiliary;
     UfoOverlayView* view = [[UfoOverlayView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
-    view.label = [NSString stringWithUTF8String:label ?: "Agent controlling"];
+    view.label = [NSString stringWithUTF8String:title ?: "Browser Agent"];
+    view.detail = [NSString stringWithUTF8String:detail ?: "Agent 正在控制"];
     view.spaceId = space_id;
     view.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
     view.phase = 0.0;
@@ -1171,16 +1331,34 @@ void UfoAgentOverlaySet(void* cef_view_handle,
     gPanel.contentView = view;
     [host addChildWindow:gPanel ordered:NSWindowAbove];
     [gPanel orderFront:nil];
-    // Redraw only the small capsule at a restrained cadence. Repositioning or
-    // repainting the full-window transparent panel every frame needlessly
-    // wakes the compositor and was visible in UFO's idle GPU usage.
-    gPanel.pulseTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 12.0
+    // The background remains static. At 10 FPS only the old/new sweep strips,
+    // control bar, and short-lived pointer are invalidated; this preserves the
+    // original gentle motion without turning the full window into a hot GPU
+    // surface.
+    gPanel.pulseTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 10.0
                                                            repeats:YES
                                                              block:^(NSTimer* timer) {
       (void)timer;
       if (!gPanel) return;
-      gPanel.overlayView.phase += 0.20;
-      [gPanel.overlayView setNeedsDisplayInRect:UfoOverlayCapsuleRect(gPanel.overlayView.bounds)];
+      UfoOverlayView* overlay = gPanel.overlayView;
+      const NSRect oldSweep = UfoOverlaySweepRect(overlay.bounds, overlay.phase);
+      const NSRect oldPointer = UfoOverlayPointerRect(
+          overlay, overlay.pointerX, overlay.pointerY);
+      overlay.phase += 0.10;
+      overlay.pointerX += (overlay.pointerTargetX - overlay.pointerX) * 0.55;
+      overlay.pointerY += (overlay.pointerTargetY - overlay.pointerY) * 0.55;
+      [overlay setNeedsDisplayInRect:NSUnionRect(
+          NSInsetRect(oldSweep, -8.0, 0.0),
+          NSInsetRect(UfoOverlaySweepRect(overlay.bounds, overlay.phase), -8.0, 0.0))];
+      [overlay setNeedsDisplayInRect:UfoOverlayCapsuleRect(overlay.bounds)];
+      if (overlay.pointerVisibleUntil > 0.0) {
+        [overlay setNeedsDisplayInRect:NSUnionRect(
+            oldPointer,
+            UfoOverlayPointerRect(overlay, overlay.pointerX, overlay.pointerY))];
+        if (overlay.pointerVisibleUntil <= [NSDate timeIntervalSinceReferenceDate]) {
+          overlay.pointerVisibleUntil = 0.0;
+        }
+      }
     }];
     NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
     gMoveObserver = [center addObserverForName:NSWindowDidMoveNotification object:host queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification* note) {
@@ -1191,6 +1369,52 @@ void UfoAgentOverlaySet(void* cef_view_handle,
       (void)note;
       PositionOverlay();
     }];
+    [retainedCefHandle release];
+  });
+}
+
+void UfoAgentOverlayUpdateTask(void* cef_view_handle,
+                               const char* title,
+                               const char* detail) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  const std::string titleValue = title ?: "Browser Agent";
+  const std::string detailValue = detail ?: "Agent 正在控制";
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
+    if (host && gPanel && gHostWindow == host) {
+      gPanel.overlayView.label = [NSString stringWithUTF8String:titleValue.c_str()];
+      gPanel.overlayView.detail = [NSString stringWithUTF8String:detailValue.c_str()];
+      [gPanel.overlayView setNeedsDisplayInRect:UfoOverlayCapsuleRect(gPanel.overlayView.bounds)];
+    }
+    [retainedCefHandle release];
+  });
+}
+
+void UfoAgentOverlayShowPointer(void* cef_view_handle,
+                                double x,
+                                double y,
+                                const char* label) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  const std::string labelValue = label ?: "正在浏览网页";
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
+    if (host && gPanel && gHostWindow == host) {
+      UfoOverlayView* overlay = gPanel.overlayView;
+      NSRect oldRect = UfoOverlayPointerRect(overlay, overlay.pointerX, overlay.pointerY);
+      const BOOL wasVisible = overlay.pointerVisibleUntil >
+          [NSDate timeIntervalSinceReferenceDate];
+      overlay.pointerLabel = [NSString stringWithUTF8String:labelValue.c_str()];
+      overlay.pointerTargetX = MAX(0.0, (CGFloat)x);
+      overlay.pointerTargetY = MAX(0.0, (CGFloat)y);
+      if (!wasVisible) {
+        overlay.pointerX = overlay.pointerTargetX;
+        overlay.pointerY = overlay.pointerTargetY;
+      }
+      overlay.pointerVisibleUntil = [NSDate timeIntervalSinceReferenceDate] + 1.4;
+      [overlay setNeedsDisplayInRect:NSUnionRect(
+          oldRect,
+          UfoOverlayPointerRect(overlay, overlay.pointerX, overlay.pointerY))];
+    }
     [retainedCefHandle release];
   });
 }

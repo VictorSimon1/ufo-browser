@@ -179,3 +179,32 @@ test("Native Profile Cookie seeding trusts only a matching imported marker", asy
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Native Agent task text and pointer are routed to the outer AppKit overlay", async () => {
+  const routed: any[] = [];
+  const host = {
+    isRunning: () => true,
+    updateSharedSpaceAgentOverlay: async (...args: any[]) => { routed.push(["state", ...args]); },
+    showSharedSpaceAgentPointer: async (...args: any[]) => { routed.push(["pointer", ...args]); },
+  } as any;
+  const manager = new NativeCefTaskSpaceManager({
+    store: { save: async () => undefined } as any,
+    profiles: { getDefault: () => ({ id: "profile-a" }) } as any,
+    partitionsRoot: "/tmp/ufo-native-agent-overlay-test",
+    sharedHost: host,
+  });
+  const space = await manager.createSpace("Agent checkout", "agent");
+  (manager as any).runtimes.set(`space-${space.id}`, { isRunning: () => true });
+
+  await manager.setAgentTaskState(space.id, {
+    title: "Checkout",
+    detail: "正在填写地址",
+  });
+  manager.showAgentPointer(space.id, 320, 240);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(routed, [
+    ["state", space.id, "Checkout", "正在填写地址"],
+    ["pointer", space.id, 320, 240],
+  ]);
+});

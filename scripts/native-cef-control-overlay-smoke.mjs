@@ -59,6 +59,19 @@ try {
   assert.equal(afterDisconnect.agentOverlayPresented, true, JSON.stringify(afterDisconnect));
   assert.equal(afterDisconnect.agentOverlayActionsAvailable, true, JSON.stringify(afterDisconnect));
   assert.ok(afterDisconnect.agentActiveSpaceIds.includes(spaceId));
+  assert.equal(await sendSocket(controlSocket, `${JSON.stringify({
+    command: "agent-overlay-state",
+    spaceId,
+    title: "Native overlay smoke",
+    detail: "Agent 正在测试页面",
+  })}\n`), "ok\n");
+  assert.equal(await sendSocket(controlSocket, `${JSON.stringify({
+    command: "agent-pointer-space",
+    spaceId,
+    x: 180,
+    y: 160,
+    label: "正在浏览网页",
+  })}\n`), "ok\n");
 
   // The AppKit panel is outside the CEF compositor. Agent CDP input and page
   // screenshots must continue to work while the human-facing overlay exists.

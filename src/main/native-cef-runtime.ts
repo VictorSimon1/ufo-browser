@@ -596,6 +596,38 @@ export class NativeCefRuntime {
     return response;
   }
 
+  async updateSharedSpaceAgentOverlay(
+    spaceId: number,
+    title: string,
+    detail: string,
+  ) {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "agent-overlay-state",
+      spaceId,
+      title,
+      detail,
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    return response;
+  }
+
+  async showSharedSpaceAgentPointer(
+    spaceId: number,
+    x: number,
+    y: number,
+    label = "正在浏览网页",
+  ) {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "agent-pointer-space",
+      spaceId,
+      x,
+      y,
+      label,
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    return response;
+  }
+
   async listSharedSpaceBrowsers(spaceId: number): Promise<NativeCefSpaceBrowser[]> {
     const response = await this.sendControlPayload(JSON.stringify({
       command: "list-space-browsers",

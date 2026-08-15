@@ -9,9 +9,17 @@ extern "C" {
 // or DevTools input dispatch.
 void UfoAgentOverlaySet(void* cef_view_handle,
                         bool active,
-                        const char* label,
+                        const char* title,
+                        const char* detail,
                         int space_id,
                         const char* presentation_socket);
+void UfoAgentOverlayUpdateTask(void* cef_view_handle,
+                               const char* title,
+                               const char* detail);
+void UfoAgentOverlayShowPointer(void* cef_view_handle,
+                                double x,
+                                double y,
+                                const char* label);
 void UfoAgentOverlayClear(void* cef_view_handle);
 bool UfoAgentOverlayIsActiveForWindow(void* cef_view_handle);
 bool UfoAgentOverlayHasActionsForWindow(void* cef_view_handle);
