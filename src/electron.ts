@@ -3412,6 +3412,7 @@ async function runChromeImportUiAudit(context: {
   const result = await overviewView.webContents.executeJavaScript(
     `(() => ({
       title: document.querySelector('#profile-dialog-title')?.textContent || '',
+      action: document.querySelector('.import-result-view .primary-button')?.textContent || '',
       stats: [...document.querySelectorAll('.import-result-stats > span')].map((row) => ({
         value: row.querySelector('b')?.textContent || '',
         label: row.querySelector('small')?.textContent || '',
@@ -3448,15 +3449,7 @@ async function runChromeImportUiAudit(context: {
   };
 
   await overviewView.webContents.executeJavaScript(
-    `document.querySelector('#profile-dialog-close')?.click(); document.querySelector('.create-space-profile-trigger')?.click()`,
-    true,
-  );
-  await waitForRenderer(
-    overviewView,
-    `!document.querySelector('.create-profile-popover')?.hidden && Boolean(document.querySelector('.create-profile-option[data-profile-id=${JSON.stringify(imported.id)}]'))`,
-  );
-  await overviewView.webContents.executeJavaScript(
-    `document.querySelector('.create-profile-option[data-profile-id=${JSON.stringify(imported.id)}]')?.click()`,
+    `document.querySelector('.import-result-view .primary-button')?.click()`,
     true,
   );
   await waitUntil(
@@ -3526,6 +3519,7 @@ async function runChromeImportUiAudit(context: {
     discovery.partialAllowed === false &&
     discovery.submitEnabled === true &&
     result.title === "登录状态已导入" &&
+    result.action === "使用此 Profile 打开 Space" &&
     result.stats.some(
       (stat: any) => stat.label === "默认 Profile" && stat.value === "是",
     ) &&

@@ -567,16 +567,18 @@ function defaultProfile() {
 }
 
 async function createSpaceWithProfile(profileId?: string) {
-  if (createSpacePending) return;
+  if (createSpacePending) return false;
   createSpacePending = true;
   closeCreateProfileMenu();
   closeCardMenu();
   updateCreateCard();
   try {
     await api.overview.create(undefined, profileId);
+    return true;
   } catch {
     create.classList.add("create-failed");
     window.setTimeout(() => create.classList.remove("create-failed"), 320);
+    return false;
   } finally {
     createSpacePending = false;
     updateCreateCard();
@@ -1086,7 +1088,7 @@ function renderImportResult(result: any) {
         <span><b>${Array.isArray(result?.storage?.copied) ? result.storage.copied.length : 0}</b><small>存储类型</small></span>
         <span><b>${result?.profile?.isDefault === true ? "是" : "否"}</b><small>默认 Profile</small></span>
       </div>
-      <button class="primary-button">完成</button>
+      <button class="primary-button">使用此 Profile 打开 Space</button>
     </div>
   `;
   profileDialogContent.querySelector(".import-result-view > strong")!.textContent =
@@ -1107,8 +1109,23 @@ function renderImportResult(result: any) {
     `${Number(result?.cookies?.skipped) || 0} 项已过期或无法安全迁移${
       warningLabels.length ? `；${[...new Set(warningLabels)].join("、")}` : ""
     }`;
-  profileDialogContent.querySelector("button")!.addEventListener("click", () => {
-    renderProfileHome();
+  profileDialogContent.querySelector("button")!.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const profileId = String(result?.profile?.id || "");
+    if (!profileId) {
+      renderDialogError("导入结果缺少 Profile，请返回后重试", "返回", renderProfileHome);
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "正在打开";
+    closeProfileDialog();
+    if (await createSpaceWithProfile(profileId)) return;
+    await openProfileDialog();
+    renderDialogError(
+      "登录状态已导入，但无法打开对应的 Space",
+      "返回",
+      renderProfileHome,
+    );
   });
 }
 
