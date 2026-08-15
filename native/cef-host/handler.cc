@@ -366,7 +366,12 @@ void UfoCefHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   CEF_REQUIRE_UI_THREAD();
   if (frame && frame->IsMain()) {
     const int space_id = GetBrowserSpaceId(browser);
-    if (space_id > 0) {
+    if (space_id == 0) {
+      const auto overview_url = frame->GetURL().ToString();
+      if (!overview_url.empty() && overview_url != "about:blank") {
+        main_overview_ready_ = true;
+      }
+    } else {
       // Chrome Runtime may create a default Google/New Tab CefBrowser first
       // and the explicitly requested --new-window URL as a sibling browser a
       // moment later. The requested page must become the Space's primary
@@ -888,6 +893,7 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     if (!root) return "error invalid-json";
     const auto operation = root->GetString("command").ToString();
     if (operation == "create-space") {
+      if (!main_overview_ready_) return "error overview-not-ready";
       return shared_space_factory_ ? shared_space_factory_(command)
                                    : "error shared-host-disabled";
     }

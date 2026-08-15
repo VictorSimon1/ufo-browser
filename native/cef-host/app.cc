@@ -402,17 +402,18 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
         handler->CancelPendingNativeSpace(canonical_cache.string(), space_id);
         return false;
       }
-      const auto command_line = CefCommandLine::GetGlobalCommandLine();
-      const bool launched = UfoCefOpenChromeProfileWindow(
-          command_line->GetProgram().ToString().c_str(),
-          chrome_user_data_root.c_str(),
-          chrome_profile_directory.c_str(),
-          url.c_str(),
-          command_line->HasSwitch("use-mock-keychain"));
-      if (!launched) {
-        handler->CancelPendingNativeSpace(canonical_cache.string(), space_id);
-      }
-      return launched;
+      // Keep persistent Profile Spaces inside the already-running UFO CEF
+      // process. The previous ProcessSingleton forwarding path launched a
+      // short-lived copy of the app and asked Chromium to re-home its native
+      // window. Besides breaking the one-product-process contract, that path
+      // could publish a visible window before CEF's browser-info handshake
+      // had registered the frame, leaving Profile cookies inaccessible to
+      // Agent routing and the first navigation stuck on about:blank.
+      //
+      // The selected Profile's canonical directory is already `cache_path`.
+      // A dedicated persistent RequestContext gives the in-process Chrome
+      // Runtime window the same cookies/storage while preserving Chromium's
+      // own tab strip, omnibox and toolbar.
     }
   }
 

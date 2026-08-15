@@ -90,6 +90,7 @@ class UfoCefHandler final : public CefClient,
   BrowserList browsers_;
   CefRefPtr<CefWindow> main_window_;
   const bool chrome_style_;
+  bool main_overview_ready_ = false;
   bool closing_ = false;
   std::atomic<bool> agent_active_{false};
   std::string control_socket_path_;

@@ -546,10 +546,14 @@ export class NativeCefRuntime {
   }
 
   async createSharedSpace(space: NativeCefSharedSpaceSpec) {
-    const response = await this.sendControlPayload(JSON.stringify({
-      command: "create-space",
-      space,
-    }));
+    const payload = JSON.stringify({ command: "create-space", space });
+    const deadline = Date.now() + 15_000;
+    let response = "error overview-not-ready";
+    while (Date.now() < deadline) {
+      response = await this.sendControlPayload(payload);
+      if (response !== "error overview-not-ready") break;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+    }
     if (response.startsWith("error ")) throw new Error(response);
     const result = JSON.parse(response);
     if (!result?.ok || result.spaceId !== space.id) {
