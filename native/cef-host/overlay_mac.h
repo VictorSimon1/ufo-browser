@@ -34,6 +34,9 @@ bool UfoCefWindowIsPresented(void* cef_view_handle);
 void UfoCefWindowFocus(void* cef_view_handle);
 void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake);
 bool UfoCefWindowIsCompositorAwake(void* cef_view_handle);
+char* UfoCefCaptureWindowImageBase64(void* cef_view_handle,
+                                     const char* format,
+                                     int quality);
 
 // The Overview NSWindow is UFO's persistent product controller. Native Chrome
 // Space windows are mounted over this controller at the exact same frame and
@@ -71,6 +74,19 @@ bool UfoCefChromeControlsArePresentedForWindow(void* cef_view_handle);
 bool UfoCefChromeControlsOwnWindow(void* ns_window);
 void UfoCefRequestSpaceClose(int space_id, const char* presentation_socket);
 void UfoCefRequestProductTermination();
+
+// Packaged-host bootstrap values are prepared before CefInitialize. The
+// Overview HTTP service may start early, but its Agent waits for the native
+// Overview main frame before attaching to the private DevTools bridge.
+bool UfoCefPackagedHostPrepared();
+const char* UfoCefPackagedOverviewUrl();
+const char* UfoCefPackagedUserData();
+const char* UfoCefPackagedProfileDirectory();
+const char* UfoCefPackagedOverviewControlSocket();
+const char* UfoCefPackagedPresentationSocket();
+const char* UfoCefPackagedDevToolsSocket();
+int UfoCefPackagedDevToolsPort();
+bool UfoCefReleasePackagedAgentAttach();
 
 // Ask Chromium's ProcessSingleton to create a native window for an existing
 // Chrome Profile inside the already-running UFO CEF host. The short-lived

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -20,7 +21,10 @@
 #include "native/cef-host/handler.h"
 #include "native/cef-host/overlay_mac.h"
 
-@interface UfoCefApplication : NSApplication <CefAppProtocol>
+@interface UfoCefApplication : NSApplication <CefAppProtocol> {
+ @private
+  BOOL handlingSendEvent_;
+}
 @end
 
 static volatile sig_atomic_t g_termination_requested = 0;
@@ -30,9 +34,11 @@ static std::atomic<bool> g_signal_thread_stop{false};
 static NSTask* g_agent_task = nil;
 static NSMutableDictionary* g_agent_environment = nil;
 static NSString* g_agent_info_file = nil;
-static pid_t g_agent_pid = -1;
+static NSString* g_agent_attach_ready_file = nil;
+static NSString* g_packaged_overview_url = nil;
+static NSString* g_packaged_profile_directory = nil;
+static int g_packaged_devtools_port = 0;
 static std::atomic<bool> g_stopping_agent{false};
-static std::atomic<bool> g_launcher_termination_requested{false};
 
 static void StopPackagedAgentService();
 
@@ -48,6 +54,61 @@ static bool IsPackagedUfoProduct() {
 static NSString* EnvironmentValue(NSString* name, NSString* fallback) {
   NSString* value = NSProcessInfo.processInfo.environment[name];
   return value.length ? value : fallback;
+}
+
+static int AllocateLoopbackPort() {
+  const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return 0;
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0;
+  if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+    ::close(fd);
+    return 0;
+  }
+  socklen_t length = sizeof(address);
+  if (::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+    ::close(fd);
+    return 0;
+  }
+  const int port = ntohs(address.sin_port);
+  ::close(fd);
+  return port;
+}
+
+static NSString* PackagedProfileDirectory(NSString* user_data) {
+  NSString* profiles_path = [user_data stringByAppendingPathComponent:@"profiles.json"];
+  NSData* data = [NSData dataWithContentsOfFile:profiles_path];
+  if (!data.length) return @"Default";
+  NSDictionary* state = [NSJSONSerialization JSONObjectWithData:data
+                                                         options:0
+                                                           error:nil];
+  NSString* profile_id = [state isKindOfClass:NSDictionary.class]
+      ? state[@"defaultProfileId"]
+      : nil;
+  if (![profile_id isKindOfClass:NSString.class] || !profile_id.length ||
+      [profile_id isEqualToString:@"default"]) {
+    return @"Default";
+  }
+  NSRegularExpression* valid = [NSRegularExpression
+      regularExpressionWithPattern:@"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+                           options:0
+                             error:nil];
+  if (!valid || [valid numberOfMatchesInString:profile_id
+                                        options:0
+                                          range:NSMakeRange(0, profile_id.length)] != 1) {
+    return @"Default";
+  }
+  NSString* directory = [@"UFO-" stringByAppendingString:profile_id];
+  BOOL is_directory = NO;
+  NSString* path = [user_data stringByAppendingPathComponent:directory];
+  if (![NSFileManager.defaultManager fileExistsAtPath:path
+                                           isDirectory:&is_directory] ||
+      !is_directory) {
+    return @"Default";
+  }
+  return directory;
 }
 
 static bool PreparePackagedAgentService() {
@@ -72,6 +133,12 @@ static bool PreparePackagedAgentService() {
   NSString* devtools = [devtools_root stringByAppendingPathComponent:@"shared-host.sock"];
   NSString* info_file = [user_data stringByAppendingPathComponent:@"overview.json"];
   NSString* agent_socket = [user_data stringByAppendingPathComponent:@"ufo-browser.sock"];
+  NSString* attach_ready = [runtime_root stringByAppendingPathComponent:@"attach.ready"];
+  const int devtools_port = AllocateLoopbackPort();
+  if (devtools_port <= 0) {
+    NSLog(@"UFO failed to reserve its local DevTools endpoint");
+    return false;
+  }
   NSError* directory_error = nil;
   [files createDirectoryAtPath:user_data
    withIntermediateDirectories:YES
@@ -90,12 +157,16 @@ static bool PreparePackagedAgentService() {
     return false;
   }
   [files removeItemAtPath:info_file error:nil];
+  [files removeItemAtPath:attach_ready error:nil];
 
   NSMutableDictionary* environment =
       [[[NSProcessInfo processInfo] environment] mutableCopy];
+  environment[@"UFO_BROWSER_NATIVE_ATTACHED_HOST"] = @"1";
+  environment[@"UFO_BROWSER_NATIVE_HOST_PID"] =
+      [NSString stringWithFormat:@"%d", getpid()];
   environment[@"UFO_BROWSER_NATIVE_SHARED_HOST"] = @"1";
-  environment[@"UFO_BROWSER_DISABLE_EMBEDDED_AGENT"] = @"1";
-  environment[@"UFO_BROWSER_PACKAGED_AGENT_OWNER"] = @"1";
+  environment[@"UFO_BROWSER_NATIVE_OVERVIEW_MODE"] = @"external";
+  environment[@"UFO_BROWSER_NATIVE_ATTACH_READY_FILE"] = attach_ready;
   environment[@"UFO_BROWSER_NATIVE_USER_DATA"] = user_data;
   environment[@"UFO_BROWSER_SOCKET"] = agent_socket;
   environment[@"UFO_BROWSER_OVERVIEW_INFO_FILE"] = info_file;
@@ -104,6 +175,8 @@ static bool PreparePackagedAgentService() {
   environment[@"UFO_BROWSER_PRESENTATION_SOCKET"] = presentation;
   environment[@"UFO_BROWSER_DEVTOOLS_SOCKETS_ROOT"] = devtools_root;
   environment[@"UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET"] = devtools;
+  environment[@"UFO_BROWSER_NATIVE_DEVTOOLS_PORT"] =
+      [NSString stringWithFormat:@"%d", devtools_port];
   environment[@"UFO_BROWSER_NATIVE_STORAGE_REVISION_WORKER"] =
       UfoResourcePath(@"profile-sync-storage-revision-worker.js");
   environment[@"UFO_BROWSER_NATIVE_KEYCHAIN_HELPER"] =
@@ -112,14 +185,19 @@ static bool PreparePackagedAgentService() {
   environment[@"UFO_BROWSER_NATIVE_WORKING_DIR"] = NSBundle.mainBundle.bundlePath;
   environment[@"UFO_CEF_HOST"] = NSBundle.mainBundle.executablePath;
 
-  // The packaged executable is a lightweight lifecycle supervisor. Its
-  // bundled Agent owns the single long-lived CEF product host, which is the
-  // same topology used by development and avoids the unstable reverse-attach
-  // path where a child Agent tried to bind an already-running CEF process.
+  // Start only the local Overview HTTP service before CEF. The Node process
+  // waits on attach_ready before touching DevTools, so the bundle executable
+  // remains the one CEF product host and no browser-info handshake can race
+  // the native Overview's first renderer.
   [g_agent_environment release];
   g_agent_environment = environment;
   [g_agent_info_file release];
   g_agent_info_file = [info_file copy];
+  [g_agent_attach_ready_file release];
+  g_agent_attach_ready_file = [attach_ready copy];
+  [g_packaged_profile_directory release];
+  g_packaged_profile_directory = [PackagedProfileDirectory(user_data) copy];
+  g_packaged_devtools_port = devtools_port;
   return true;
 }
 
@@ -140,7 +218,6 @@ static bool StartPackagedAgentService() {
     return false;
   }
   g_agent_task = task;
-  g_agent_pid = task.processIdentifier;
   task.terminationHandler = ^(NSTask* finished) {
     (void)finished;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -155,8 +232,6 @@ static bool StartPackagedAgentService() {
 
   NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
   NSString* overview_url = nil;
-  NSString* agent_socket = g_agent_environment[@"UFO_BROWSER_SOCKET"];
-  bool agent_ready = false;
   while ([deadline timeIntervalSinceNow] > 0 && task.isRunning &&
          !g_stopping_agent.load()) {
     if (!overview_url.length) {
@@ -172,12 +247,10 @@ static bool StartPackagedAgentService() {
         }
       }
     }
-    agent_ready = overview_url.length && agent_socket.length &&
-        [NSFileManager.defaultManager fileExistsAtPath:agent_socket];
-    if (agent_ready) break;
+    if (overview_url.length) break;
     [NSThread sleepForTimeInterval:0.05];
   }
-  if (!overview_url.length || !agent_ready) {
+  if (!overview_url.length) {
     if (g_stopping_agent.load()) return true;
     NSLog(@"UFO Agent service did not publish the Overview URL");
     g_stopping_agent.store(true);
@@ -187,25 +260,46 @@ static bool StartPackagedAgentService() {
     g_stopping_agent.store(false);
     return false;
   }
+  [g_packaged_overview_url release];
+  g_packaged_overview_url = [overview_url copy];
   return true;
 }
 
-static int RunPackagedAgentOwnedProduct() {
-  NSTask* task = g_agent_task;
-  if (!task) return 1;
-  signal(SIGTERM, [](int) { g_launcher_termination_requested.store(true); });
-  signal(SIGINT, [](int) { g_launcher_termination_requested.store(true); });
-  while (task.isRunning) {
-    if (g_launcher_termination_requested.exchange(false)) {
-      g_stopping_agent.store(true);
-      [task terminate];
-    }
-    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-  }
-  const int status = task.terminationStatus;
-  StopPackagedAgentService();
-  return status;
+bool UfoCefPackagedHostPrepared() {
+  return g_agent_environment && g_packaged_overview_url.length;
+}
+
+const char* UfoCefPackagedOverviewUrl() {
+  return g_packaged_overview_url.UTF8String;
+}
+
+const char* UfoCefPackagedUserData() {
+  return [g_agent_environment[@"UFO_BROWSER_NATIVE_USER_DATA"] UTF8String];
+}
+
+const char* UfoCefPackagedProfileDirectory() {
+  return g_packaged_profile_directory.UTF8String;
+}
+
+const char* UfoCefPackagedOverviewControlSocket() {
+  return [g_agent_environment[@"UFO_BROWSER_OVERVIEW_CONTROL_SOCKET"] UTF8String];
+}
+
+const char* UfoCefPackagedPresentationSocket() {
+  return [g_agent_environment[@"UFO_BROWSER_PRESENTATION_SOCKET"] UTF8String];
+}
+
+const char* UfoCefPackagedDevToolsSocket() {
+  return [g_agent_environment[@"UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET"] UTF8String];
+}
+
+int UfoCefPackagedDevToolsPort() {
+  return g_packaged_devtools_port;
+}
+
+bool UfoCefReleasePackagedAgentAttach() {
+  if (!g_agent_attach_ready_file) return true;
+  return [[NSData data] writeToFile:g_agent_attach_ready_file atomically:YES];
 }
 
 static void StopPackagedAgentService() {
@@ -224,14 +318,17 @@ static void StopPackagedAgentService() {
     }
     [task release];
   }
-  if (!task && g_agent_pid > 1) {
-    kill(g_agent_pid, SIGTERM);
-  }
   [g_agent_environment release];
   g_agent_environment = nil;
   [g_agent_info_file release];
   g_agent_info_file = nil;
-  g_agent_pid = -1;
+  [g_agent_attach_ready_file release];
+  g_agent_attach_ready_file = nil;
+  [g_packaged_overview_url release];
+  g_packaged_overview_url = nil;
+  [g_packaged_profile_directory release];
+  g_packaged_profile_directory = nil;
+  g_packaged_devtools_port = 0;
 }
 
 void UfoCefRequestProductTermination() {
@@ -351,8 +448,10 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
 }  // namespace
 
 @implementation UfoCefApplication
-- (BOOL)isHandlingSendEvent { return NO; }
-- (void)setHandlingSendEvent:(BOOL)handlingSendEvent {}
+- (BOOL)isHandlingSendEvent { return handlingSendEvent_; }
+- (void)setHandlingSendEvent:(BOOL)handlingSendEvent {
+  handlingSendEvent_ = handlingSendEvent;
+}
 - (void)sendEvent:(NSEvent*)event {
   CefScopedSendingEvent sendingEventScoper;
   UfoCefHandler* handler = UfoCefHandler::GetInstance();
@@ -403,8 +502,6 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
   // browser tree closed and let OnBeforeClose quit the message loop.
   if (handler && !handler->IsClosing()) {
     handler->RequestApplicationClose(true);
-  } else if (g_agent_task && g_agent_task.isRunning) {
-    g_launcher_termination_requested.store(true);
   }
 }
 @end
@@ -455,16 +552,12 @@ int main(int argc, char* argv[]) {
       StopSignalPump();
       return 1;
     }
-    // The managed Agent starts the only CEF product host and publishes both
-    // the Overview URL and Agent socket before the supervisor returns control.
+    // The managed Agent publishes the Overview HTTP URL, then waits for the
+    // CEF main frame before attaching back to this product host.
     if (!profile_window_request && !StartPackagedAgentService()) {
       StopPackagedAgentService();
       StopSignalPump();
       return 1;
-    }
-    if (!profile_window_request &&
-        g_agent_environment[@"UFO_BROWSER_PACKAGED_AGENT_OWNER"]) {
-      return RunPackagedAgentOwnedProduct();
     }
 
     CefSettings settings;
@@ -476,6 +569,12 @@ int main(int argc, char* argv[]) {
       CefString(&settings.browser_subprocess_path) = helper_executable.UTF8String;
     }
     auto user_data_dir = command_line->GetSwitchValue("user-data-dir");
+    if (user_data_dir.empty() && UfoCefPackagedHostPrepared()) {
+      const char* packaged_user_data = UfoCefPackagedUserData();
+      if (packaged_user_data && *packaged_user_data) {
+        user_data_dir = packaged_user_data;
+      }
+    }
     if (user_data_dir.empty()) {
       const char* attached_user_data = std::getenv("UFO_BROWSER_NATIVE_USER_DATA");
       if (attached_user_data && *attached_user_data) user_data_dir = attached_user_data;
@@ -489,6 +588,9 @@ int main(int argc, char* argv[]) {
       CefString(&settings.cache_path) = (root / "Cache").string();
     }
     ConfigureDevelopmentDevTools(command_line, &settings);
+    if (UfoCefPackagedHostPrepared() && UfoCefPackagedDevToolsPort() > 0) {
+      settings.remote_debugging_port = UfoCefPackagedDevToolsPort();
+    }
     CefRefPtr<UfoCefApp> app(new UfoCefApp());
     if (!CefInitialize(main_args, settings, app.get(), nullptr)) {
       StopPackagedAgentService();

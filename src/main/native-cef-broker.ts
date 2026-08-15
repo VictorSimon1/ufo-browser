@@ -110,7 +110,14 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
       const synthetic = `ufo-cef-${randomUUID()}`;
       if (target.type === "page") {
         const connection = await runtime.connect(target.id);
-        await waitForConnectionUrl(connection, target.url);
+        // The loopback transport is already connected to the exact page
+        // WebSocket selected from /json/list. Re-probing location.href here
+        // can wait behind Chrome Runtime's unrelated top-chrome renderer and
+        // turn a successful attach into a 15-second timeout. The private
+        // browser-level bridge still needs the explicit readiness probe.
+        if (runtime.usesPrivateBridge()) {
+          await waitForConnectionUrl(connection, target.url);
+        }
         const unsubscribe = connection.onEvent((event: any) => {
           this.emit(connectionId, JSON.stringify({ method: event.method, params: event.params, sessionId: synthetic }));
         });
@@ -130,6 +137,19 @@ export class NativeCefBroker implements AgentCdpBrokerHost {
     if (method === "Target.setDiscoverTargets" || method === "Target.setAutoAttach") {
       const browser = await this.manager.ensureBrowserConnectionForAgent(spaceId, runtime);
       return browser.send(method, params);
+    }
+    if (method === "Page.captureScreenshot" && !runtime.usesPrivateBridge()) {
+      const format = params?.format === "jpeg" ? "jpeg" : "png";
+      const quality = Number.isFinite(Number(params?.quality))
+        ? Number(params.quality)
+        : 80;
+      return {
+        data: await runtime.captureSharedSpaceScreenshot(
+          spaceId,
+          format,
+          quality,
+        ),
+      };
     }
     if (!sessionId) throw new Error(`missing sessionId for ${method}`);
     const session = this.sessions.get(sessionId);

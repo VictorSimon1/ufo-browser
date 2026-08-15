@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #include <utility>
@@ -193,6 +194,21 @@ bool UfoCefHandler::OnBeforeDownload(
 void UfoCefHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   browsers_.push_back(browser);
+  const auto command_line = CefCommandLine::GetGlobalCommandLine();
+  const bool overview_host = UfoCefPackagedHostPrepared() ||
+                             command_line->HasSwitch("overview");
+  if (overview_host && browsers_.size() == 1 && !browser->IsPopup()) {
+    main_overview_browser_id_ = browser->GetIdentifier();
+    // Chrome Runtime creates its internal top-chrome renderers immediately
+    // after the CefBrowser callback. Let that registration settle before the
+    // Agent can create another native Chrome window in this same process.
+    CefPostDelayedTask(
+        TID_UI,
+        base::BindOnce(&UfoCefHandler::MarkOverviewReady,
+                       CefRefPtr<UfoCefHandler>(this),
+                       browser->GetIdentifier()),
+        500);
+  }
   const auto target_id = std::to_string(browser->GetIdentifier());
   const auto request_context = browser->GetHost()->GetRequestContext();
   const auto cache_path = request_context
@@ -203,7 +219,17 @@ void UfoCefHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   {
     std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
     devtools_target_browsers_[target_id] = browser->GetIdentifier();
-    const auto pending = pending_native_spaces_.find(cache_path);
+    auto pending = pending_native_spaces_.find(cache_path);
+    if (pending == pending_native_spaces_.end() || pending->second.empty()) {
+      // Native Chrome windows use CEF 151's process-wide BrowserContext, so
+      // their reported cache path is the global root rather than the selected
+      // Profile staging directory used as the creation key. Space creation is
+      // serialized by the manager; consume the one pending native window in
+      // that same order and keep its logical Profile metadata on the Space.
+      pending = std::find_if(
+          pending_native_spaces_.begin(), pending_native_spaces_.end(),
+          [](const auto& entry) { return !entry.second.empty(); });
+    }
     if (!cache_path.empty() && pending != pending_native_spaces_.end() &&
         !pending->second.empty()) {
       pending_native_space = pending->second.front();
@@ -288,6 +314,10 @@ void UfoCefHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   {
     std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
     devtools_target_browsers_.erase(std::to_string(browser->GetIdentifier()));
+    if (main_overview_browser_id_ == browser->GetIdentifier()) {
+      main_overview_browser_id_ = 0;
+      main_overview_ready_ = false;
+    }
     browser_download_dirs_.erase(browser->GetIdentifier());
     const auto space_it = browser_spaces_.find(browser->GetIdentifier());
     if (space_it != browser_spaces_.end()) {
@@ -368,8 +398,18 @@ void UfoCefHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
     const int space_id = GetBrowserSpaceId(browser);
     if (space_id == 0) {
       const auto overview_url = frame->GetURL().ToString();
-      if (!overview_url.empty() && overview_url != "about:blank") {
-        main_overview_ready_ = true;
+      // Chrome Runtime 151 creates an internal top-chrome-webui Browser
+      // before the application page Browser. Never publish that first
+      // internal Browser as the Agent's process-level route: its renderer is
+      // not a normal page target and browser-level CDP requests can block in
+      // browser_info_manager. The real Overview is the first HTTP(S) main
+      // frame loaded by UFO's local server (or a development URL).
+      const bool application_page =
+          overview_url.rfind("http://", 0) == 0 ||
+          overview_url.rfind("https://", 0) == 0;
+      if (application_page) {
+        main_overview_browser_id_ = browser->GetIdentifier();
+        MarkOverviewReady(browser->GetIdentifier());
       }
     } else {
       // Chrome Runtime may create a default Google/New Tab CefBrowser first
@@ -420,6 +460,21 @@ void UfoCefHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
     }
     LOG(INFO) << "UFO native Chrome loaded " << frame->GetURL().ToString()
               << " status=" << http_status_code;
+  }
+}
+
+void UfoCefHandler::MarkOverviewReady(int browser_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (main_overview_ready_ || browser_id <= 0) return;
+  const bool browser_alive = std::any_of(
+      browsers_.begin(), browsers_.end(), [browser_id](const auto& browser) {
+        return browser && browser->GetIdentifier() == browser_id;
+      });
+  if (!browser_alive) return;
+  main_overview_browser_id_ = browser_id;
+  main_overview_ready_ = true;
+  if (!UfoCefReleasePackagedAgentAttach()) {
+    UfoCefRequestProductTermination();
   }
 }
 
@@ -853,7 +908,13 @@ void UfoCefHandler::StartControlSocket(const std::string& path) {
         result->response = "error control-timeout";
       }
       const std::string response = result->response + "\n";
-      ::write(client, response.data(), response.size());
+      size_t written = 0;
+      while (written < response.size()) {
+        const ssize_t count = ::write(
+            client, response.data() + written, response.size() - written);
+        if (count <= 0) break;
+        written += static_cast<size_t>(count);
+      }
       ::close(client);
     }
   });
@@ -1009,6 +1070,10 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       response->SetBool("agentOverlayPresented", overlay_presented);
       response->SetBool("agentOverlayActionsAvailable",
                         overlay_actions_available);
+      response->SetString(
+          "profileDirectory",
+          CefCommandLine::GetGlobalCommandLine()
+              ->GetSwitchValue("profile-directory"));
       response->SetBool("chromeControlsPresented",
                         chrome_controls_space_id > 0);
       response->SetInt("chromeControlsSpaceId", chrome_controls_space_id);
@@ -1156,6 +1221,18 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
     }
     const auto handle = GetSpaceWindowHandle(space_id);
     if (!handle) return "error space-window-not-ready";
+    if (operation == "capture-space-screenshot") {
+      const auto format = root->GetString("format").ToString();
+      const int quality = root->GetInt("quality");
+      char* encoded = UfoCefCaptureWindowImageBase64(
+          handle, format.empty() ? "png" : format.c_str(), quality);
+      if (!encoded) return "error native-screenshot-failed";
+      std::string response = "{\"ok\":true,\"data\":\"";
+      response += encoded;
+      response += "\"}";
+      std::free(encoded);
+      return response;
+    }
     if (operation == "show-space") {
       if (auto spec = native_space_specs_.find(space_id);
           spec != native_space_specs_.end()) spec->second.visible = true;
@@ -1377,6 +1454,27 @@ void UfoCefHandler::DispatchDevToolsMessage(
          std::shared_ptr<DevToolsClient> client,
          CefRefPtr<CefDictionaryValue> message, std::string target_id,
          std::string browser_route, std::string method) {
+        int message_id = message->GetInt("id");
+        if (message_id <= 0 && message->HasKey("id")) {
+          message_id = static_cast<int>(message->GetDouble("id"));
+        }
+        if (method == "Browser.getVersion" && message_id > 0) {
+          // CEF 151's Chrome Runtime exposes internal top-chrome renderers in
+          // the same CefBrowser. Forwarding this process-level command via
+          // SendDevToolsMessage can bind to that internal frame and stall the
+          // browser-info handshake. Version discovery is host metadata, so
+          // answer it directly without touching a renderer.
+          const std::string response =
+              std::string("{\"id\":") + std::to_string(message_id) +
+              ",\"result\":{\"protocolVersion\":\"1.3\","
+              "\"product\":\"Chromium/151\",\"revision\":\"\","
+              "\"userAgent\":\"UFO-Browser\",\"jsVersion\":\"\"}}\n";
+          std::lock_guard<std::mutex> write_lock(client->write_mutex);
+          if (client->fd >= 0) {
+            ::write(client->fd, response.data(), response.size());
+          }
+          return;
+        }
         auto browser = handler->FindDevToolsBrowser(target_id, browser_route);
         if (!browser) {
           LOG(ERROR) << "Private DevTools target not found: " << target_id
@@ -1490,9 +1588,25 @@ CefRefPtr<CefBrowser> UfoCefHandler::FindDevToolsBrowser(
     return nullptr;
   }
   if (browser_route == "browser" && !browsers_.empty()) {
+    if (main_overview_browser_id_ > 0) {
+      for (const auto& browser : browsers_) {
+        if (browser->GetIdentifier() == main_overview_browser_id_) {
+          return browser;
+        }
+      }
+    }
     return browsers_.front();
   }
-  if (target_id == "browser" && !browsers_.empty()) return browsers_.front();
+  if (target_id == "browser" && !browsers_.empty()) {
+    if (main_overview_browser_id_ > 0) {
+      for (const auto& browser : browsers_) {
+        if (browser->GetIdentifier() == main_overview_browser_id_) {
+          return browser;
+        }
+      }
+    }
+    return browsers_.front();
+  }
   const int identifier = std::atoi(target_id.c_str());
   for (const auto& browser : browsers_) {
     if (browser->GetIdentifier() == identifier) return browser;

@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -1005,6 +1006,39 @@ bool UfoCefWindowIsCompositorAwake(void* cef_view_handle) {
   if (!host) return false;
   NSNumber* scheduled = [CompositorAwakeState() objectForKey:host];
   return scheduled ? scheduled.boolValue : host.isVisible;
+}
+
+char* UfoCefCaptureWindowImageBase64(void* cef_view_handle,
+                                     const char* format,
+                                     int quality) {
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  if (!host || host.windowNumber <= 0) return nullptr;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  CGImageRef image = CGWindowListCreateImage(
+      CGRectNull,
+      kCGWindowListOptionIncludingWindow,
+      static_cast<CGWindowID>(host.windowNumber),
+      kCGWindowImageBoundsIgnoreFraming);
+#pragma clang diagnostic pop
+  if (!image) return nullptr;
+  NSBitmapImageRep* representation =
+      [[NSBitmapImageRep alloc] initWithCGImage:image];
+  CGImageRelease(image);
+  if (!representation) return nullptr;
+  const bool jpeg = format && std::strcmp(format, "jpeg") == 0;
+  NSDictionary* properties = jpeg
+      ? @{NSImageCompressionFactor:
+              @(std::clamp(quality > 0 ? quality : 80, 1, 100) / 100.0)}
+      : @{};
+  NSData* data = [representation
+      representationUsingType:(jpeg ? NSBitmapImageFileTypeJPEG
+                                    : NSBitmapImageFileTypePNG)
+                    properties:properties];
+  [representation release];
+  if (!data.length) return nullptr;
+  NSString* encoded = [data base64EncodedStringWithOptions:0];
+  return encoded.length ? ::strdup(encoded.UTF8String) : nullptr;
 }
 
 void UfoCefProductControllerSet(void* cef_view_handle) {

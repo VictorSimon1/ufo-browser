@@ -91,6 +91,7 @@ class UfoCefHandler final : public CefClient,
   CefRefPtr<CefWindow> main_window_;
   const bool chrome_style_;
   bool main_overview_ready_ = false;
+  int main_overview_browser_id_ = 0;
   bool closing_ = false;
   std::atomic<bool> agent_active_{false};
   std::string control_socket_path_;
@@ -150,6 +151,7 @@ class UfoCefHandler final : public CefClient,
   void FlushNativeSpaceCookiesAndClose(int space_id);
   void FinishNativeSpaceClose(int space_id);
   void RemoveDevToolsRoute(const std::string& route_id);
+  void MarkOverviewReady(int browser_id);
   void DispatchDevToolsMessage(const std::shared_ptr<DevToolsClient>& client,
                                CefRefPtr<CefDictionaryValue> message,
                                const std::string& target_id,

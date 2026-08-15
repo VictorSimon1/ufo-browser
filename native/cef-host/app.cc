@@ -79,7 +79,8 @@ class UfoWindowDelegate final : public CefWindowDelegate {
     // same Host and must not inherit those process-wide switches or flash in
     // front of the human.
     const bool process_main_window_visible = main_window_ &&
-        (command_line->HasSwitch("overview") ||
+        (UfoCefPackagedHostPrepared() ||
+         command_line->HasSwitch("overview") ||
          command_line->HasSwitch("show-on-start"));
     if (present_on_start_ || process_main_window_visible) {
       window->Show();
@@ -359,6 +360,10 @@ class UfoOverviewBrowserViewDelegate final : public CefBrowserViewDelegate {
 };
 
 std::string StartupUrl() {
+  if (UfoCefPackagedHostPrepared()) {
+    const char* packaged_url = UfoCefPackagedOverviewUrl();
+    if (packaged_url && *packaged_url) return packaged_url;
+  }
   auto command_line = CefCommandLine::GetGlobalCommandLine();
   const auto url = command_line->GetSwitchValue("url");
   return url.empty() ? "https://www.google.com/" : url.ToString();
@@ -424,8 +429,16 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   // even though ordinary expiry-bearing cookies and storage already live
   // under cache_path.
   context_settings.persist_session_cookies = true;
-  auto request_context =
-      CefRequestContext::CreateContext(context_settings, nullptr);
+  // Chrome Runtime 151 owns one process-wide Chrome BrowserContext. Creating
+  // multiple native Chrome windows with unrelated custom RequestContexts can
+  // leave the internal top-chrome renderer waiting forever for browser-info.
+  // UFO's Profile layer still seeds the selected Profile into the Space before
+  // Agent use; native Chrome windows therefore share the supported global
+  // BrowserContext while non-Chrome diagnostic surfaces retain isolated CEF
+  // contexts.
+  auto request_context = native_chrome_shell
+      ? CefRequestContext::GetGlobalContext()
+      : CefRequestContext::CreateContext(context_settings, nullptr);
   if (!request_context) return false;
 
   if (native_chrome_shell) {
@@ -495,11 +508,15 @@ void UfoCefApp::OnBeforeCommandLineProcessing(
     const CefString& process_type,
     CefRefPtr<CefCommandLine> command_line) {
   if (!process_type.empty()) return;
-  if (const char* attached = std::getenv("UFO_BROWSER_NATIVE_ATTACHED_HOST");
-      attached && std::string(attached) == "1") {
+  const char* attached = std::getenv("UFO_BROWSER_NATIVE_ATTACHED_HOST");
+  if (UfoCefPackagedHostPrepared() ||
+      (attached && std::string(attached) == "1")) {
     command_line->AppendSwitch("overview");
     if (!command_line->HasSwitch("profile-directory")) {
-      command_line->AppendSwitchWithValue("profile-directory", "Default");
+      const char* packaged_profile = UfoCefPackagedProfileDirectory();
+      command_line->AppendSwitchWithValue(
+          "profile-directory",
+          packaged_profile && *packaged_profile ? packaged_profile : "Default");
     }
   }
   AppendEnvironmentSwitch(command_line, "UFO_BROWSER_ATTACHED_OVERVIEW_URL",
@@ -542,7 +559,8 @@ void UfoCefApp::OnContextInitialized() {
                                   browser_settings, nullptr, nullptr);
     return;
   }
-  const bool overview = command_line->HasSwitch("overview");
+  const bool packaged_host = UfoCefPackagedHostPrepared();
+  const bool overview = packaged_host || command_line->HasSwitch("overview");
   // A non-Overview CEF host is a real browser shell by default. The explicit
   // switch is passed by UFO's runtime and makes the product invariant visible
   // in process inspection; --plain-page remains available only for host-level
@@ -551,12 +569,21 @@ void UfoCefApp::OnContextInitialized() {
       (command_line->HasSwitch("chrome-shell") ||
        !command_line->HasSwitch("plain-page"));
   auto handler = CefRefPtr<UfoCefHandler>(new UfoCefHandler(chrome_shell));
-  const auto control_socket = command_line->GetSwitchValue("control-socket").ToString();
+  auto control_socket = command_line->GetSwitchValue("control-socket").ToString();
+  if (control_socket.empty() && packaged_host) {
+    control_socket = UfoCefPackagedOverviewControlSocket();
+  }
   if (!control_socket.empty()) handler->StartControlSocket(control_socket);
-  const auto devtools_socket = command_line->GetSwitchValue("devtools-socket").ToString();
+  auto devtools_socket = command_line->GetSwitchValue("devtools-socket").ToString();
+  if (devtools_socket.empty() && packaged_host) {
+    devtools_socket = UfoCefPackagedDevToolsSocket();
+  }
   if (!devtools_socket.empty()) handler->StartDevToolsSocket(devtools_socket);
-  const auto presentation_socket =
+  auto presentation_socket =
       command_line->GetSwitchValue("presentation-socket").ToString();
+  if (presentation_socket.empty() && packaged_host) {
+    presentation_socket = UfoCefPackagedPresentationSocket();
+  }
   handler->SetPresentationSocket(presentation_socket);
   auto* handler_raw = handler.get();
   handler->SetSharedSpaceFactory(

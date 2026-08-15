@@ -392,15 +392,17 @@ export class NativeCefRuntime {
   async attach(options: NativeCefRuntimeOptions = {}) {
     if (this.isRunning()) return this.version();
     const merged = { ...this.defaults, ...options };
-    if (!merged.devtoolsSocket) {
-      throw new Error("Attached Native CEF host requires a private DevTools socket");
+    if (!merged.devtoolsSocket && !merged.port) {
+      throw new Error("Attached Native CEF host requires a DevTools transport");
     }
     if (!merged.controlSocket) {
       throw new Error("Attached Native CEF host requires a control socket");
     }
     this.port = merged.port;
     this.controlSocketPath = resolve(merged.controlSocket);
-    this.devtoolsSocketPath = resolve(merged.devtoolsSocket);
+    this.devtoolsSocketPath = merged.devtoolsSocket
+      ? resolve(merged.devtoolsSocket)
+      : undefined;
     this.attached = true;
     try {
       this.versionInfo = await this.waitForVersion(merged.startupTimeoutMs ?? 15_000);
@@ -615,6 +617,25 @@ export class NativeCefRuntime {
     return response;
   }
 
+  async captureSharedSpaceScreenshot(
+    spaceId: number,
+    format: "png" | "jpeg" = "png",
+    quality = 80,
+  ) {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "capture-space-screenshot",
+      spaceId,
+      format,
+      quality,
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    const result = JSON.parse(response);
+    if (!result?.ok || typeof result.data !== "string" || !result.data) {
+      throw new Error("Native CEF screenshot response is invalid");
+    }
+    return result.data as string;
+  }
+
   async showSharedSpaceAgentPointer(
     spaceId: number,
     x: number,
@@ -717,6 +738,7 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
   private started = false;
   private readonly browserRoute: string;
   private readonly ownedTargetIds = new Set<string>();
+  private readonly preexistingTargetIds = new Set<string>();
   private readonly targetProbeAt = new Map<string, number>();
   private readonly directTargetRoutes = new Map<string, string>();
   // A real Chrome Profile exposes a process-wide Target.getTargets result,
@@ -755,6 +777,11 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
     if (!this.host.isRunning()) {
       throw new Error("Native CEF shared host is not running");
     }
+    if (!this.host.usesPrivateBridge()) {
+      for (const target of await this.host.targets().catch(() => [])) {
+        this.preexistingTargetIds.add(target.id);
+      }
+    }
     await this.host.createSharedSpace(this.space);
     const deadline = Date.now() + 15_000;
     let browsers: NativeCefSpaceBrowser[] = [];
@@ -783,12 +810,41 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
       try {
         const result = await connection.send("Target.getTargets");
         const infos = result?.targetInfos || [];
+        const publicTargetsById = !this.host.usesPrivateBridge()
+          ? new Map(
+              (await this.host.targets().catch(() => []))
+                .map((target) => [target.id, target] as const),
+            )
+          : new Map<string, NativeCefTarget>();
         const selected = new Set<string>();
+        if (!this.host.usesPrivateBridge()) {
+          const requestedUrl = this.space.url;
+          const newlyCreatedPages = infos.filter((target: any) =>
+            target?.type === "page" &&
+            typeof target.targetId === "string" &&
+            !this.preexistingTargetIds.has(target.targetId));
+          const matchingPages = newlyCreatedPages.filter((target: any) =>
+            target.url === requestedUrl ||
+            (typeof target.url === "string" && target.url.startsWith(requestedUrl)));
+          // Snapshotting the process target set before create-space gives the
+          // public loopback transport an exact ownership boundary even when
+          // several Spaces open the same URL. Prefer the requested navigation;
+          // while it is still committing, the sole newly-created page is the
+          // deterministic primary target.
+          for (const target of matchingPages.length > 0
+            ? matchingPages
+            : newlyCreatedPages.length === 1
+              ? newlyCreatedPages
+              : []) {
+            this.ownedTargetIds.add(target.targetId);
+          }
+        }
         const realChromeProfile = Boolean(this.space.chromeProfileDirectory);
         const spaceBrowsers = prioritizeNativeSpaceBrowsers(
           await this.host.listSharedSpaceBrowsers(this.space.id),
         );
-        const directBrowserFrames = realChromeProfile
+        const directBrowserFrames = realChromeProfile &&
+          this.host.usesPrivateBridge()
           ? await this.resolveDirectBrowserFrames(spaceBrowsers, infos)
           : new Map<number, NativeBrowserFrameRoute>();
         const directRootTargets = new Map<string, string>();
@@ -908,6 +964,8 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
             openerId: remapParentTarget(target.openerId),
             browserContextId: target.browserContextId,
             ufoSpaceId: this.space.id,
+            webSocketDebuggerUrl:
+              publicTargetsById.get(target.targetId)?.webSocketDebuggerUrl,
           }));
         // Chrome Runtime creates window.open()/popup surfaces as sibling
         // CefBrowser instances. They live in this same UFO process and share
@@ -927,6 +985,7 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
           target.type === "page" && !target.id.startsWith("cef-browser:"),
         );
         for (const browser of spaceBrowsers) {
+          if (!this.host.usesPrivateBridge()) continue;
           const id = `cef-browser:${browser.browserId}`;
           this.directTargetRoutes.set(id, browser.route);
           const frameRoute = directBrowserFrames.get(browser.browserId);
@@ -1033,6 +1092,14 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
 
   override connectBrowser() {
     return this.host.connectBrowser(this.browserRoute);
+  }
+
+  override captureSharedSpaceScreenshot(
+    spaceId: number,
+    format: "png" | "jpeg" = "png",
+    quality = 80,
+  ) {
+    return this.host.captureSharedSpaceScreenshot(spaceId, format, quality);
   }
 
   rememberTargetId(targetId: string) {

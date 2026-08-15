@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
@@ -38,6 +38,41 @@ await new Promise((resolveListen) => fixture.listen(0, "127.0.0.1", resolveListe
 const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`;
 
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-bundle-smoke-"));
+const packagedProfileId = "profile-fixture";
+const packagedProfileDirectory = `UFO-${packagedProfileId}`;
+await mkdir(join(userData, packagedProfileDirectory), { recursive: true });
+await writeFile(join(userData, "profiles.json"), `${JSON.stringify({
+  version: 2,
+  defaultProfileId: packagedProfileId,
+  profiles: [
+    {
+      id: "default",
+      partitionId: "x-browser-profile-default",
+      name: "UFO Default",
+      kind: "local",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: packagedProfileId,
+      partitionId: `x-browser-profile-${packagedProfileId}`,
+      name: "Imported Fixture",
+      kind: "imported",
+      source: {
+        type: "chrome",
+        browser: "chrome",
+        profileDirName: "Profile 1",
+        displayName: "Profile Fixture",
+        importedAt: 1,
+        lastImportStatus: "success",
+        loginSyncEnabled: false,
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ],
+  pendingPartitionCleanup: [],
+})}\n`);
 const app = spawn(launcher, [], {
   cwd: appRoot,
   env: {
@@ -69,7 +104,7 @@ try {
   agent.stdin.end(
     `const task = await bootstrapTaskSpace({ name: 'native bundle smoke', url: ${JSON.stringify(fixtureUrl)} })\n` +
     "cliLog(`UFO_BUNDLE_SPACE:${task.id}`)\n" +
-    "cliLog((await pageInfo()).title)\n" +
+    "cliLog(JSON.stringify({ page: await pageInfo(), tabs: await listTabs() }))\n" +
     "cliLog(await captureScreenshot())\n",
   );
   const exitCode = await waitForExit(agent, 30_000, "packaged CLI", () =>
@@ -101,6 +136,9 @@ try {
       !presentation?.nativeSpacesButtonSpaceIds?.includes(spaceId)) {
     throw new Error(`Packaged Space did not mount inside the UFO controller: ${JSON.stringify(presentation)}\n${appStderr}`);
   }
+  if (presentation.profileDirectory !== packagedProfileDirectory) {
+    throw new Error(`Packaged CEF host ignored the selected default Profile: ${JSON.stringify(presentation)}`);
+  }
   const closed = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
   if (!closed.ok) throw new Error(`Packaged Space did not close: ${JSON.stringify(closed)}`);
   await sendSocket(controlSocket, JSON.stringify({ command: "request-main-window-close" })).catch(() => undefined);
@@ -125,6 +163,7 @@ try {
     agent: true,
     screenshot: true,
     nativeChromeProductShell: true,
+    selectedProfileOwnsBrowserContext: true,
     spaceMountedInsideUfoController: true,
     nativeOverviewCloseQuits: true,
   }));

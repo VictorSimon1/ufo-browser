@@ -43,6 +43,10 @@ const overviewControlSocket = resolve(
 const sharedHostEnabled = process.env.UFO_BROWSER_NATIVE_SHARED_HOST !== "0";
 const attachedHostEnabled = process.env.UFO_BROWSER_NATIVE_ATTACHED_HOST === "1";
 const attachedHostPid = Number(process.env.UFO_BROWSER_NATIVE_HOST_PID || 0);
+const attachedHostReadyFile = process.env.UFO_BROWSER_NATIVE_ATTACH_READY_FILE;
+const attachedHostDevtoolsPort = Number(
+  process.env.UFO_BROWSER_NATIVE_DEVTOOLS_PORT || 0,
+);
 const sharedHostDevtoolsSocket = resolve(
   process.env.UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET ||
     join(
@@ -66,7 +70,6 @@ const profiles = new BrowserProfileRegistry(
 );
 await profiles.initialize();
 let profileSync: NativeCefProfileSync | undefined;
-let sharedHostRuntime: NativeCefRuntime | undefined;
 const keychainHelper = process.env.UFO_BROWSER_KEYCHAIN_HELPER ||
   process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER ||
   join(homedir(), "Library/Application Support/UFO-Browser", "ufo-keychain-helper");
@@ -181,11 +184,16 @@ if (sharedHostEnabled) {
     userDataDir: userDataPath,
     controlSocket: overviewControlSocket,
     presentationSocket,
-    devtoolsSocket: sharedHostDevtoolsSocket,
+    port: attachedHostDevtoolsPort > 0 ? attachedHostDevtoolsPort : undefined,
+    devtoolsSocket: attachedHostDevtoolsPort > 0
+      ? undefined
+      : sharedHostDevtoolsSocket,
     useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   });
-  sharedHostRuntime = sharedHost;
   if (attachedHostEnabled) {
+    if (attachedHostReadyFile) {
+      await waitForAttachReady(attachedHostReadyFile, attachedHostPid);
+    }
     await sharedHost.attach();
     manager.setSharedHost(sharedHost, false);
   } else {
@@ -219,18 +227,10 @@ const attachedHostMonitor = attachedHostEnabled && Number.isInteger(attachedHost
     }, 1_000)
   : undefined;
 attachedHostMonitor?.unref();
-const ownedHostMonitor = !attachedHostEnabled && sharedHostRuntime
-  ? setInterval(() => {
-      if (shuttingDown || sharedHostRuntime?.isRunning()) return;
-      void shutdown().finally(() => process.exit(0));
-    }, 500)
-  : undefined;
-ownedHostMonitor?.unref();
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   if (attachedHostMonitor) clearInterval(attachedHostMonitor);
-  if (ownedHostMonitor) clearInterval(ownedHostMonitor);
   await server.close().catch(() => undefined);
   await profileSync?.close().catch(() => undefined);
   await manager.shutdown().catch(() => undefined);
@@ -262,6 +262,25 @@ async function firstFile(...paths: string[]) {
     }
   }
   return undefined;
+}
+
+async function waitForAttachReady(path: string, hostPid: number, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const info = await lstat(path);
+      if (info.isFile() && !info.isSymbolicLink()) return;
+    } catch {}
+    if (Number.isInteger(hostPid) && hostPid > 1) {
+      try {
+        process.kill(hostPid, 0);
+      } catch {
+        throw new Error("Native CEF host exited before Agent attach was released");
+      }
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  throw new Error(`Native CEF host did not release Agent attach: ${path}`);
 }
 
 function profileSourceRoot(profile: BrowserProfileRecord, fallbackRoot: string) {
