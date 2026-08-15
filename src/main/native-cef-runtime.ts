@@ -58,6 +58,8 @@ export type NativeCefSharedSpaceSpec = {
   name?: string;
   profileName?: string;
   visible?: boolean;
+  /** False for internal Profile transactions that need no human Chrome UI. */
+  chromeShell?: boolean;
 };
 
 type NativeCefSpaceBrowser = {
@@ -832,8 +834,28 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
 
   override async stop() {
     if (!this.started) return;
-    this.started = false;
     await this.host.controlSharedSpace(this.space.id, "close-space").catch(() => undefined);
+    // `close-space` initiates CEF/AppKit teardown but returns before
+    // OnWindowDestroyed unregisters the RequestContext. Profile transactions
+    // must wait for that boundary so their partition is no longer receiving
+    // Chromium writes when import/clone publishes it.
+    const deadline = Date.now() + 5_000;
+    while (this.host.isRunning() && Date.now() < deadline) {
+      try {
+        await this.host.controlSharedSpace(this.space.id, "status-space");
+      } catch (error) {
+        if (String(error).includes("space-not-found") || !this.host.isRunning()) {
+          this.started = false;
+          return;
+        }
+        throw error;
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+    }
+    this.started = false;
+    if (this.host.isRunning()) {
+      throw new Error(`Native CEF shared Space ${this.space.id} did not finish closing`);
+    }
   }
 
   override async control(

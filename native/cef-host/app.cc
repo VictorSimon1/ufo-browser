@@ -61,8 +61,14 @@ class UfoWindowDelegate final : public CefWindowDelegate {
     // by the Presentation Coordinator, avoiding a visible flash or focus
     // steal while an Agent is bootstrapping a Space.
     auto command_line = CefCommandLine::GetGlobalCommandLine();
-    if (present_on_start_ || command_line->HasSwitch("overview") ||
-        command_line->HasSwitch("show-on-start")) {
+    // `--overview` and `--show-on-start` describe the process's initial main
+    // window only. Shared Space/Profile surfaces are created later inside the
+    // same Host and must not inherit those process-wide switches or flash in
+    // front of the human.
+    const bool process_main_window_visible = main_window_ &&
+        (command_line->HasSwitch("overview") ||
+         command_line->HasSwitch("show-on-start"));
+    if (present_on_start_ || process_main_window_visible) {
       window->Show();
       UfoCefWindowSetPresented(window->GetWindowHandle(), true);
     } else {
@@ -259,6 +265,8 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   const auto url = spec->GetString("url").ToString();
   const auto cache_path = spec->GetString("cachePath").ToString();
   if (space_id <= 0 || url.empty() || cache_path.empty()) return false;
+  const bool chrome_shell = !spec->HasKey("chromeShell") ||
+                            spec->GetBool("chromeShell");
 
   CefRequestContextSettings context_settings;
   const auto canonical_cache = std::filesystem::weakly_canonical(
@@ -272,11 +280,11 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   CefBrowserSettings browser_settings;
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, url, browser_settings, nullptr, request_context,
-      new UfoBrowserViewDelegate(true));
+      new UfoBrowserViewDelegate(chrome_shell));
   CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(
       browser_view,
       spec->GetBool("visible"),
-      true,
+      chrome_shell,
       false,
       space_id,
       spec->GetString("name").ToString(),

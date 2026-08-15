@@ -121,21 +121,19 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    and completion.
 3. **Profiles and login state** — the current native vertical slice gives each
    Space a private CEF user-data directory, which avoids Chromium profile-lock
-   races while preserving full browser persistence within that Space. The
-   next profile gate will seed that directory from the selected UFO Profile
-   and route Cookie/storage deltas through CEF's `CefCookieManager`. Existing
-   Chrome decryption, compatibility preflight, rollback, and redacted
-   reporting stay in the Node service; only the final Chromium write adapter
-   changes. Native Spaces now seed a fresh persistent CEF directory once from
-   the selected UFO Profile. The seed allowlists Chromium login/storage
+   races while preserving full browser persistence within that Space. Native
+   Spaces seed a fresh persistent CEF directory once from the selected UFO
+   Profile and route Cookie operations through the CEF/CDP adapter. The seed
+   allowlists Chromium login/storage
    datasets and Cookie databases, skips password/history/extension data and
    singleton locks, and writes `.ufo-profile-seed.json` so an active native
-   Space is never overwritten on a later launch. A shared persistent Profile
-   runtime will be added only after the RequestContext/target lifecycle is
-   implemented, rather than launching two CEF processes against one locked
-   directory. Development smoke runs may set `UFO_CEF_USE_MOCK_KEYCHAIN=1`;
-   release builds must use the signed macOS Keychain path instead of shipping
-   the mock switch.
+   Space is never overwritten on a later launch. Chrome import and UFO Profile
+   clone create a short-lived, toolbar-free RequestContext inside the same UFO
+   CEF Host; they no longer launch a second browser main process against the
+   target directory. The internal transaction surface is never presented and
+   is destroyed after Cookie verification. Development smoke runs may set
+   `UFO_CEF_USE_MOCK_KEYCHAIN=1`; release builds must use the signed macOS
+   Keychain path instead of shipping the mock switch.
 4. **Task Spaces** — map each Space to a request context and browser target in
    the one shared UFO Host. Keep the presented Space and Agent-owned Spaces
    compositor-awake; park ordinary warm background Space windows without
@@ -223,6 +221,11 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    Overview. Closing Overview uses UFO's bounded product shutdown path so the
    CEF main process, managed Agent service, and Chromium helpers do not remain
    alive without a window.
+
+   Process-level `--overview` and `--show-on-start` switches apply only to the
+   initial main window. Shared Space and Profile-operation surfaces use their
+   own per-window visibility role, so background Agent bootstrap, Profile
+   import, and clone cannot flash another window in front of the user.
 
    Native Profile Cookie sync is also connected to the CEF Agent. A running
    persistent Space gets an independent Cookie checkpoint and receives source

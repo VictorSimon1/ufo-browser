@@ -19,7 +19,7 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **One-time Spaces** — the built-in Temporary Profile creates a fresh memory-backed Chromium Session for every human or Agent Space; Cookie, LocalStorage, IndexedDB, Service Worker, cache, and permission state are never shared, closing clears the Session, and App restart never restores it.
 - **One-click Chrome login import and opt-in sync** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile, then incrementally follow that Profile without modifying Chrome or reviving a UFO logout.
 - **No visible automation cursor** — Agent input never moves the macOS pointer and does not rely on OS-level keyboard or mouse automation.
-- **One UFO browser host** — Overview and every Space are scheduled inside one shared UFO CEF main process; Spaces never launch separate browser Hosts.
+- **One UFO browser host** — Overview, every Space, and internal Profile Cookie transactions are scheduled inside one shared UFO CEF main process; they never launch separate browser Hosts.
 - **Bounded background rendering** — ordinary warm background Spaces park their native compositor without losing page state; Agent-owned Spaces stay awake only while automation requires them.
 - **Live Overview** — persistent 3:2 Space previews update with page activity while using adaptive capture cadence and caching.
 - **Ego-compatible Agent API** — the JavaScript helper surface supports the familiar Task Space, snapshot, input, wait, fetch, screenshot, and CDP workflows.

@@ -57,6 +57,15 @@ try {
   if (cliCode !== 0) throw new Error(`native CLI bootstrap failed (${cliCode})\n${stdout}\n${stderr}`);
   const spaceId = Number(stdout.trim().split(/\s+/).at(-1));
   if (!Number.isInteger(spaceId) || spaceId <= 0) throw new Error(`invalid Space id: ${stdout}`);
+  await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+  const afterBackgroundBootstrap = await presentationStatus(controlSocket);
+  if (!afterBackgroundBootstrap.overviewPresented ||
+      afterBackgroundBootstrap.presentedWindowCount !== 1 ||
+      afterBackgroundBootstrap.visibleSpaceId !== 0 ||
+      afterBackgroundBootstrap.presentedSpaceIds?.includes(spaceId) ||
+      !afterBackgroundBootstrap.awakeSpaceIds?.includes(spaceId)) {
+    throw new Error(`Background Agent bootstrap must stay inside the hidden shared Host surface: ${JSON.stringify(afterBackgroundBootstrap)}`);
+  }
   const spacesUrl = `http://${info.host}:${info.port}/api/spaces`;
   const profilesResponse = await fetch(`http://${info.host}:${info.port}/api/profiles`).then((response) => response.json());
   if (!Array.isArray(profilesResponse.profiles) || profilesResponse.profiles.length === 0) {
@@ -187,6 +196,7 @@ try {
     opened: true,
     closed: true,
     onePresentedWindow: true,
+    backgroundBootstrapDoesNotFlash: true,
     chromeControlsFollowWarmSpace: true,
     backgroundClosePreservesControls: true,
     agentOwnedNativeCloseBlocked: true,

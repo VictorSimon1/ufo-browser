@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { NativeCefApplication } from "../dist/main/native-cef-application.js";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
@@ -34,22 +35,59 @@ try {
   assert.equal(discovered.running, false);
   assert.equal(discovered.profiles?.[0]?.profileDirName, "Default");
 
-  const imported = await fetch(`${info.url}api/chrome/import`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ profileDirName: "Default", makeDefault: true, allowPartial: true }),
-  }).then((response) => response.json());
+  let monitorRunning = true;
+  let maxMainHostCount = 0;
+  const hostMonitor = (async () => {
+    while (monitorRunning) {
+      const processes = await ps();
+      const mainHosts = processes.filter((line) =>
+        line === executable || line.startsWith(`${executable} `));
+      maxMainHostCount = Math.max(maxMainHostCount, mainHosts.length);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+    }
+  })();
+  let imported;
+  try {
+    imported = await fetch(`${info.url}api/chrome/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profileDirName: "Default", makeDefault: true, allowPartial: true }),
+    }).then((response) => response.json());
+  } finally {
+    monitorRunning = false;
+    await hostMonitor;
+  }
   assert.equal(imported.status, "success", JSON.stringify(imported));
   assert.equal(imported.cookies.imported, 1, JSON.stringify(imported));
+  assert.equal(maxMainHostCount, 1, `Profile import launched ${maxMainHostCount} UFO CEF main processes`);
 
   const profiles = await fetch(`${info.url}api/profiles`).then((response) => response.json());
   const importedProfile = profiles.profiles?.find((profile) => profile.source?.type === "chrome");
   assert.ok(importedProfile, "Native Overview did not publish the imported Chrome Profile");
   assert.equal(importedProfile.isDefault, true);
-  console.log(JSON.stringify({ nativeProfileImport: true, importedCookies: imported.cookies.imported }));
+  console.log(JSON.stringify({
+    nativeProfileImport: true,
+    importedCookies: imported.cookies.imported,
+    oneUfoMainProcessDuringProfileImport: true,
+  }));
 } finally {
   await app.stop();
   await rm(testRoot, { recursive: true, force: true });
+}
+
+function ps() {
+  return new Promise((resolvePs, rejectPs) => {
+    const child = spawn("/bin/ps", ["-axo", "command"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.once("error", rejectPs);
+    child.once("exit", (code) => code === 0
+      ? resolvePs(output.split("\n"))
+      : rejectPs(new Error(`ps failed (${code})`)));
+  });
 }
 
 async function createChromeFixture(chromeRootPath, secretText) {

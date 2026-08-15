@@ -59,6 +59,8 @@ export class NativeCefTaskSpaceManager {
   private sharedHost?: NativeCefRuntime;
   private ownsSharedHost = false;
   private presentationHooks?: NativeCefPresentationHooks;
+  private nextInternalSpaceId = 0x7fffffff;
+  private readonly internalSpaceIds = new Set<number>();
 
   constructor(private readonly options: NativeCefTaskSpaceManagerOptions) {
     this.sharedHost = options.sharedHost;
@@ -491,6 +493,47 @@ export class NativeCefTaskSpaceManager {
     const targetPartition = partitionId || this.options.profiles.getOrThrow(profileId).partitionId;
     const dataDir = join(this.options.partitionsRoot, targetPartition);
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
+    // The production Native app already owns one shared UFO CEF Host. Profile
+    // import/clone must create its short-lived RequestContext inside that Host
+    // instead of launching a second browser process against the target data.
+    if (this.sharedHost?.isRunning()) {
+      const internalSpaceId = this.allocateInternalSpaceId();
+      const runtime = new NativeCefSharedSpaceRuntime(this.sharedHost, {
+        id: internalSpaceId,
+        url: "https://example.com/",
+        cachePath: dataDir,
+        name: "Profile Operation",
+        profileName: profileId,
+        visible: false,
+        chromeShell: false,
+      });
+      try {
+        await runtime.start();
+        const target = await this.createCookieTargetForRuntime(runtime, "https://example.com/");
+        const disposeTarget = target.dispose;
+        let disposed = false;
+        target.dispose = async () => {
+          if (disposed) return;
+          disposed = true;
+          try {
+            await disposeTarget();
+          } finally {
+            try {
+              await runtime.stop();
+            } finally {
+              this.internalSpaceIds.delete(internalSpaceId);
+            }
+          }
+        };
+        return target;
+      } catch (error) {
+        await runtime.stop().catch(() => undefined);
+        this.internalSpaceIds.delete(internalSpaceId);
+        throw error;
+      }
+    }
+    // Explicit standalone runtimes remain only for isolated component tests
+    // and legacy callers that do not provide the product's shared Host.
     const controlSocket = join(
       this.options.controlSocketsRoot || join(this.options.partitionsRoot, "..", "Control"),
       `profile-${randomUUID()}.sock`,
@@ -704,6 +747,16 @@ export class NativeCefTaskSpaceManager {
 
   private runtimePortOffset(key: string) {
     return Number(key.replace(/\D/g, "")) || 1;
+  }
+
+  private allocateInternalSpaceId() {
+    while (this.nextInternalSpaceId > 1_000_000_000) {
+      const candidate = this.nextInternalSpaceId--;
+      if (this.internalSpaceIds.has(candidate) || this.getSpace(candidate)) continue;
+      this.internalSpaceIds.add(candidate);
+      return candidate;
+    }
+    throw new Error("Native CEF internal Space id range exhausted");
   }
 
   private async createNativeCookieTarget(runtime: NativeCefRuntime, space: SpaceRecord): Promise<CookieWriteTarget> {
