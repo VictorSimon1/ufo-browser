@@ -8,12 +8,15 @@
 #include <utility>
 
 #include "include/cef_browser.h"
+#include "include/base/cef_callback.h"
 #include "include/cef_command_line.h"
 #include "include/cef_parser.h"
 #include "include/cef_request_context.h"
 #include "include/cef_values.h"
+#include "include/views/cef_box_layout.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_window.h"
+#include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 #include "native/cef-host/handler.h"
 #include "native/cef-host/overlay_mac.h"
@@ -48,7 +51,17 @@ class UfoWindowDelegate final : public CefWindowDelegate {
         presentation_socket_(std::move(presentation_socket)) {}
 
   void OnWindowCreated(CefRefPtr<CefWindow> window) override {
+    // Chrome Runtime exposes its real toolbar as a CefView, but CEF does not
+    // insert that view into application-owned windows. Match cefclient's
+    // native Views layout: toolbar at the top and BrowserView flexing into the
+    // remaining space. Without this layout `CEF_CTT_NORMAL` is only an opt-in
+    // flag and UFO still looks like a frameless page host.
+    CefBoxLayoutSettings layout_settings;
+    layout_settings.horizontal = false;
+    layout_settings.between_child_spacing = 0;
+    auto layout = window->SetToBoxLayout(layout_settings);
     window->AddChildView(browser_view_);
+    layout->SetFlexForView(browser_view_, 1);
     if (auto* handler = UfoCefHandler::GetInstance()) {
       if (main_window_) handler->SetMainWindow(window);
       if (space_id_ > 0) handler->RegisterSpaceWindow(space_id_, window);
@@ -134,8 +147,10 @@ class UfoWindowDelegate final : public CefWindowDelegate {
     UfoCefChromeControlsClear(window->GetWindowHandle());
     if (auto* handler = UfoCefHandler::GetInstance()) {
       if (space_id_ > 0) {
+        handler->SetSpaceChromeToolbarAttached(space_id_, false);
         handler->SetSpaceAgentConnectionActive(space_id_, false);
       } else if (main_window_) {
+        handler->SetMainChromeToolbarAttached(false);
         handler->SetAgentConnectionActive(false);
       }
     }
@@ -198,8 +213,22 @@ class UfoWindowDelegate final : public CefWindowDelegate {
 
 class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
  public:
-  explicit UfoBrowserViewDelegate(bool chrome_shell)
-      : chrome_shell_(chrome_shell) {}
+  explicit UfoBrowserViewDelegate(bool chrome_shell,
+                                  int space_id = 0,
+                                  bool main_window = false)
+      : chrome_shell_(chrome_shell),
+        space_id_(space_id),
+        main_window_(main_window) {}
+
+  CefRefPtr<CefBrowserViewDelegate> GetDelegateForPopupBrowserView(
+      CefRefPtr<CefBrowserView> browser_view,
+      const CefBrowserSettings& settings,
+      CefRefPtr<CefClient> client,
+      bool is_devtools) override {
+    // Popups keep native Chrome behavior but must not share the primary
+    // BrowserView delegate's toolbar lifecycle bookkeeping.
+    return new UfoBrowserViewDelegate(chrome_shell_ && !is_devtools);
+  }
 
   bool OnPopupBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view,
                                  CefRefPtr<CefBrowserView> popup_browser_view,
@@ -214,6 +243,37 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
     CefWindow::CreateTopLevelWindow(
         new UfoWindowDelegate(popup_browser_view, true, false, false));
     return true;
+  }
+
+  void OnWindowChanged(CefRefPtr<CefView> view, bool added) override {
+    if (!chrome_shell_) return;
+    if (!added) {
+      if (toolbar_attached_) SetToolbarAttached(false);
+      return;
+    }
+    auto browser_view = view ? view->AsBrowserView() : nullptr;
+    auto window = view ? view->GetWindow() : nullptr;
+    if (!browser_view || !window) return;
+    // CEF initializes the native Chrome toolbar as part of this exact
+    // BrowserView-to-Window transition. Calling GetChromeToolbar before or
+    // after this callback can legitimately return null in Chrome Runtime 151.
+    // cefclient installs the toolbar from the same callback.
+    auto toolbar = browser_view->GetChromeToolbar();
+    if (!toolbar) return;
+    // Add and lay out the toolbar after this hierarchy-change callback
+    // returns. Mutating the same child list from inside OnWindowChanged can
+    // leave BoxLayout with stale children and BrowserView at y=0, causing the
+    // page compositor to cover the native controls.
+    CefPostTask(TID_UI, base::BindOnce(
+        [](CefRefPtr<UfoBrowserViewDelegate> delegate,
+           CefRefPtr<CefBrowserView> target_browser_view,
+           CefRefPtr<CefView> target_toolbar,
+           CefRefPtr<CefWindow> target_window) {
+          delegate->FinalizeChromeToolbarLayout(
+              target_browser_view, target_toolbar, target_window);
+        },
+        CefRefPtr<UfoBrowserViewDelegate>(this), browser_view, toolbar,
+        window));
   }
 
   cef_runtime_style_t GetBrowserRuntimeStyle() override {
@@ -232,7 +292,54 @@ class UfoBrowserViewDelegate final : public CefBrowserViewDelegate {
   }
 
  private:
+  void FinalizeChromeToolbarLayout(
+      CefRefPtr<CefBrowserView> browser_view,
+      CefRefPtr<CefView> toolbar,
+      CefRefPtr<CefWindow> window) {
+    CEF_REQUIRE_UI_THREAD();
+    if (!browser_view || !toolbar || !window || window->IsClosed()) {
+      return;
+    }
+    // GetChromeToolbar may initially report Chromium's internal parent. CEF's
+    // cefclient deliberately adds it unconditionally so CefWindow reparents
+    // the View into the application-owned BoxLayout.
+    window->AddChildViewAt(toolbar, 0);
+    // Chromium returns the toolbar hidden while it is owned by its internal
+    // container. Make it visible after UFO reparents it or BoxLayout excludes
+    // the toolbar and leaves BrowserView covering the same y=0 region.
+    toolbar->SetVisible(true);
+    auto layout = window->GetLayout();
+    auto box_layout = layout ? layout->AsBoxLayout() : nullptr;
+    if (box_layout) box_layout->SetFlexForView(browser_view, 1);
+    window->Layout();
+    const auto toolbar_bounds = toolbar->GetBounds();
+    const auto browser_bounds = browser_view->GetBounds();
+    // Require non-overlapping, full-width layout before advertising runtime
+    // success. This keeps smoke tests from accepting a toolbar hidden behind
+    // the page compositor.
+    if (toolbar_bounds.width <= 0 || toolbar_bounds.height <= 0 ||
+        toolbar_bounds.width < browser_bounds.width ||
+        browser_bounds.y < toolbar_bounds.y + toolbar_bounds.height) {
+      return;
+    }
+    toolbar_attached_ = true;
+    SetToolbarAttached(true);
+  }
+
+  void SetToolbarAttached(bool attached) {
+    if (auto* handler = UfoCefHandler::GetInstance()) {
+      if (space_id_ > 0) {
+        handler->SetSpaceChromeToolbarAttached(space_id_, attached);
+      } else if (main_window_) {
+        handler->SetMainChromeToolbarAttached(attached);
+      }
+    }
+  }
+
   const bool chrome_shell_;
+  const int space_id_;
+  const bool main_window_;
+  bool toolbar_attached_ = false;
   IMPLEMENT_REFCOUNTING(UfoBrowserViewDelegate);
 };
 
@@ -280,7 +387,7 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   CefBrowserSettings browser_settings;
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, url, browser_settings, nullptr, request_context,
-      new UfoBrowserViewDelegate(chrome_shell));
+      new UfoBrowserViewDelegate(chrome_shell, space_id));
   CefWindow::CreateTopLevelWindow(new UfoWindowDelegate(
       browser_view,
       spec->GetBool("visible"),
@@ -386,7 +493,7 @@ void UfoCefApp::OnContextInitialized() {
       overview ? static_cast<CefRefPtr<CefBrowserViewDelegate>>(
           new UfoOverviewBrowserViewDelegate())
                : static_cast<CefRefPtr<CefBrowserViewDelegate>>(
-          new UfoBrowserViewDelegate(chrome_shell)));
+          new UfoBrowserViewDelegate(chrome_shell, 0, true)));
   CefWindow::CreateTopLevelWindow(
       new UfoWindowDelegate(browser_view, false, !overview));
   CreateSharedManifestSpaces(handler, command_line);

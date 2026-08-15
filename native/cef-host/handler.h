@@ -54,6 +54,8 @@ class UfoCefHandler final : public CefClient,
   void RegisterPopupBrowser(CefRefPtr<CefBrowser> parent,
                             CefRefPtr<CefBrowser> popup);
   void RegisterSpaceWindow(int space_id, CefRefPtr<CefWindow> window);
+  void SetMainChromeToolbarAttached(bool attached);
+  void SetSpaceChromeToolbarAttached(int space_id, bool attached);
   void SetPresentationSocket(std::string path);
   void SetSharedSpaceFactory(
       std::function<std::string(const std::string&)> factory);
@@ -100,6 +102,8 @@ class UfoCefHandler final : public CefClient,
   std::map<int, std::string> browser_download_dirs_;
   std::map<std::string, std::string> context_download_dirs_;
   std::map<int, CefRefPtr<CefWindow>> space_windows_;
+  bool main_chrome_toolbar_attached_ = false;
+  std::set<int> chrome_toolbar_spaces_;
   std::set<int> agent_active_spaces_;
   std::set<int> closing_spaces_;
   int visible_space_id_ = 0;

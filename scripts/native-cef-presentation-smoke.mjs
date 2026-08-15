@@ -93,6 +93,7 @@ try {
       spacePresentation.presentedWindowCount !== 1 ||
       spacePresentation.visibleSpaceId !== spaceId ||
       !spacePresentation.presentedSpaceIds?.includes(spaceId) ||
+      !spacePresentation.chromeToolbarSpaceIds?.includes(spaceId) ||
       !spacePresentation.chromeControlsPresented ||
       spacePresentation.chromeControlsSpaceId !== spaceId) {
     throw new Error(`Space must be the only presented Native window: ${JSON.stringify(spacePresentation)}`);
@@ -102,6 +103,7 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
   const createdPresentation = await presentationStatus(controlSocket);
   if (createdPresentation.visibleSpaceId !== createdSpaceId ||
+      !createdPresentation.chromeToolbarSpaceIds?.includes(createdSpaceId) ||
       createdPresentation.chromeControlsSpaceId !== createdSpaceId) {
     throw new Error(`Chrome controls did not follow the second warm Space: ${JSON.stringify(createdPresentation)}`);
   }
@@ -198,6 +200,7 @@ try {
     onePresentedWindow: true,
     backgroundBootstrapDoesNotFlash: true,
     chromeControlsFollowWarmSpace: true,
+    nativeChromeToolbarAttached: true,
     backgroundClosePreservesControls: true,
     agentOwnedNativeCloseBlocked: true,
     nativeCloseUsesSpaceStateMachine: true,

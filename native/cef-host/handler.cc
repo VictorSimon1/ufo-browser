@@ -355,6 +355,22 @@ void UfoCefHandler::RegisterSpaceWindow(int space_id,
   }
 }
 
+void UfoCefHandler::SetMainChromeToolbarAttached(bool attached) {
+  CEF_REQUIRE_UI_THREAD();
+  main_chrome_toolbar_attached_ = attached;
+}
+
+void UfoCefHandler::SetSpaceChromeToolbarAttached(int space_id,
+                                                  bool attached) {
+  CEF_REQUIRE_UI_THREAD();
+  if (space_id <= 0) return;
+  if (attached) {
+    chrome_toolbar_spaces_.insert(space_id);
+  } else {
+    chrome_toolbar_spaces_.erase(space_id);
+  }
+}
+
 bool UfoCefHandler::IsSpaceAgentConnectionActive(int space_id) const {
   return space_id > 0 && agent_active_spaces_.count(space_id) > 0;
 }
@@ -546,6 +562,7 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       auto active_spaces = CefListValue::Create();
       auto awake_spaces = CefListValue::Create();
       auto sleeping_spaces = CefListValue::Create();
+      auto chrome_toolbar_spaces = CefListValue::Create();
       int chrome_controls_space_id = 0;
       const bool overview_presented =
           main_window_ && !main_window_->IsClosed() &&
@@ -582,6 +599,13 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       response->SetList("agentActiveSpaceIds", active_spaces);
       response->SetList("awakeSpaceIds", awake_spaces);
       response->SetList("sleepingSpaceIds", sleeping_spaces);
+      for (const int candidate_id : chrome_toolbar_spaces_) {
+        chrome_toolbar_spaces->SetInt(chrome_toolbar_spaces->GetSize(),
+                                      candidate_id);
+      }
+      response->SetBool("mainChromeToolbarAttached",
+                        main_chrome_toolbar_attached_);
+      response->SetList("chromeToolbarSpaceIds", chrome_toolbar_spaces);
       bool overlay_presented = false;
       bool overlay_actions_available = false;
       if (visible_space_id_ > 0) {

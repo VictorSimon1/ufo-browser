@@ -3,12 +3,14 @@ import { access, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
 const userData = await mkdtemp(join(tmpdir(), "ufo-native-chrome-shell-"));
+const controlSocket = `/tmp/ufo-chrome-${process.pid}-${Date.now()}.sock`;
 const executable = join(root, "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host");
 await access(executable);
-const child = spawn(executable, ["--url=https://example.com/", `--user-data-dir=${userData}`, "--chrome-shell", "--show-on-start"], {
+const child = spawn(executable, ["--url=https://example.com/", `--user-data-dir=${userData}`, `--control-socket=${controlSocket}`, "--chrome-shell", "--show-on-start"], {
   cwd: root,
   stdio: ["ignore", "ignore", "pipe"],
   detached: true,
@@ -27,10 +29,26 @@ try {
     child.once("error", rejectReady);
     child.once("exit", (code) => rejectReady(new Error(`CEF shell exited ${code}\n${stderr}`)));
   });
-  assert.match(await readSource(join(root, "native/cef-host/app.cc")), /CEF_CTT_NORMAL/);
-  assert.match(await readSource(join(root, "native/cef-host/app.cc")), /return CEF_RUNTIME_STYLE_CHROME;/);
-  assert.match(await readSource(join(root, "native/cef-host/app.cc")), /HasSwitch\("chrome-shell"\)/);
-  console.log(JSON.stringify({ chromeRuntime: true, nativeToolbar: true, explicitChromeShell: true }));
+  const source = await readSource(join(root, "native/cef-host/app.cc"));
+  assert.match(source, /CEF_CTT_NORMAL/);
+  assert.match(source, /return CEF_RUNTIME_STYLE_CHROME;/);
+  assert.match(source, /HasSwitch\("chrome-shell"\)/);
+  assert.match(source, /GetChromeToolbar\(\)/);
+  assert.match(source, /AddChildViewAt\(toolbar, 0\)/);
+  let status;
+  const statusDeadline = Date.now() + 5_000;
+  while (Date.now() < statusDeadline) {
+    try {
+      status = JSON.parse(await sendSocket(controlSocket, JSON.stringify({ command: "presentation-status" })));
+      if (status.mainChromeToolbarAttached) break;
+    } catch {
+      // The native control socket and first toolbar layout become ready
+      // asynchronously during cold start.
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  assert.equal(status?.mainChromeToolbarAttached, true, `native toolbar was not visibly laid out: ${JSON.stringify(status)}`);
+  console.log(JSON.stringify({ chromeRuntime: true, nativeToolbar: true, visibleNativeToolbar: true, explicitChromeShell: true }));
 } finally {
   if (child.exitCode === null) signalProcessGroup(child, "SIGTERM");
   const exit = await waitForExit(child, 5_000);
@@ -40,14 +58,33 @@ try {
     throw new Error(`CEF shell did not terminate after SIGTERM\n${stderr}`);
   }
   const canonical = await realpath(userData);
-  const processes = await listProcesses();
-  const leaked = processes.filter((line) =>
-    (line.includes(userData) || line.includes(canonical)) && /ufo-cef-host/.test(line),
-  );
+  const processDeadline = Date.now() + 3_000;
+  let leaked = [];
+  while (Date.now() < processDeadline) {
+    const processes = await listProcesses();
+    leaked = processes.filter((line) =>
+      (line.includes(userData) || line.includes(canonical)) && /ufo-cef-host/.test(line),
+    );
+    if (leaked.length === 0) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  await rm(controlSocket, { force: true });
+  await rm(userData, { recursive: true, force: true });
   if (leaked.length) {
     throw new Error(`CEF shell left helper processes alive:\n${leaked.join("\n")}`);
   }
-  await rm(userData, { recursive: true, force: true });
+}
+
+function sendSocket(path, command) {
+  return new Promise((resolveStatus, rejectStatus) => {
+    const socket = createConnection(path);
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { response += chunk; });
+    socket.once("error", rejectStatus);
+    socket.once("close", () => resolveStatus(response.trim()));
+    socket.once("connect", () => socket.write(`${command}\n`));
+  });
 }
 
 function signalProcessGroup(child, signal) {
