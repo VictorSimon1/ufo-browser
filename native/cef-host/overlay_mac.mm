@@ -924,7 +924,7 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
       }
     } completionHandler:^{
       if (!presented && host != gProductControllerWindow &&
-          host == gMountedSpaceWindow) {
+          host == gMountedSpaceWindow && host.ignoresMouseEvents) {
         // Detach the visual surface from the controller, but leave ordering
         // policy to UfoCefWindowSetCompositorAwake. Agent-owned background
         // Spaces must remain compositor-awake at alpha 0 for screenshots and
@@ -1077,8 +1077,13 @@ void UfoCefProductControllerClear(void* cef_view_handle) {
 
 bool UfoCefWindowIsMountedInProductController(void* cef_view_handle) {
   NSWindow* host = HostWindowForCefHandle(cef_view_handle);
-  return host && host == gMountedSpaceWindow &&
-      host.parentWindow == gProductControllerWindow;
+  // Chromium-owned Chrome Runtime windows can transiently report a nil
+  // parentWindow even after addChildWindow:, especially when the product host
+  // was launched by UFO's supervisor process. UFO's mount contract is the
+  // retained mounted surface plus frame/order synchronization; requiring the
+  // AppKit back-reference made a correctly in-place Space look detached to
+  // presentation checks and triggered needless remount attempts.
+  return host && gProductControllerWindow && host == gMountedSpaceWindow;
 }
 
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {
