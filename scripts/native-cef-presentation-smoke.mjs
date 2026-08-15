@@ -6,6 +6,7 @@ import { createConnection } from "node:net";
 import { NativeCefApplication } from "../dist/main/native-cef-application.js";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
+const nativeProductShell = process.env.UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL !== "0";
 const userDataDir = await mkdtemp(join(tmpdir(), "ufo-native-presentation-smoke-"));
 const noSource = join(userDataDir, "NoSource");
 // macOS limits AF_UNIX paths to roughly 104 bytes. `tmpdir()` expands to a
@@ -93,9 +94,7 @@ try {
       spacePresentation.presentedWindowCount !== 1 ||
       spacePresentation.visibleSpaceId !== spaceId ||
       !spacePresentation.presentedSpaceIds?.includes(spaceId) ||
-      !spacePresentation.chromeToolbarSpaceIds?.includes(spaceId) ||
-      !spacePresentation.chromeControlsPresented ||
-      spacePresentation.chromeControlsSpaceId !== spaceId) {
+      !hasSpaceControls(spacePresentation, spaceId)) {
     throw new Error(`Space must be the only presented Native window: ${JSON.stringify(spacePresentation)}`);
   }
   const openCreated = await fetch(`${spacesUrl}/${createdSpaceId}/open`, { method: "POST" }).then((response) => response.json());
@@ -103,8 +102,7 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
   const createdPresentation = await presentationStatus(controlSocket);
   if (createdPresentation.visibleSpaceId !== createdSpaceId ||
-      !createdPresentation.chromeToolbarSpaceIds?.includes(createdSpaceId) ||
-      createdPresentation.chromeControlsSpaceId !== createdSpaceId) {
+      !hasSpaceControls(createdPresentation, createdSpaceId)) {
     throw new Error(`Chrome controls did not follow the second warm Space: ${JSON.stringify(createdPresentation)}`);
   }
   const reopen = await fetch(`${spacesUrl}/${spaceId}/open`, { method: "POST" }).then((response) => response.json());
@@ -112,7 +110,7 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 750));
   const reopenedPresentation = await presentationStatus(controlSocket);
   if (reopenedPresentation.visibleSpaceId !== spaceId ||
-      reopenedPresentation.chromeControlsSpaceId !== spaceId ||
+      !hasSpaceControls(reopenedPresentation, spaceId) ||
       !reopenedPresentation.awakeSpaceIds?.includes(spaceId) ||
       !reopenedPresentation.sleepingSpaceIds?.includes(createdSpaceId)) {
     throw new Error(`Chrome controls did not return to the first warm Space: ${JSON.stringify(reopenedPresentation)}`);
@@ -159,7 +157,7 @@ try {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
   const afterBackgroundClose = await presentationStatus(controlSocket);
   if (afterBackgroundClose.visibleSpaceId !== createdSpaceId ||
-      afterBackgroundClose.chromeControlsSpaceId !== createdSpaceId) {
+      !hasSpaceControls(afterBackgroundClose, createdSpaceId)) {
     throw new Error(`Closing a background Space removed the presented controls: ${JSON.stringify(afterBackgroundClose)}`);
   }
   const nativeClose = await sendSocket(controlSocket, JSON.stringify({
@@ -188,7 +186,7 @@ try {
   if (!returnedPresentation.overviewPresented ||
       returnedPresentation.presentedWindowCount !== 1 ||
       returnedPresentation.visibleSpaceId !== 0 ||
-      returnedPresentation.chromeControlsPresented) {
+      hasAnySpaceControls(returnedPresentation)) {
     throw new Error(`Closing the visible Space must return to one Overview window: ${JSON.stringify(returnedPresentation)}`);
   }
   console.log(JSON.stringify({
@@ -201,6 +199,7 @@ try {
     backgroundBootstrapDoesNotFlash: true,
     chromeControlsFollowWarmSpace: true,
     nativeChromeToolbarAttached: true,
+    nativeChromeProductShell: nativeProductShell,
     backgroundClosePreservesControls: true,
     agentOwnedNativeCloseBlocked: true,
     nativeCloseUsesSpaceStateMachine: true,
@@ -216,6 +215,24 @@ try {
 
 async function presentationStatus(path) {
   return JSON.parse(await sendSocket(path, JSON.stringify({ command: "presentation-status" })));
+}
+
+function hasSpaceControls(status, spaceId) {
+  if (nativeProductShell) {
+    return status.nativeChromeSpaceIds?.includes(spaceId) &&
+      status.nativeSpacesButtonSpaceIds?.includes(spaceId) &&
+      status.nativeCloseRoutedSpaceIds?.includes(spaceId);
+  }
+  return status.chromeToolbarSpaceIds?.includes(spaceId) &&
+    status.chromeControlsPresented &&
+    status.chromeControlsSpaceId === spaceId;
+}
+
+function hasAnySpaceControls(status) {
+  if (nativeProductShell) {
+    return (status.nativeSpacesButtonSpaceIds?.length || 0) > 0;
+  }
+  return Boolean(status.chromeControlsPresented);
 }
 
 function sendSocket(path, command) {

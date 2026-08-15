@@ -55,6 +55,8 @@
     "native:cef:titlebar:smoke": "npm run native:cef:build && node scripts/native-cef-titlebar-smoke.mjs",
     "native:cef:private:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-private-smoke.mjs",
     "native:cef:shared-host:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-shared-host-smoke.mjs",
+    "native:cef:product-shell:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-product-shell-smoke.mjs",
+    "native:cef:chrome-profile:probe": "npm run build:native && npm run native:cef:build && node scripts/native-cef-chrome-profile-probe.mjs",
     "native:cef:agent": "npm run build:native && node dist/main/native-cef-agent.js",
     "native:cef:agent:smoke": "npm run build:native && node scripts/native-cef-agent-smoke.mjs",
     "native:cef:agent:parity:smoke": "npm run build:native && npm run native:cef:build && node scripts/native-cef-agent-parity-smoke.mjs",

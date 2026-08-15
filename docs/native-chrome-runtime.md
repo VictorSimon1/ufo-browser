@@ -2,10 +2,11 @@
 
 UFO-Browser's product runtime is CEF-first. The existing Electron application
 is retained only as a development fallback for legacy tests and migration
-rollback. The browser window itself is CEF's
-Chrome Runtime; Electron must not redraw or embed a fake address bar.
-Human-facing Spaces are launched with an explicit `--chrome-shell` contract,
-which enables CEF's full native tabs/omnibox/profile toolbar. Overview remains
+rollback. The browser window itself is CEF's native-hosted Chrome Runtime;
+Electron must not redraw or embed a fake address bar. Human-facing Spaces are
+created with `CefWindowInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME`, which
+lets Chromium own the real tab strip, new-tab button, omnibox, toolbar, menus,
+and window. Overview remains
 the UFO management surface and intentionally has no browser toolbar.
 Each human-facing Space also gets a small native Spaces button above the CEF
 toolbar. It sends `show-overview` through a separate private Unix socket to
@@ -23,8 +24,10 @@ The browser shell is the part that users see around a page:
 - profile menu and browser dialogs;
 - the native Chromium compositor surface.
 
-These controls come from CEF's Chrome-style Views runtime. Recreating
-them in renderer HTML/CSS is visually close but does not provide the same
+These controls come from CEF's Chromium-owned native Chrome runtime. The
+earlier `CefBrowserView + GetChromeToolbar()` implementation exposed only a
+toolbar and could never provide Chrome's real tab strip. Recreating them in
+renderer HTML/CSS is visually close but does not provide the same
 window lifecycle, accessibility tree, popup behavior, input routing, or GPU
 composition as a Chromium browser window.
 
@@ -43,9 +46,8 @@ The following remains owned by UFO-Browser and is not copied from Ego Lite:
 
 The release target uses one shared UFO CEF host process for Overview and every
 Space. A Space never launches another `ufo-cef-host` application or CEF main
-process. CEF Chrome Runtime permits only one Chrome-style BrowserView per
-`CefWindow` (`Cannot add multiple Chrome style BrowserViews`), so isolated
-Space RequestContexts are held by separate internal native windows inside that
+process. Isolated Space RequestContexts are held by separate Chromium-owned
+native Chrome windows inside that
 single Host. UFO's Presentation Coordinator guarantees that exactly one of
 those managed surfaces is presented to the human. Agent-owned background
 Spaces stay compositor-awake for uninterrupted CDP input and screenshots;
@@ -115,27 +117,31 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    `native-cef-agent` is a UFO-managed Node service. In the packaged product it
    owns the private Agent Unix socket and attaches to the existing
    `UFO-Browser` CEF main process; it cannot start a second Host. It registers
-   each Space as an isolated RequestContext and target route inside that Host
-   and exposes the same `ufo-browser nodejs` helpers. The smoke covers
+   each Space as a managed native window and target route inside that Host and
+   exposes the same `ufo-browser nodejs` helpers. The smoke covers
    bootstrap, `pageInfo`, `js`, `snapshotText`, screenshot capture, navigation,
    and completion.
-3. **Profiles and login state** — the current native vertical slice gives each
-   Space a private CEF user-data directory, which avoids Chromium profile-lock
-   races while preserving full browser persistence within that Space. Native
-   Spaces seed a fresh persistent CEF directory once from the selected UFO
-   Profile and route Cookie operations through the CEF/CDP adapter. The seed
-   allowlists Chromium login/storage
-   datasets and Cookie databases, skips password/history/extension data and
-   singleton locks, and writes `.ufo-profile-seed.json` so an active native
-   Space is never overwritten on a later launch. Chrome import and UFO Profile
+3. **Profiles and login state** — persistent Spaces use real Chrome Runtime
+   ProfileManager directories beneath the shared UFO user-data root. Two
+   Spaces selecting the same UFO Profile share login state while keeping
+   separate native windows and Agent routes; different Profiles have isolated,
+   restart-persistent Cookies and storage. A short-lived executable invocation
+   asks Chromium's ProcessSingleton to create the Profile window in the
+   already-running UFO CEF host, then exits. Native Spaces seed an unused
+   Profile directory once from the selected UFO Profile and route Cookie
+   operations through the CEF/CDP adapter. The seed allowlists Chromium
+   login/storage datasets, skips encrypted Cookie databases,
+   password/history/extension data and singleton locks, and writes
+   `.ufo-profile-seed.json` so an active native Profile is never overwritten.
+   Chrome import and UFO Profile
    clone create a short-lived, toolbar-free RequestContext inside the same UFO
    CEF Host; they no longer launch a second browser main process against the
    target directory. The internal transaction surface is never presented and
    is destroyed after Cookie verification. Development smoke runs may set
    `UFO_CEF_USE_MOCK_KEYCHAIN=1`; release builds must use the signed macOS
    Keychain path instead of shipping the mock switch.
-4. **Task Spaces** — map each Space to a request context and browser target in
-   the one shared UFO Host. Keep the presented Space and Agent-owned Spaces
+4. **Task Spaces** — map each Space to a native Profile window and browser
+   target in the one shared UFO Host. Keep the presented Space and Agent-owned Spaces
    compositor-awake; park ordinary warm background Space windows without
    destroying their tabs, RequestContexts, or page state.
 5. **Overview and overlay** — retain low-frequency, change-driven previews and
@@ -327,6 +333,10 @@ runtime and is not the final browser UI.
   Skill facade, including `page.waitForEvent("popup")`,
   `page.waitForEvent("download")`, console, pageerror, and request events.
 - Profile isolation and imported login state survive restart.
+- The native Chrome Product Shell remains experimental while imported Profile
+  migration and packaged-DMG restart coverage are completed. Real
+  ProfileManager persistence and isolation are protected by
+  `native:cef:chrome-profile:probe`; custom RequestContexts remain OTR-only.
 - Agent control overlay blocks humans but does not affect CDP screenshots or
   input.
 - Overview preview cadence remains global and bounded when multiple Spaces

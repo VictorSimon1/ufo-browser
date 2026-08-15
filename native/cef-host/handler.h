@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <list>
 #include <map>
@@ -46,6 +47,8 @@ class UfoCefHandler final : public CefClient,
 
   void CloseAllBrowsers(bool force_close);
   void RequestApplicationClose(bool force_close);
+  void OnApplicationCookieStoreFlushed();
+  void OnSpaceCookieStoreFlushed(int space_id);
   void ShowMainWindow();
   void HideMainWindow();
   void FocusMainWindow();
@@ -54,6 +57,13 @@ class UfoCefHandler final : public CefClient,
   void RegisterPopupBrowser(CefRefPtr<CefBrowser> parent,
                             CefRefPtr<CefBrowser> popup);
   void RegisterSpaceWindow(int space_id, CefRefPtr<CefWindow> window);
+  void RegisterPendingNativeSpace(const std::string& cache_path,
+                                  int space_id,
+                                  bool visible,
+                                  std::string url,
+                                  std::string space_name,
+                                  std::string profile_name);
+  void CancelPendingNativeSpace(const std::string& cache_path, int space_id);
   void SetMainChromeToolbarAttached(bool attached);
   void SetSpaceChromeToolbarAttached(int space_id, bool attached);
   void SetPresentationSocket(std::string path);
@@ -102,10 +112,26 @@ class UfoCefHandler final : public CefClient,
   std::map<int, std::string> browser_download_dirs_;
   std::map<std::string, std::string> context_download_dirs_;
   std::map<int, CefRefPtr<CefWindow>> space_windows_;
+  struct PendingNativeSpace {
+    int space_id = 0;
+    bool visible = false;
+    std::string url;
+    std::string space_name;
+    std::string profile_name;
+  };
+  std::map<std::string, std::deque<PendingNativeSpace>> pending_native_spaces_;
+  std::map<std::string, std::deque<int>> pending_context_browser_spaces_;
+  std::map<std::string, std::set<int>> native_context_spaces_;
+  std::map<int, CefRefPtr<CefBrowser>> native_space_browsers_;
+  std::map<int, std::string> native_space_contexts_;
+  std::map<int, PendingNativeSpace> native_space_specs_;
   bool main_chrome_toolbar_attached_ = false;
   std::set<int> chrome_toolbar_spaces_;
   std::set<int> agent_active_spaces_;
   std::set<int> closing_spaces_;
+  std::set<int> space_cookie_flushes_;
+  int pending_application_cookie_flushes_ = 0;
+  bool application_cookie_flush_force_close_ = false;
   int visible_space_id_ = 0;
   std::string presentation_socket_;
   std::function<std::string(const std::string&)> shared_space_factory_;
@@ -113,6 +139,9 @@ class UfoCefHandler final : public CefClient,
   std::atomic<uint64_t> next_devtools_client_id_{1};
 
   void HandleDevToolsClient(const std::shared_ptr<DevToolsClient>& client);
+  void FlushCookieStoresAndCloseBrowsers(bool force_close);
+  void FlushNativeSpaceCookiesAndClose(int space_id);
+  void FinishNativeSpaceClose(int space_id);
   void RemoveDevToolsRoute(const std::string& route_id);
   void DispatchDevToolsMessage(const std::shared_ptr<DevToolsClient>& client,
                                CefRefPtr<CefDictionaryValue> message,
@@ -125,6 +154,8 @@ class UfoCefHandler final : public CefClient,
   std::string HandleControlCommandOnUi(const std::string& command);
   void SetVisibleSpace(int space_id);
   void SetSpaceCompositorAwake(int space_id, bool awake);
+  void ConfigureNativeSpaceWindow(int space_id, int attempt = 0);
+  CefWindowHandle GetSpaceWindowHandle(int space_id) const;
 
   IMPLEMENT_REFCOUNTING(UfoCefHandler);
 };

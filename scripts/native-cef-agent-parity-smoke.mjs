@@ -78,15 +78,21 @@ cli.stdout.on("data", (chunk) => { stdout += chunk; });
 cli.stderr.on("data", (chunk) => { stderr += chunk; });
 cli.stdin.end(`
 const task = await bootstrapTaskSpace({ name: 'native parity' })
+cliLog('step:bootstrapped')
 await openOrReuseTab('http://127.0.0.1:${port}/main', { wait: true, timeout: 20000 })
+cliLog('step:navigated')
 const snapshot = await snapshotRaw({ includeActionMarks: true })
+cliLog('step:snapshot')
 const before = await listTabs()
 const popupEval = await js("void window.open('http://127.0.0.1:${port}/popup', 'native-agent-popup'); true")
+cliLog('step:popup-opened')
 const popupTargets = await cdp('Target.getTargets')
 const pendingDownload = page.waitForEvent('download', { timeout: 10000 })
 await click('#download', { label: 'download fixture' })
+cliLog('step:download-clicked')
 const download = await pendingDownload
 const downloadPath = await download.path()
+cliLog('step:download-finished')
 const popupDeadline = Date.now() + 10000
 let after = []
 while (Date.now() < popupDeadline) {

@@ -13,6 +13,8 @@
 #include <unistd.h>
 
 #include "include/cef_app.h"
+#include "include/cef_command_line.h"
+#include "include/cef_cookie.h"
 #include "include/cef_id_mappers.h"
 #include "include/cef_parser.h"
 #include "include/cef_values.h"
@@ -90,6 +92,22 @@ class UfoDevToolsObserver final : public CefDevToolsMessageObserver {
   UfoCefHandler* handler_;
   const std::string route_id_;
   IMPLEMENT_REFCOUNTING(UfoDevToolsObserver);
+};
+
+class UfoCookieFlushCallback final : public CefCompletionCallback {
+ public:
+  UfoCookieFlushCallback(CefRefPtr<UfoCefHandler> handler, int space_id)
+      : handler_(std::move(handler)), space_id_(space_id) {}
+
+  void OnComplete() override {
+    if (space_id_ > 0) handler_->OnSpaceCookieStoreFlushed(space_id_);
+    else handler_->OnApplicationCookieStoreFlushed();
+  }
+
+ private:
+  CefRefPtr<UfoCefHandler> handler_;
+  const int space_id_;
+  IMPLEMENT_REFCOUNTING(UfoCookieFlushCallback);
 };
 }
 
@@ -173,16 +191,71 @@ void UfoCefHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   browsers_.push_back(browser);
   const auto target_id = std::to_string(browser->GetIdentifier());
-  std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
-  devtools_target_browsers_[target_id] = browser->GetIdentifier();
-  const int opener_id = browser->GetHost()->GetOpenerIdentifier();
-  if (opener_id > 0) {
-    const auto opener_space = browser_spaces_.find(opener_id);
-    if (opener_space != browser_spaces_.end()) {
-      browser_spaces_[browser->GetIdentifier()] = opener_space->second;
-      // Keep the Space route pinned to its primary Browser. A popup belongs
-      // to the same logical Space, but must not replace the Browser-level CDP
-      // endpoint used to enumerate and create targets for that Space.
+  const auto request_context = browser->GetHost()->GetRequestContext();
+  const auto cache_path = request_context
+      ? request_context->GetCachePath().ToString()
+      : std::string();
+  PendingNativeSpace pending_native_space;
+  bool is_native_space_primary = false;
+  {
+    std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+    devtools_target_browsers_[target_id] = browser->GetIdentifier();
+    const auto pending = pending_native_spaces_.find(cache_path);
+    if (!cache_path.empty() && pending != pending_native_spaces_.end() &&
+        !pending->second.empty()) {
+      pending_native_space = pending->second.front();
+      pending->second.pop_front();
+      if (pending->second.empty()) pending_native_spaces_.erase(pending);
+      native_context_spaces_[cache_path].insert(
+          pending_native_space.space_id);
+      browser_spaces_[browser->GetIdentifier()] =
+          pending_native_space.space_id;
+      space_browsers_[pending_native_space.space_id] =
+          browser->GetIdentifier();
+      is_native_space_primary = true;
+    } else {
+      const int opener_id = browser->GetHost()->GetOpenerIdentifier();
+      const auto opener_space = browser_spaces_.find(opener_id);
+      if (opener_id > 0 && opener_space != browser_spaces_.end()) {
+        browser_spaces_[browser->GetIdentifier()] = opener_space->second;
+      } else {
+        const auto pending_browser =
+            pending_context_browser_spaces_.find(cache_path);
+        if (!cache_path.empty() &&
+            pending_browser != pending_context_browser_spaces_.end() &&
+            !pending_browser->second.empty()) {
+          browser_spaces_[browser->GetIdentifier()] =
+              pending_browser->second.front();
+          pending_browser->second.pop_front();
+          if (pending_browser->second.empty()) {
+            pending_context_browser_spaces_.erase(pending_browser);
+          }
+        } else {
+          const auto context_spaces = native_context_spaces_.find(cache_path);
+          if (!cache_path.empty() &&
+              context_spaces != native_context_spaces_.end() &&
+              context_spaces->second.size() == 1) {
+            // Every Chrome tab in a native-hosted window shares the Space's
+            // RequestContext. The context fallback is only safe while exactly
+            // one Space owns that Profile; shared Chrome Profiles use opener
+            // or pending-window routing so tabs cannot jump between Spaces.
+            browser_spaces_[browser->GetIdentifier()] =
+                *context_spaces->second.begin();
+          }
+        }
+      }
+    }
+  }
+  if (is_native_space_primary) {
+    const int space_id = pending_native_space.space_id;
+    native_space_browsers_[space_id] = browser;
+    native_space_contexts_[space_id] = cache_path;
+    native_space_specs_[space_id] = pending_native_space;
+    ConfigureNativeSpaceWindow(space_id);
+    const auto frame = browser->GetMainFrame();
+    if (frame && !pending_native_space.url.empty() &&
+        frame->GetURL().ToString() != pending_native_space.url) {
+      frame->LoadURL(pending_native_space.url);
     }
   }
 }
@@ -206,18 +279,74 @@ void UfoCefHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
       break;
     }
   }
+  int closed_space_id = 0;
+  bool closed_native_primary = false;
+  CefRefPtr<CefBrowser> replacement_primary;
   {
     std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
     devtools_target_browsers_.erase(std::to_string(browser->GetIdentifier()));
     browser_download_dirs_.erase(browser->GetIdentifier());
     const auto space_it = browser_spaces_.find(browser->GetIdentifier());
     if (space_it != browser_spaces_.end()) {
+      closed_space_id = space_it->second;
       const auto primary_it = space_browsers_.find(space_it->second);
       if (primary_it != space_browsers_.end() &&
           primary_it->second == browser->GetIdentifier()) {
-        space_browsers_.erase(primary_it);
+        const auto native_primary = native_space_browsers_.find(space_it->second);
+        closed_native_primary = native_primary != native_space_browsers_.end() &&
+            native_primary->second && native_primary->second->IsSame(browser);
+        for (const auto& candidate : browsers_) {
+          const auto owner = browser_spaces_.find(candidate->GetIdentifier());
+          if (owner != browser_spaces_.end() && owner->second == closed_space_id) {
+            replacement_primary = candidate;
+            break;
+          }
+        }
+        if (replacement_primary) {
+          primary_it->second = replacement_primary->GetIdentifier();
+        } else {
+          space_browsers_.erase(primary_it);
+        }
       }
       browser_spaces_.erase(space_it);
+    }
+  }
+  if (closed_native_primary && closed_space_id > 0) {
+    if (replacement_primary) {
+      // Closing the first tab must not orphan the Space. Promote a remaining
+      // tab to the Browser-level Agent route and keep the same native window
+      // registered with the presentation coordinator.
+      native_space_browsers_[closed_space_id] = replacement_primary;
+    } else {
+      const auto handle = browser->GetHost()->GetWindowHandle();
+      if (handle) {
+        UfoAgentOverlayClear(handle);
+        UfoCefNativeSpaceWindowClear(handle);
+        UfoCefChromeControlsClear(handle);
+      }
+      native_space_browsers_.erase(closed_space_id);
+      native_space_specs_.erase(closed_space_id);
+      space_cookie_flushes_.erase(closed_space_id);
+      const auto context = native_space_contexts_.find(closed_space_id);
+      if (context != native_space_contexts_.end()) {
+        const auto pending_browsers =
+            pending_context_browser_spaces_.find(context->second);
+        if (pending_browsers != pending_context_browser_spaces_.end()) {
+          std::erase(pending_browsers->second, closed_space_id);
+          if (pending_browsers->second.empty()) {
+            pending_context_browser_spaces_.erase(pending_browsers);
+          }
+        }
+        const auto owners = native_context_spaces_.find(context->second);
+        if (owners != native_context_spaces_.end()) {
+          owners->second.erase(closed_space_id);
+          if (owners->second.empty()) native_context_spaces_.erase(owners);
+        }
+        native_space_contexts_.erase(context);
+      }
+      closing_spaces_.erase(closed_space_id);
+      agent_active_spaces_.erase(closed_space_id);
+      if (visible_space_id_ == closed_space_id) visible_space_id_ = 0;
     }
   }
   if (browsers_.empty()) {
@@ -261,7 +390,81 @@ void UfoCefHandler::RequestApplicationClose(bool force_close) {
   if (closing_) return;
   closing_ = true;
   CefPostTask(TID_UI, base::BindOnce(
-      &UfoCefHandler::CloseAllBrowsers, this, force_close));
+      &UfoCefHandler::FlushCookieStoresAndCloseBrowsers, this, force_close));
+}
+
+void UfoCefHandler::FlushCookieStoresAndCloseBrowsers(bool force_close) {
+  CEF_REQUIRE_UI_THREAD();
+  if (pending_application_cookie_flushes_ > 0) return;
+  std::vector<CefRefPtr<CefCookieManager>> managers;
+  std::set<std::string> contexts;
+  for (const auto& browser : browsers_) {
+    const auto context = browser->GetHost()->GetRequestContext();
+    if (!context) continue;
+    const auto key = context->GetCachePath().ToString();
+    if (!contexts.insert(key).second) continue;
+    const auto manager = context->GetCookieManager(nullptr);
+    if (manager) managers.push_back(manager);
+  }
+  if (managers.empty()) {
+    CloseAllBrowsers(force_close);
+    return;
+  }
+  application_cookie_flush_force_close_ = force_close;
+  pending_application_cookie_flushes_ = static_cast<int>(managers.size());
+  for (const auto& manager : managers) {
+    if (!manager->FlushStore(new UfoCookieFlushCallback(this, 0))) {
+      OnApplicationCookieStoreFlushed();
+    }
+  }
+}
+
+void UfoCefHandler::OnApplicationCookieStoreFlushed() {
+  CEF_REQUIRE_UI_THREAD();
+  if (pending_application_cookie_flushes_ <= 0) return;
+  pending_application_cookie_flushes_ -= 1;
+  if (pending_application_cookie_flushes_ > 0) return;
+  CloseAllBrowsers(application_cookie_flush_force_close_);
+}
+
+void UfoCefHandler::FlushNativeSpaceCookiesAndClose(int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (space_id <= 0 || space_cookie_flushes_.contains(space_id)) return;
+  const auto browser = native_space_browsers_.find(space_id);
+  if (browser == native_space_browsers_.end() || !browser->second) {
+    FinishNativeSpaceClose(space_id);
+    return;
+  }
+  const auto context = browser->second->GetHost()->GetRequestContext();
+  const auto manager = context ? context->GetCookieManager(nullptr) : nullptr;
+  if (!manager) {
+    FinishNativeSpaceClose(space_id);
+    return;
+  }
+  space_cookie_flushes_.insert(space_id);
+  if (!manager->FlushStore(new UfoCookieFlushCallback(this, space_id))) {
+    OnSpaceCookieStoreFlushed(space_id);
+  }
+}
+
+void UfoCefHandler::OnSpaceCookieStoreFlushed(int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  space_cookie_flushes_.erase(space_id);
+  FinishNativeSpaceClose(space_id);
+}
+
+void UfoCefHandler::FinishNativeSpaceClose(int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  const auto browser = native_space_browsers_.find(space_id);
+  if (browser == native_space_browsers_.end() || !browser->second) return;
+  const int command_id = cef_id_for_command_id_name("IDC_CLOSE_WINDOW");
+  if (command_id > 0 &&
+      browser->second->GetHost()->CanExecuteChromeCommand(command_id)) {
+    browser->second->GetHost()->ExecuteChromeCommand(
+        command_id, CEF_WOD_CURRENT_TAB);
+  } else {
+    browser->second->GetHost()->CloseBrowser(false);
+  }
 }
 
 void UfoCefHandler::ShowMainWindow() {
@@ -355,6 +558,35 @@ void UfoCefHandler::RegisterSpaceWindow(int space_id,
   }
 }
 
+void UfoCefHandler::RegisterPendingNativeSpace(
+    const std::string& cache_path,
+    int space_id,
+    bool visible,
+    std::string url,
+    std::string space_name,
+    std::string profile_name) {
+  CEF_REQUIRE_UI_THREAD();
+  if (cache_path.empty() || space_id <= 0) return;
+  pending_native_spaces_[cache_path].push_back(PendingNativeSpace{
+      space_id,
+      visible,
+      std::move(url),
+      std::move(space_name),
+      std::move(profile_name),
+  });
+}
+
+void UfoCefHandler::CancelPendingNativeSpace(const std::string& cache_path,
+                                             int space_id) {
+  CEF_REQUIRE_UI_THREAD();
+  const auto pending = pending_native_spaces_.find(cache_path);
+  if (pending == pending_native_spaces_.end()) return;
+  std::erase_if(pending->second, [space_id](const PendingNativeSpace& spec) {
+    return spec.space_id == space_id;
+  });
+  if (pending->second.empty()) pending_native_spaces_.erase(pending);
+}
+
 void UfoCefHandler::SetMainChromeToolbarAttached(bool attached) {
   CEF_REQUIRE_UI_THREAD();
   main_chrome_toolbar_attached_ = attached;
@@ -377,6 +609,54 @@ bool UfoCefHandler::IsSpaceAgentConnectionActive(int space_id) const {
 
 bool UfoCefHandler::IsSpaceCloseAuthorized(int space_id) const {
   return closing_ || (space_id > 0 && closing_spaces_.count(space_id) > 0);
+}
+
+CefWindowHandle UfoCefHandler::GetSpaceWindowHandle(int space_id) const {
+  const auto views_window = space_windows_.find(space_id);
+  if (views_window != space_windows_.end() && views_window->second &&
+      !views_window->second->IsClosed()) {
+    return views_window->second->GetWindowHandle();
+  }
+  const auto native_browser = native_space_browsers_.find(space_id);
+  if (native_browser != native_space_browsers_.end() &&
+      native_browser->second) {
+    return native_browser->second->GetHost()->GetWindowHandle();
+  }
+  return nullptr;
+}
+
+void UfoCefHandler::ConfigureNativeSpaceWindow(int space_id, int attempt) {
+  CEF_REQUIRE_UI_THREAD();
+  const auto browser = native_space_browsers_.find(space_id);
+  const auto spec = native_space_specs_.find(space_id);
+  if (browser == native_space_browsers_.end() || !browser->second ||
+      spec == native_space_specs_.end()) {
+    return;
+  }
+  const auto handle = browser->second->GetHost()->GetWindowHandle();
+  if (!handle) {
+    if (attempt < 40) {
+      CefPostDelayedTask(
+          TID_UI,
+          base::BindOnce(&UfoCefHandler::ConfigureNativeSpaceWindow, this,
+                         space_id, attempt + 1),
+          25);
+    }
+    return;
+  }
+  // Native Chrome may publish the CefBrowser before its NSWindow handle is
+  // ready. Apply initial hidden/presented state only at this boundary; without
+  // the retry a background Agent Space briefly becomes a second visible
+  // product window during cold startup.
+  UfoCefWindowSetPresented(handle, spec->second.visible);
+  UfoCefWindowSetCompositorAwake(handle, spec->second.visible);
+  // Preserve the UFO return-to-Spaces affordance as a small AppKit button
+  // above Chromium's tab strip. Do not install the old wide Space pill; the
+  // native Chrome tab strip remains visually and interactively intact.
+  UfoCefShellControlsSet(handle, presentation_socket_.c_str());
+  UfoCefNativeSpaceWindowSet(
+      handle, space_id, presentation_socket_.c_str(),
+      agent_active_spaces_.contains(space_id));
 }
 
 void UfoCefHandler::SetPresentationSocket(std::string path) {
@@ -409,41 +689,38 @@ void UfoCefHandler::SetSpaceAgentConnectionActive(int space_id, bool active) {
   if (space_id <= 0) return;
   if (active) agent_active_spaces_.insert(space_id);
   else agent_active_spaces_.erase(space_id);
+  const auto handle = GetSpaceWindowHandle(space_id);
+  if (handle && native_space_browsers_.contains(space_id)) {
+    UfoCefNativeSpaceWindowSetAgentActive(handle, active);
+  }
   SetSpaceCompositorAwake(space_id, active || visible_space_id_ == space_id);
   if (visible_space_id_ == space_id) SetVisibleSpace(space_id);
 }
 
 void UfoCefHandler::SetSpaceCompositorAwake(int space_id, bool awake) {
   CEF_REQUIRE_UI_THREAD();
-  const auto window = space_windows_.find(space_id);
-  if (window == space_windows_.end() || !window->second ||
-      window->second->IsClosed()) {
-    return;
-  }
+  const auto handle = GetSpaceWindowHandle(space_id);
+  if (!handle) return;
   if (!awake && (visible_space_id_ == space_id ||
                  agent_active_spaces_.contains(space_id))) {
     return;
   }
-  UfoCefWindowSetCompositorAwake(window->second->GetWindowHandle(), awake);
+  UfoCefWindowSetCompositorAwake(handle, awake);
 }
 
 void UfoCefHandler::SetVisibleSpace(int space_id) {
   CEF_REQUIRE_UI_THREAD();
   if (visible_space_id_ > 0) {
-    const auto previous = space_windows_.find(visible_space_id_);
-    if (previous != space_windows_.end() && previous->second &&
-        !previous->second->IsClosed()) {
-      UfoAgentOverlayClear(previous->second->GetWindowHandle());
-    }
+    const auto previous = GetSpaceWindowHandle(visible_space_id_);
+    if (previous) UfoAgentOverlayClear(previous);
   }
   visible_space_id_ = space_id;
   const bool active = space_id > 0 && agent_active_spaces_.contains(space_id);
   agent_active_ = active;
   if (!active) return;
-  const auto current = space_windows_.find(space_id);
-  if (current != space_windows_.end() && current->second &&
-      !current->second->IsClosed()) {
-    UfoAgentOverlaySet(current->second->GetWindowHandle(), true,
+  const auto current = GetSpaceWindowHandle(space_id);
+  if (current) {
+    UfoAgentOverlaySet(current, true,
                        "Agent controlling", space_id,
                        presentation_socket_.c_str());
   }
@@ -563,6 +840,10 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       auto awake_spaces = CefListValue::Create();
       auto sleeping_spaces = CefListValue::Create();
       auto chrome_toolbar_spaces = CefListValue::Create();
+      auto native_chrome_spaces = CefListValue::Create();
+      auto native_spaces_button_spaces = CefListValue::Create();
+      auto native_close_routed_spaces = CefListValue::Create();
+      auto native_close_locked_spaces = CefListValue::Create();
       int chrome_controls_space_id = 0;
       const bool overview_presented =
           main_window_ && !main_window_->IsClosed() &&
@@ -587,13 +868,42 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
         presented_spaces->SetInt(presented_spaces->GetSize(), candidate_id);
         presented_count += 1;
       }
+      for (const auto& [candidate_id, browser] : native_space_browsers_) {
+        if (!browser || space_windows_.contains(candidate_id)) continue;
+        if (agent_active_spaces_.contains(candidate_id)) {
+          active_spaces->SetInt(active_spaces->GetSize(), candidate_id);
+        }
+        const auto handle = browser->GetHost()->GetWindowHandle();
+        const bool compositor_awake = handle &&
+            UfoCefWindowIsCompositorAwake(handle);
+        auto compositor_list = compositor_awake ? awake_spaces : sleeping_spaces;
+        compositor_list->SetInt(compositor_list->GetSize(), candidate_id);
+        native_chrome_spaces->SetInt(native_chrome_spaces->GetSize(),
+                                     candidate_id);
+        if (handle && UfoCefShellControlsArePresentedForWindow(handle)) {
+          native_spaces_button_spaces->SetInt(
+              native_spaces_button_spaces->GetSize(), candidate_id);
+        }
+        if (handle && UfoCefNativeSpaceWindowIsCloseRouted(handle)) {
+          native_close_routed_spaces->SetInt(
+              native_close_routed_spaces->GetSize(), candidate_id);
+          if (!UfoCefNativeSpaceWindowIsCloseEnabled(handle)) {
+            native_close_locked_spaces->SetInt(
+                native_close_locked_spaces->GetSize(), candidate_id);
+          }
+        }
+        if (!handle || !UfoCefWindowIsPresented(handle)) continue;
+        presented_spaces->SetInt(presented_spaces->GetSize(), candidate_id);
+        presented_count += 1;
+      }
       auto response = CefDictionaryValue::Create();
       response->SetBool("ok", true);
       response->SetInt("visibleSpaceId", visible_space_id_);
       response->SetBool("overviewPresented", overview_presented);
       response->SetInt("presentedWindowCount", presented_count);
       response->SetInt("managedWindowCount",
-                       static_cast<int>(space_windows_.size()) +
+                       static_cast<int>(space_windows_.size() +
+                                        native_space_browsers_.size()) +
                            (main_window_ ? 1 : 0));
       response->SetList("presentedSpaceIds", presented_spaces);
       response->SetList("agentActiveSpaceIds", active_spaces);
@@ -606,17 +916,21 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       response->SetBool("mainChromeToolbarAttached",
                         main_chrome_toolbar_attached_);
       response->SetList("chromeToolbarSpaceIds", chrome_toolbar_spaces);
+      response->SetList("nativeChromeSpaceIds", native_chrome_spaces);
+      response->SetList("nativeSpacesButtonSpaceIds",
+                        native_spaces_button_spaces);
+      response->SetList("nativeCloseRoutedSpaceIds",
+                        native_close_routed_spaces);
+      response->SetList("nativeCloseLockedSpaceIds",
+                        native_close_locked_spaces);
       bool overlay_presented = false;
       bool overlay_actions_available = false;
       if (visible_space_id_ > 0) {
-        const auto visible = space_windows_.find(visible_space_id_);
-        overlay_presented = visible != space_windows_.end() && visible->second &&
-            !visible->second->IsClosed() &&
-            UfoAgentOverlayIsActiveForWindow(
-                visible->second->GetWindowHandle());
+        const auto visible = GetSpaceWindowHandle(visible_space_id_);
+        overlay_presented = visible &&
+            UfoAgentOverlayIsActiveForWindow(visible);
         overlay_actions_available = overlay_presented &&
-            UfoAgentOverlayHasActionsForWindow(
-                visible->second->GetWindowHandle());
+            UfoAgentOverlayHasActionsForWindow(visible);
       } else if (main_window_ && !main_window_->IsClosed()) {
         overlay_presented = UfoAgentOverlayIsActiveForWindow(
             main_window_->GetWindowHandle());
@@ -638,10 +952,71 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       UfoCefRequestProductTermination();
       return "ok";
     }
+    if (operation == "chrome-profile-manager-probe") {
+      const auto command_line = CefCommandLine::GetGlobalCommandLine();
+      if (!command_line->HasSwitch("chrome-profile-manager-probe")) {
+        return "error profile-manager-probe-disabled";
+      }
+      const auto action = root->GetString("action").ToString();
+      if (action == "list-contexts") {
+        auto response = CefDictionaryValue::Create();
+        auto contexts = CefListValue::Create();
+        for (const auto& browser : browsers_) {
+          if (!browser) continue;
+          auto entry = CefDictionaryValue::Create();
+          const auto context = browser->GetHost()->GetRequestContext();
+          const auto frame = browser->GetMainFrame();
+          entry->SetInt("browserId", browser->GetIdentifier());
+          entry->SetInt("openerId", browser->GetHost()->GetOpenerIdentifier());
+          entry->SetString("url", frame ? frame->GetURL() : CefString());
+          entry->SetString("cachePath",
+                           context ? context->GetCachePath() : CefString());
+          entry->SetBool("global", context && context->IsGlobal());
+          const auto owner = browser_spaces_.find(browser->GetIdentifier());
+          entry->SetInt("spaceId",
+                        owner == browser_spaces_.end() ? 0 : owner->second);
+          entry->SetBool("hasWindow", browser->GetHost()->GetWindowHandle());
+          contexts->SetDictionary(contexts->GetSize(), entry);
+        }
+        response->SetBool("ok", true);
+        response->SetList("contexts", contexts);
+        auto value = CefValue::Create();
+        value->SetDictionary(response);
+        return JsonString(value);
+      }
+      const char* command_name = nullptr;
+      if (action == "add-profile") command_name = "IDC_ADD_NEW_PROFILE";
+      if (action == "manage-profiles") {
+        command_name = "IDC_MANAGE_CHROME_PROFILES";
+      }
+      if (!command_name) return "error unsupported-profile-manager-action";
+      const int command_id = cef_id_for_command_id_name(command_name);
+      for (const auto& browser : browsers_) {
+        if (!browser || command_id <= 0 ||
+            !browser->GetHost()->CanExecuteChromeCommand(command_id)) {
+          continue;
+        }
+        browser->GetHost()->ExecuteChromeCommand(
+            command_id, CEF_WOD_NEW_FOREGROUND_TAB);
+        auto response = CefDictionaryValue::Create();
+        response->SetBool("ok", true);
+        response->SetString("action", action);
+        response->SetInt("browserId", browser->GetIdentifier());
+        auto value = CefValue::Create();
+        value->SetDictionary(response);
+        return JsonString(value);
+      }
+      return "error profile-manager-command-unavailable";
+    }
     const int space_id = root->GetInt("spaceId");
-    const auto it = space_windows_.find(space_id);
-    if (space_id <= 0 || it == space_windows_.end() || !it->second ||
-        it->second->IsClosed()) {
+    const auto views_window = space_windows_.find(space_id);
+    const auto native_browser = native_space_browsers_.find(space_id);
+    const bool has_views_window = views_window != space_windows_.end() &&
+        views_window->second && !views_window->second->IsClosed();
+    const bool has_native_browser =
+        native_browser != native_space_browsers_.end() &&
+        native_browser->second;
+    if (space_id <= 0 || (!has_views_window && !has_native_browser)) {
       return "error space-not-found";
     }
     if (operation == "list-space-browsers") {
@@ -695,32 +1070,61 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
             !browser->GetHost()->CanExecuteChromeCommand(command_id)) {
           return "error new-tab-command-unavailable";
         }
+        const auto context = browser->GetHost()->GetRequestContext();
+        const auto cache_path = context
+            ? context->GetCachePath().ToString()
+            : std::string();
+        if (!cache_path.empty()) {
+          pending_context_browser_spaces_[cache_path].push_back(space_id);
+        }
         browser->GetHost()->ExecuteChromeCommand(
             command_id, CEF_WOD_NEW_FOREGROUND_TAB);
         return "ok";
       }
       return "error primary-browser-not-found";
     }
-    auto window = it->second;
+    const auto handle = GetSpaceWindowHandle(space_id);
+    if (!handle) return "error space-window-not-ready";
     if (operation == "show-space") {
+      if (auto spec = native_space_specs_.find(space_id);
+          spec != native_space_specs_.end()) spec->second.visible = true;
       SetSpaceCompositorAwake(space_id, true);
-      window->Show();
-      UfoCefWindowSetPresented(window->GetWindowHandle(), true);
+      if (has_views_window) views_window->second->Show();
+      else {
+        UfoCefShellControlsSet(handle, presentation_socket_.c_str());
+        UfoCefNativeSpaceWindowSet(
+            handle, space_id, presentation_socket_.c_str(),
+            agent_active_spaces_.contains(space_id));
+      }
+      UfoCefWindowSetPresented(handle, true);
       SetVisibleSpace(space_id);
       return "ok";
     }
     if (operation == "hide-space") {
-      UfoCefWindowSetPresented(window->GetWindowHandle(), false);
+      if (auto spec = native_space_specs_.find(space_id);
+          spec != native_space_specs_.end()) spec->second.visible = false;
+      UfoCefWindowSetPresented(handle, false);
       if (visible_space_id_ == space_id) SetVisibleSpace(0);
       SetSpaceCompositorAwake(space_id, false);
       return "ok";
     }
     if (operation == "focus-space") {
+      if (auto spec = native_space_specs_.find(space_id);
+          spec != native_space_specs_.end()) spec->second.visible = true;
       SetSpaceCompositorAwake(space_id, true);
-      window->Show();
-      UfoCefWindowSetPresented(window->GetWindowHandle(), true);
-      window->Activate();
-      window->BringToTop();
+      if (has_views_window) {
+        views_window->second->Show();
+        views_window->second->Activate();
+        views_window->second->BringToTop();
+      } else {
+        UfoCefShellControlsSet(handle, presentation_socket_.c_str());
+        UfoCefNativeSpaceWindowSet(
+            handle, space_id, presentation_socket_.c_str(),
+            agent_active_spaces_.contains(space_id));
+        native_browser->second->GetHost()->SetFocus(true);
+      }
+      UfoCefWindowSetPresented(handle, true);
+      UfoCefWindowFocus(handle);
       SetVisibleSpace(space_id);
       return "ok";
     }
@@ -728,11 +1132,19 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       agent_active_spaces_.erase(space_id);
       closing_spaces_.insert(space_id);
       if (visible_space_id_ == space_id) SetVisibleSpace(0);
-      window->Close();
+      if (has_views_window) {
+        views_window->second->Close();
+      } else {
+        FlushNativeSpaceCookiesAndClose(space_id);
+      }
       return "ok";
     }
     if (operation == "request-window-close-space") {
-      window->Close();
+      if (has_views_window) {
+        views_window->second->Close();
+      } else if (!IsSpaceAgentConnectionActive(space_id)) {
+        UfoCefRequestSpaceClose(space_id, presentation_socket_.c_str());
+      }
       return "ok";
     }
     if (operation == "agent-active-space-on") {
@@ -899,6 +1311,18 @@ void UfoCefHandler::DispatchDevToolsMessage(
             if (!cache_path.empty()) {
               handler->context_download_dirs_.erase(cache_path);
             }
+          }
+        }
+        if (method == "Target.createTarget" &&
+            browser_route.rfind("space:", 0) == 0) {
+          const int space_id = std::atoi(browser_route.c_str() + 6);
+          const auto context = browser->GetHost()->GetRequestContext();
+          const auto cache_path = context
+              ? context->GetCachePath().ToString()
+              : std::string();
+          if (space_id > 0 && !cache_path.empty()) {
+            handler->pending_context_browser_spaces_[cache_path].push_back(
+                space_id);
           }
         }
         auto observer = CefRefPtr<UfoDevToolsObserver>(

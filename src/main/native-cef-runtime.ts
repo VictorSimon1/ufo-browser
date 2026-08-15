@@ -39,6 +39,12 @@ export type NativeCefRuntimeOptions = {
   overview?: boolean;
   /** Use Chromium's full native Chrome toolbar for a human-facing Space. */
   chromeShell?: boolean;
+  /** Launch the Chromium-owned Product Shell directly (architecture probe). */
+  nativeChromeProductShell?: boolean;
+  /** Select a real Chrome Runtime profile directory such as Default/Profile 1. */
+  chromeProfileDirectory?: string;
+  /** Enable the private Chrome ProfileManager architecture probe commands. */
+  chromeProfileManagerProbe?: boolean;
   /** UFO-owned native controller metadata shown in the Space titlebar. */
   spaceName?: string;
   profileName?: string;
@@ -60,6 +66,12 @@ export type NativeCefSharedSpaceSpec = {
   visible?: boolean;
   /** False for internal Profile transactions that need no human Chrome UI. */
   chromeShell?: boolean;
+  /** Full Chromium-owned Chrome window with native tab strip and omnibox. */
+  nativeChromeShell?: boolean;
+  /** Real Chrome Runtime ProfileManager directory for persistent Spaces. */
+  chromeProfileDirectory?: string;
+  /** Shared Chrome user-data root owned by the single UFO CEF host. */
+  chromeUserDataRoot?: string;
 };
 
 type NativeCefSpaceBrowser = {
@@ -511,12 +523,16 @@ export class NativeCefRuntime {
       const timer = setTimeout(() => {
         signalProcessGroup(child, "SIGKILL");
         resolveStop();
-      }, 2_000);
+      }, 3_000);
       child.once("exit", () => {
         clearTimeout(timer);
         resolveStop();
       });
-      signalProcessGroup(child, "SIGTERM");
+      // Terminate the browser process first and let CEF shut its helpers down
+      // in dependency order. Sending SIGTERM to the complete detached process
+      // group kills the storage/network services before cookie and Profile
+      // flushes complete. The timer above still removes a wedged process tree.
+      child.kill("SIGTERM");
     });
   }
 
@@ -535,6 +551,25 @@ export class NativeCefRuntime {
       throw new Error(`Native CEF shared Space creation failed: ${response}`);
     }
     return result as { ok: true; spaceId: number; browserRoute: string };
+  }
+
+  async probeChromeProfileManager(
+    command: "list-contexts" | "add-profile" | "manage-profiles",
+  ) {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "chrome-profile-manager-probe",
+      action: command,
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    return JSON.parse(response);
+  }
+
+  async presentationStatus() {
+    const response = await this.sendControlPayload(JSON.stringify({
+      command: "presentation-status",
+    }));
+    if (response.startsWith("error ")) throw new Error(response);
+    return JSON.parse(response);
   }
 
   async controlSharedSpace(
@@ -671,8 +706,20 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
       throw new Error("Native CEF shared host is not running");
     }
     await this.host.createSharedSpace(this.space);
-    this.started = true;
-    return this.host.version();
+    const deadline = Date.now() + 15_000;
+    let browsers: NativeCefSpaceBrowser[] = [];
+    while (Date.now() < deadline) {
+      browsers = await this.host.listSharedSpaceBrowsers(this.space.id)
+        .catch(() => []);
+      if (browsers.some((browser) => browser.primary)) {
+        this.started = true;
+        return this.host.version();
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    }
+    throw new Error(
+      `Native CEF shared Space ${this.space.id} browser route did not become ready: ${JSON.stringify(browsers)}`,
+    );
   }
 
   override version() {
@@ -687,6 +734,19 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
         const result = await connection.send("Target.getTargets");
         const infos = result?.targetInfos || [];
         const selected = new Set<string>();
+        const realChromeProfile = Boolean(this.space.chromeProfileDirectory);
+        const routedFrameTree = realChromeProfile
+          ? await connection.send("Page.getFrameTree").catch(() => undefined)
+          : undefined;
+        const routedFrameId = routedFrameTree?.frameTree?.frame?.id ||
+          routedFrameTree?.result?.frameTree?.frame?.id;
+        const routedPrimaryTargetId = routedFrameId &&
+          infos.some((target: any) => target.targetId === routedFrameId)
+            ? String(routedFrameId)
+            : undefined;
+        if (routedPrimaryTargetId) {
+          selected.add(routedPrimaryTargetId);
+        }
         for (const target of infos) {
           if (this.ownedTargetIds.has(target.targetId) ||
               target.ufoSpaceId === this.space.id) {
@@ -700,6 +760,7 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
         // breaks when two Spaces are both on Google or a restored page.
         for (const target of infos) {
           if (target.type !== "page" || selected.has(target.targetId)) continue;
+          if (realChromeProfile) continue;
           const lastProbe = this.targetProbeAt.get(target.targetId) || 0;
           if (Date.now() - lastProbe < 500) continue;
           this.targetProbeAt.set(target.targetId, Date.now());
@@ -740,7 +801,14 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
           }
         }
         const targets: NativeCefTarget[] = infos
-          .filter((target: any) => selected.has(target.targetId))
+          // Keep the exact UUID selected so OOPIF/opener relationships can be
+          // followed, but expose the primary page through its direct
+          // CefBrowser route below. Attaching back to the primary UUID through
+          // CEF's browser-level endpoint can stall Chrome Runtime even though
+          // direct Runtime/Page commands on that CefBrowser are reliable.
+          .filter((target: any) =>
+            selected.has(target.targetId) &&
+            target.targetId !== routedPrimaryTargetId)
           .map((target: any) => ({
             id: target.targetId,
             type: target.type,
@@ -760,10 +828,19 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
         // endpoint so Agent tab/popup APIs see the complete logical Space.
         const spaceBrowsers = await this.host.listSharedSpaceBrowsers(this.space.id);
         this.directTargetRoutes.clear();
+        const hasDiscoveredPrimaryPage = !realChromeProfile && targets.some((target) =>
+          target.type === "page" && !target.id.startsWith("cef-browser:"),
+        );
         for (const browser of spaceBrowsers) {
-          if (browser.primary) continue;
           const id = `cef-browser:${browser.browserId}`;
           this.directTargetRoutes.set(id, browser.route);
+          // A real Chrome Profile may be shared with the internal Overview or
+          // another Space. In that case browser-level Target.getTargets is
+          // process-wide and CEF can reject cross-WebContents attachment while
+          // the page marker is being probed. The primary CefBrowser route is
+          // already exact, so publish it as a stable synthetic target whenever
+          // UUID discovery did not identify this Space's primary page.
+          if (browser.primary && hasDiscoveredPrimaryPage) continue;
           targets.push({
             id,
             type: "page",
@@ -923,6 +1000,17 @@ export function buildNativeCefArgs(options: NativeCefRuntimeOptions, port = opti
   if (options.presentationSocket) args.push(`--presentation-socket=${resolve(options.presentationSocket)}`);
   if (options.useMockKeychain) args.push("--use-mock-keychain");
   if (options.overview) args.push("--overview");
+  if (options.nativeChromeProductShell) args.push("--native-chrome-product-shell");
+  if (options.chromeProfileManagerProbe) args.push("--chrome-profile-manager-probe");
+  if (options.chromeProfileDirectory) {
+    if (options.chromeProfileDirectory.includes("/") ||
+        options.chromeProfileDirectory.includes("\\") ||
+        options.chromeProfileDirectory === "." ||
+        options.chromeProfileDirectory === "..") {
+      throw new Error(`Invalid Chrome profile directory: ${options.chromeProfileDirectory}`);
+    }
+    args.push(`--profile-directory=${options.chromeProfileDirectory}`);
+  }
   // Keep the mode explicit in production launches. The host also defaults to
   // this mode for direct non-Overview runs, while --plain-page remains an
   // intentional diagnostic escape hatch for CEF host development.

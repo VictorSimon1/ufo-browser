@@ -374,17 +374,67 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   if (space_id <= 0 || url.empty() || cache_path.empty()) return false;
   const bool chrome_shell = !spec->HasKey("chromeShell") ||
                             spec->GetBool("chromeShell");
+  const bool native_chrome_shell = chrome_shell &&
+      spec->HasKey("nativeChromeShell") &&
+      spec->GetBool("nativeChromeShell");
 
-  CefRequestContextSettings context_settings;
   const auto canonical_cache = std::filesystem::weakly_canonical(
       std::filesystem::path(cache_path));
+  CefBrowserSettings browser_settings;
+  if (native_chrome_shell) {
+    handler->RegisterPendingNativeSpace(
+        canonical_cache.string(),
+        space_id,
+        spec->GetBool("visible"),
+        url,
+        spec->GetString("name").ToString(),
+        spec->GetString("profileName").ToString());
+    const auto chrome_profile_directory =
+        spec->GetString("chromeProfileDirectory").ToString();
+    const auto chrome_user_data_root =
+        spec->GetString("chromeUserDataRoot").ToString();
+    if (!chrome_profile_directory.empty() &&
+        !chrome_user_data_root.empty()) {
+      if (chrome_profile_directory == "." ||
+          chrome_profile_directory == ".." ||
+          chrome_profile_directory.find('/') != std::string::npos ||
+          chrome_profile_directory.find('\\') != std::string::npos) {
+        handler->CancelPendingNativeSpace(canonical_cache.string(), space_id);
+        return false;
+      }
+      const auto command_line = CefCommandLine::GetGlobalCommandLine();
+      const bool launched = UfoCefOpenChromeProfileWindow(
+          command_line->GetProgram().ToString().c_str(),
+          chrome_user_data_root.c_str(),
+          chrome_profile_directory.c_str(),
+          url.c_str(),
+          command_line->HasSwitch("use-mock-keychain"));
+      if (!launched) {
+        handler->CancelPendingNativeSpace(canonical_cache.string(), space_id);
+      }
+      return launched;
+    }
+  }
+
+  CefRequestContextSettings context_settings;
   CefString(&context_settings.cache_path) = canonical_cache.string();
+  // Agent login state commonly includes session cookies. Custom persistent
+  // RequestContexts do not retain those across restarts unless this is set,
+  // even though ordinary expiry-bearing cookies and storage already live
+  // under cache_path.
   context_settings.persist_session_cookies = true;
   auto request_context =
       CefRequestContext::CreateContext(context_settings, nullptr);
   if (!request_context) return false;
 
-  CefBrowserSettings browser_settings;
+  if (native_chrome_shell) {
+    CefWindowInfo window_info;
+    window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    window_info.hidden = !spec->GetBool("visible");
+    return CefBrowserHost::CreateBrowser(
+        window_info, handler, url, browser_settings, nullptr,
+        request_context);
+  }
   auto browser_view = CefBrowserView::CreateBrowserView(
       handler, url, browser_settings, nullptr, request_context,
       new UfoBrowserViewDelegate(chrome_shell, space_id));
@@ -447,6 +497,9 @@ void UfoCefApp::OnBeforeCommandLineProcessing(
   if (const char* attached = std::getenv("UFO_BROWSER_NATIVE_ATTACHED_HOST");
       attached && std::string(attached) == "1") {
     command_line->AppendSwitch("overview");
+    if (!command_line->HasSwitch("profile-directory")) {
+      command_line->AppendSwitchWithValue("profile-directory", "Default");
+    }
   }
   AppendEnvironmentSwitch(command_line, "UFO_BROWSER_ATTACHED_OVERVIEW_URL",
                           "url");
@@ -465,6 +518,29 @@ void UfoCefApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
 
   const auto command_line = CefCommandLine::GetGlobalCommandLine();
+  // Architecture probe for the final UFO product shell. Unlike a
+  // CefBrowserView hosted inside an application-owned Views window, a native
+  // Chrome-style browser is created by Chromium itself and includes the full
+  // Chrome UI layer (tab strip, omnibox, toolbar and browser commands). Keep
+  // this opt-in while Space registration/presentation is migrated from
+  // CefWindow handles to native browser window handles.
+  if (command_line->HasSwitch("native-chrome-product-shell")) {
+    auto handler = CefRefPtr<UfoCefHandler>(new UfoCefHandler(true));
+    const auto control_socket =
+        command_line->GetSwitchValue("control-socket").ToString();
+    if (!control_socket.empty()) handler->StartControlSocket(control_socket);
+    const auto devtools_socket =
+        command_line->GetSwitchValue("devtools-socket").ToString();
+    if (!devtools_socket.empty()) handler->StartDevToolsSocket(devtools_socket);
+    handler->SetPresentationSocket(
+        command_line->GetSwitchValue("presentation-socket").ToString());
+    CefWindowInfo window_info;
+    window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    CefBrowserSettings browser_settings;
+    CefBrowserHost::CreateBrowser(window_info, handler, StartupUrl(),
+                                  browser_settings, nullptr, nullptr);
+    return;
+  }
   const bool overview = command_line->HasSwitch("overview");
   // A non-Overview CEF host is a real browser shell by default. The explicit
   // switch is passed by UFO's runtime and makes the product invariant visible

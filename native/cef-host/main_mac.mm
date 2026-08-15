@@ -226,16 +226,16 @@ static void StartSignalPump() {
           _exit(0);
         }
       }));
-      // The Chrome Views runtime can be waiting on a renderer/browser-info
-      // callback while a SIGTERM is already tearing down the helper tree. Do
-      // not let that callback hold the host forever: give the normal close
-      // task a short grace period, then use the process-group shutdown path.
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
-      // The launcher sends SIGTERM to the complete detached process group, so
-      // helpers have already received the same bounded shutdown signal. If the
-      // Chrome Views loop is still blocked after the grace period, exiting the
-      // host here prevents a renderer/GPU leak from keeping the group alive.
-      _exit(0);
+      // Give Chromium's normal browser/context shutdown enough time to flush
+      // cookies, storage and profile metadata. StopSignalPump marks the loop
+      // complete as soon as CefRunMessageLoop returns. Only use _exit as the
+      // final bounded fallback for a genuinely wedged Chrome callback.
+      for (int attempt = 0;
+           attempt < 40 && !g_signal_thread_stop.load();
+           attempt += 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      if (!g_signal_thread_stop.load()) _exit(0);
       break;
     }
   });
@@ -395,7 +395,9 @@ int main(int argc, char* argv[]) {
     if (!CreateSignalPipe()) return 1;
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();
     command_line->InitFromArgv(argc, argv);
-    if (!StartPackagedAgentService()) {
+    const bool profile_window_request =
+        command_line->HasSwitch("ufo-profile-window-request");
+    if (!profile_window_request && !StartPackagedAgentService()) {
       StopSignalPump();
       return 1;
     }

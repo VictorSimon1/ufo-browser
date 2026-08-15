@@ -63,6 +63,21 @@ test("Native Overview stays a management page without browser chrome", () => {
   assert.ok(!args.includes("--chrome-shell"));
 });
 
+test("Native Chrome Profile probes select a safe real Profile directory", () => {
+  const args = buildNativeCefArgs({
+    url: "https://example.com/",
+    nativeChromeProductShell: true,
+    chromeProfileDirectory: "Profile 1",
+    chromeProfileManagerProbe: true,
+  });
+  assert.ok(args.includes("--native-chrome-product-shell"));
+  assert.ok(args.includes("--profile-directory=Profile 1"));
+  assert.ok(args.includes("--chrome-profile-manager-probe"));
+  assert.throws(() => buildNativeCefArgs({
+    chromeProfileDirectory: "../escaped",
+  }), /Invalid Chrome profile directory/);
+});
+
 test("private CEF bridge carries an explicit shared-host browser route", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-private-route-"));
   const socketPath = join(root, "devtools.sock");

@@ -81,6 +81,9 @@ const manager = new NativeCefTaskSpaceManager({
   sourcePartitionsRoot,
   controlSocketsRoot,
   presentationSocket,
+  nativeChromeProductShell:
+    process.env.UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL === "1",
+  chromeUserDataRoot: userDataPath,
   // macOS sockaddr_un paths are limited to roughly 104 bytes. Keep transient
   // per-Space sockets under a short TMPDIR root; browser data remains under
   // the user-data directory and is not moved or exposed by this change.
@@ -154,6 +157,7 @@ if (sharedHostEnabled) {
     executable: process.env.UFO_CEF_HOST,
     url: overviewInfo.url,
     overview: true,
+    chromeProfileDirectory: "Default",
     userDataDir: userDataPath,
     controlSocket: overviewControlSocket,
     presentationSocket,

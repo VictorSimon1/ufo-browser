@@ -23,6 +23,7 @@ bool UfoAgentOverlayOwnsWindow(void* ns_window);
 // until an on-demand preview or presentation wakes them again.
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented);
 bool UfoCefWindowIsPresented(void* cef_view_handle);
+void UfoCefWindowFocus(void* cef_view_handle);
 void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake);
 bool UfoCefWindowIsCompositorAwake(void* cef_view_handle);
 
@@ -30,6 +31,20 @@ bool UfoCefWindowIsCompositorAwake(void* cef_view_handle);
 // sends presentation commands to UFO over a private Unix socket and is never
 // part of the CEF page/compositor screenshot path.
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket);
+bool UfoCefShellControlsArePresentedForWindow(void* cef_view_handle);
+
+// Chromium owns the native Chrome window and its traffic-light buttons. Route
+// the close button back through UFO's durable Space state machine instead of
+// allowing AppKit/Chromium to destroy the window behind the coordinator.
+void UfoCefNativeSpaceWindowSet(void* cef_view_handle,
+                                int space_id,
+                                const char* presentation_socket,
+                                bool agent_active);
+void UfoCefNativeSpaceWindowSetAgentActive(void* cef_view_handle,
+                                           bool agent_active);
+void UfoCefNativeSpaceWindowClear(void* cef_view_handle);
+bool UfoCefNativeSpaceWindowIsCloseRouted(void* cef_view_handle);
+bool UfoCefNativeSpaceWindowIsCloseEnabled(void* cef_view_handle);
 
 void UfoCefSpaceControllerSet(void* cef_view_handle,
                               const char* space_name,
@@ -40,6 +55,15 @@ bool UfoCefChromeControlsArePresentedForWindow(void* cef_view_handle);
 bool UfoCefChromeControlsOwnWindow(void* ns_window);
 void UfoCefRequestSpaceClose(int space_id, const char* presentation_socket);
 void UfoCefRequestProductTermination();
+
+// Ask Chromium's ProcessSingleton to create a native window for an existing
+// Chrome Profile inside the already-running UFO CEF host. The short-lived
+// forwarding process exits after handing the request to the primary process.
+bool UfoCefOpenChromeProfileWindow(const char* executable,
+                                   const char* user_data_root,
+                                   const char* profile_directory,
+                                   const char* url,
+                                   bool use_mock_keychain);
 
 #ifdef __cplusplus
 }

@@ -36,6 +36,10 @@ export type NativeCefTaskSpaceManagerOptions = {
   /** The one native CEF main process that owns all logical Space surfaces. */
   sharedHost?: NativeCefRuntime;
   ownsSharedHost?: boolean;
+  /** Use Chromium-owned native Chrome windows for human-facing Spaces. */
+  nativeChromeProductShell?: boolean;
+  /** Chrome Runtime user-data root shared by the one native CEF host. */
+  chromeUserDataRoot?: string;
 };
 
 export type NativeCefPresentationHooks = {
@@ -359,7 +363,18 @@ export class NativeCefTaskSpaceManager {
     if (existing?.isRunning()) return existing;
     const tab = space.tabs.find((candidate) => candidate.targetId === space.activeTabId) ?? space.tabs[0];
     if (!tab) throw new Error("native Space has no active tab");
-    const dataDir = join(this.options.partitionsRoot, this.runtimeDataDirectory(space));
+    const realChromeProfile = Boolean(
+      this.sharedHost &&
+      this.options.nativeChromeProductShell &&
+      this.options.chromeUserDataRoot &&
+      space.profileMode === "persistent"
+    );
+    const chromeProfileDirectory = realChromeProfile
+      ? this.chromeProfileDirectory(space.profileId)
+      : undefined;
+    const dataDir = realChromeProfile
+      ? join(this.options.chromeUserDataRoot!, chromeProfileDirectory!)
+      : join(this.options.partitionsRoot, this.runtimeDataDirectory(space));
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     if (space.profileMode === "persistent") {
       const sourceRoot = this.options.sourcePartitionsRoot
@@ -419,6 +434,11 @@ export class NativeCefTaskSpaceManager {
           name: space.name,
           profileName: runtimeOptions.profileName,
           visible: false,
+          nativeChromeShell: this.options.nativeChromeProductShell,
+          chromeProfileDirectory,
+          chromeUserDataRoot: realChromeProfile
+            ? this.options.chromeUserDataRoot
+            : undefined,
         })
       : new NativeCefRuntime(runtimeOptions);
     if (runtimeOptions.controlSocket) await mkdir(dirname(runtimeOptions.controlSocket), { recursive: true, mode: 0o700 });
@@ -735,6 +755,13 @@ export class NativeCefTaskSpaceManager {
 
   private runtimeDataDirectory(space: SpaceRecord) {
     return isTemporarySpace(space) ? `space-${space.id}` : `profile-${space.profileId}/space-${space.id}`;
+  }
+
+  private chromeProfileDirectory(profileId: string) {
+    if (profileId === "default") return "Default";
+    const profile = this.options.profiles.getOrThrow(profileId);
+    const suffix = profile.partitionId.replace(/^x-browser-profile-/, "");
+    return `UFO-${suffix}`;
   }
 
   private profileSourceRoot(profile: ReturnType<BrowserProfileRegistry["getOrThrow"]>) {

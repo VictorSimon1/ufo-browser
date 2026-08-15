@@ -338,6 +338,46 @@ static NSRect UfoOverlayTakeOverRect(NSRect capsule) {
 @implementation UfoChromeControlsMetadata
 @end
 
+@interface UfoNativeSpaceWindowBinding : NSObject
+@property(nonatomic, assign) NSButton* closeButton;
+@property(nonatomic, assign) id originalTarget;
+@property(nonatomic, assign) SEL originalAction;
+@property(nonatomic) BOOL originalEnabled;
+@property(nonatomic) NSInteger spaceId;
+@property(nonatomic, copy) NSString* socketPath;
+@property(nonatomic) BOOL agentActive;
+- (void)requestClose:(id)sender;
+@end
+
+@implementation UfoNativeSpaceWindowBinding
+
+- (void)requestClose:(id)sender {
+  (void)sender;
+  if (self.agentActive || self.spaceId <= 0 || !self.socketPath.length) return;
+  const std::string socketPath = self.socketPath.UTF8String ?: "";
+  const NSInteger spaceId = self.spaceId;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    if (socketPath.empty() ||
+        socketPath.size() >= sizeof(sockaddr_un{}.sun_path)) return;
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socketPath.c_str(),
+                 sizeof(address.sun_path) - 1);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&address),
+                  sizeof(address)) == 0) {
+      const std::string command =
+          std::string("{\"command\":\"close-space\",\"spaceId\":") +
+          std::to_string(spaceId) + "}\n";
+      (void)::write(fd, command.data(), command.size());
+    }
+    ::close(fd);
+  });
+}
+
+@end
+
 static UfoOverlayPanel* gPanel;
 static NSWindow* gHostWindow;
 static id gMoveObserver;
@@ -352,6 +392,19 @@ static id gSpaceControllerMoveObserver;
 static id gSpaceControllerResizeObserver;
 static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* gChromeControlsMetadata;
 static NSMapTable<NSWindow*, NSNumber*>* gCompositorAwakeState;
+static NSMapTable<NSWindow*, UfoNativeSpaceWindowBinding*>*
+    gNativeSpaceWindowBindings;
+
+// CefWindowHandle is an NSView* for Views-hosted browsers and an NSWindow*
+// for Chromium-owned native Chrome windows. Resolve both without forcing the
+// presentation/overlay layer to care which CEF hosting model created it.
+static NSWindow* HostWindowForCefHandle(void* cef_handle) {
+  id object = (id)cef_handle;
+  if (!object) return nil;
+  if ([object isKindOfClass:NSWindow.class]) return (NSWindow*)object;
+  if ([object isKindOfClass:NSView.class]) return ((NSView*)object).window;
+  return nil;
+}
 
 static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* ChromeControlsMetadata() {
   if (!gChromeControlsMetadata) {
@@ -382,6 +435,41 @@ static NSMapTable<NSWindow*, NSNumber*>* CompositorAwakeState() {
                   capacity:0];
   }
   return gCompositorAwakeState;
+}
+
+static NSMapTable<NSWindow*, UfoNativeSpaceWindowBinding*>*
+NativeSpaceWindowBindings() {
+  if (!gNativeSpaceWindowBindings) {
+    gNativeSpaceWindowBindings = [[NSMapTable alloc]
+        initWithKeyOptions:NSPointerFunctionsWeakMemory |
+                           NSPointerFunctionsObjectPersonality
+              valueOptions:NSPointerFunctionsStrongMemory
+                  capacity:0];
+  }
+  return gNativeSpaceWindowBindings;
+}
+
+static void UpdateNativeSpaceCloseButton(
+    UfoNativeSpaceWindowBinding* binding) {
+  if (!binding.closeButton) return;
+  binding.closeButton.enabled = !binding.agentActive;
+  binding.closeButton.toolTip = binding.agentActive
+      ? @"Agent 正在控制此 Space"
+      : @"关闭 Space";
+}
+
+static void RemoveNativeSpaceWindowBinding(NSWindow* host) {
+  if (!host) return;
+  UfoNativeSpaceWindowBinding* binding =
+      [NativeSpaceWindowBindings() objectForKey:host];
+  if (!binding) return;
+  if (binding.closeButton) {
+    binding.closeButton.target = binding.originalTarget;
+    binding.closeButton.action = binding.originalAction;
+    binding.closeButton.enabled = binding.originalEnabled;
+    binding.closeButton.toolTip = nil;
+  }
+  [NativeSpaceWindowBindings() removeObjectForKey:host];
 }
 
 void RemoveOverlay() {
@@ -579,13 +667,12 @@ static void PresentChromeControlsForHost(NSWindow* host) {
 }
 
 void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
-  NSView* view = (NSView*)cef_view_handle;
-  if (!view) return;
-  [view retain];
+  id nativeHandle = [(id)cef_view_handle retain];
+  if (!nativeHandle) return;
   void (^update)(void) = ^{
-    NSWindow* host = view.window;
+    NSWindow* host = HostWindowForCefHandle(nativeHandle);
     if (!host) {
-      [view release];
+      [nativeHandle release];
       return;
     }
     // Keep the window ordered and backed by Chromium even when not presented
@@ -623,27 +710,40 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
         PositionSpaceController();
       }
     } completionHandler:nil];
-    [view release];
+    [nativeHandle release];
   };
   if (NSThread.isMainThread) update();
   else dispatch_async(dispatch_get_main_queue(), update);
 }
 
 bool UfoCefWindowIsPresented(void* cef_view_handle) {
-  NSView* view = (NSView*)cef_view_handle;
-  if (!view || !view.window) return false;
-  NSWindow* host = view.window;
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  if (!host) return false;
   return host.isVisible && host.alphaValue > 0.5 && !host.ignoresMouseEvents;
 }
 
+void UfoCefWindowFocus(void* cef_view_handle) {
+  id nativeHandle = [(id)cef_view_handle retain];
+  if (!nativeHandle) return;
+  void (^focus)(void) = ^{
+    NSWindow* host = HostWindowForCefHandle(nativeHandle);
+    if (host) {
+      [NSApp activateIgnoringOtherApps:YES];
+      [host makeKeyAndOrderFront:nil];
+    }
+    [nativeHandle release];
+  };
+  if (NSThread.isMainThread) focus();
+  else dispatch_async(dispatch_get_main_queue(), focus);
+}
+
 void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake) {
-  NSView* view = (NSView*)cef_view_handle;
-  if (!view) return;
-  [view retain];
+  id nativeHandle = [(id)cef_view_handle retain];
+  if (!nativeHandle) return;
   void (^update)(void) = ^{
-    NSWindow* host = view.window;
+    NSWindow* host = HostWindowForCefHandle(nativeHandle);
     if (!host) {
-      [view release];
+      [nativeHandle release];
       return;
     }
     if (awake) {
@@ -652,7 +752,7 @@ void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake) {
       // without activation is sufficient for Chromium to resume producing a
       // compositor frame for Agent input or a low-frequency Overview capture.
       [host orderFront:nil];
-      [view release];
+      [nativeHandle release];
       return;
     }
     [CompositorAwakeState() setObject:@NO forKey:host];
@@ -667,7 +767,7 @@ void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake) {
       if (still_sleeping && host.ignoresMouseEvents && host.alphaValue < 0.1) {
         [host orderOut:nil];
       }
-      [view release];
+      [nativeHandle release];
     });
   };
   if (NSThread.isMainThread) update();
@@ -675,18 +775,17 @@ void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake) {
 }
 
 bool UfoCefWindowIsCompositorAwake(void* cef_view_handle) {
-  NSView* view = (NSView*)cef_view_handle;
-  return view && view.window && view.window.isVisible;
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  return host && host.isVisible;
 }
 
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {
-  NSView* retainedCefView = [(NSView*)cef_view_handle retain];
+  id retainedCefHandle = [(id)cef_view_handle retain];
   const std::string socketValue = presentation_socket ?: "";
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSView* cefView = retainedCefView;
-    NSWindow* host = cefView.window;
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
     if (!host) {
-      [cefView release];
+      [retainedCefHandle release];
       return;
     }
     UfoChromeControlsMetadata* metadata = MetadataForHost(host, YES);
@@ -698,23 +797,114 @@ void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_sock
     } else if (!host.ignoresMouseEvents) {
       PresentChromeControlsForHost(host);
     }
-    [cefView release];
+    [retainedCefHandle release];
   });
+}
+
+bool UfoCefShellControlsArePresentedForWindow(void* cef_view_handle) {
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  return host && gShellPanel && gShellHostWindow == host &&
+      gShellPanel.parentWindow == host && gShellPanel.alphaValue > 0.5 &&
+      !gShellPanel.ignoresMouseEvents;
+}
+
+void UfoCefNativeSpaceWindowSet(void* cef_view_handle,
+                                int space_id,
+                                const char* presentation_socket,
+                                bool agent_active) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  const std::string socketValue = presentation_socket ?: "";
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
+    if (!host || space_id <= 0 || socketValue.empty()) {
+      [retainedCefHandle release];
+      return;
+    }
+    NSButton* closeButton = [host standardWindowButton:NSWindowCloseButton];
+    if (!closeButton) {
+      [retainedCefHandle release];
+      return;
+    }
+    UfoNativeSpaceWindowBinding* binding =
+        [NativeSpaceWindowBindings() objectForKey:host];
+    if (!binding) {
+      binding = [[[UfoNativeSpaceWindowBinding alloc] init] autorelease];
+      binding.closeButton = closeButton;
+      binding.originalTarget = closeButton.target;
+      binding.originalAction = closeButton.action;
+      binding.originalEnabled = closeButton.enabled;
+      [NativeSpaceWindowBindings() setObject:binding forKey:host];
+      closeButton.target = binding;
+      closeButton.action = @selector(requestClose:);
+    }
+    binding.spaceId = space_id;
+    binding.socketPath =
+        [NSString stringWithUTF8String:socketValue.c_str()];
+    binding.agentActive = agent_active;
+    UpdateNativeSpaceCloseButton(binding);
+    [retainedCefHandle release];
+  });
+}
+
+void UfoCefNativeSpaceWindowSetAgentActive(void* cef_view_handle,
+                                           bool agent_active) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  if (!retainedCefHandle) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
+    UfoNativeSpaceWindowBinding* binding = host
+        ? [NativeSpaceWindowBindings() objectForKey:host]
+        : nil;
+    if (binding) {
+      binding.agentActive = agent_active;
+      UpdateNativeSpaceCloseButton(binding);
+    }
+    [retainedCefHandle release];
+  });
+}
+
+void UfoCefNativeSpaceWindowClear(void* cef_view_handle) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  if (!retainedCefHandle) return;
+  void (^clear)(void) = ^{
+    RemoveNativeSpaceWindowBinding(
+        HostWindowForCefHandle(retainedCefHandle));
+    [retainedCefHandle release];
+  };
+  if (NSThread.isMainThread) clear();
+  else dispatch_async(dispatch_get_main_queue(), clear);
+}
+
+bool UfoCefNativeSpaceWindowIsCloseRouted(void* cef_view_handle) {
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  UfoNativeSpaceWindowBinding* binding = host
+      ? [NativeSpaceWindowBindings() objectForKey:host]
+      : nil;
+  return binding && binding.closeButton &&
+      binding.closeButton.target == binding &&
+      binding.closeButton.action == @selector(requestClose:);
+}
+
+bool UfoCefNativeSpaceWindowIsCloseEnabled(void* cef_view_handle) {
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  UfoNativeSpaceWindowBinding* binding = host
+      ? [NativeSpaceWindowBindings() objectForKey:host]
+      : nil;
+  return binding && binding.closeButton && binding.closeButton.enabled;
 }
 
 void UfoCefSpaceControllerSet(void* cef_view_handle,
                               const char* space_name,
                               const char* profile_name,
                               const char* presentation_socket) {
-  NSView* retainedCefView = [(NSView*)cef_view_handle retain];
+  id retainedCefHandle = [(id)cef_view_handle retain];
   const std::string spaceValue = space_name ?: "Space";
   const std::string profileValue = profile_name ?: "Default";
   const std::string socketValue = presentation_socket ?: "";
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSView* cefView = retainedCefView;
-    NSWindow* host = cefView.window;
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
     if (!host) {
-      [cefView release];
+      [retainedCefHandle release];
       return;
     }
     UfoChromeControlsMetadata* metadata = MetadataForHost(host, YES);
@@ -728,31 +918,29 @@ void UfoCefSpaceControllerSet(void* cef_view_handle,
     } else if (!host.ignoresMouseEvents) {
       PresentChromeControlsForHost(host);
     }
-    [cefView release];
+    [retainedCefHandle release];
   });
 }
 
 void UfoCefChromeControlsClear(void* cef_view_handle) {
-  NSView* cefView = (NSView*)cef_view_handle;
-  if (!cefView) return;
-  [cefView retain];
+  id nativeHandle = [(id)cef_view_handle retain];
+  if (!nativeHandle) return;
   void (^update)(void) = ^{
-    NSWindow* host = cefView.window;
+    NSWindow* host = HostWindowForCefHandle(nativeHandle);
     if (host) {
       [ChromeControlsMetadata() removeObjectForKey:host];
       if (gShellHostWindow == host) RemoveShellControls();
       if (gSpaceControllerHostWindow == host) RemoveSpaceController();
     }
-    [cefView release];
+    [nativeHandle release];
   };
   if (NSThread.isMainThread) update();
   else dispatch_async(dispatch_get_main_queue(), update);
 }
 
 bool UfoCefChromeControlsArePresentedForWindow(void* cef_view_handle) {
-  NSView* view = (NSView*)cef_view_handle;
-  if (!view || !view.window) return false;
-  NSWindow* host = view.window;
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  if (!host) return false;
   return gShellPanel && gShellHostWindow == host && gShellPanel.parentWindow == host &&
       gShellPanel.alphaValue > 0.5 && !gShellPanel.ignoresMouseEvents &&
       gSpaceControllerPanel && gSpaceControllerHostWindow == host &&
@@ -793,14 +981,13 @@ void UfoAgentOverlaySet(void* cef_view_handle,
                         const char* label,
                         int space_id,
                         const char* presentation_socket) {
-  NSView* retainedCefView = [(NSView*)cef_view_handle retain];
+  id retainedCefHandle = [(id)cef_view_handle retain];
   const std::string socketValue = presentation_socket ?: "";
   dispatch_async(dispatch_get_main_queue(), ^{
-    NSView* cefView = retainedCefView;
-    NSWindow* host = cefView.window;
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
     if (!active || !host) {
       RemoveOverlay();
-      [cefView release];
+      [retainedCefHandle release];
       return;
     }
     if (gPanel && gHostWindow == host) {
@@ -809,7 +996,7 @@ void UfoAgentOverlaySet(void* cef_view_handle,
       gPanel.overlayView.socketPath = [NSString stringWithUTF8String:socketValue.c_str()];
       PositionOverlay();
       [gPanel orderFront:nil];
-      [cefView release];
+      [retainedCefHandle release];
       return;
     }
     RemoveOverlay();
@@ -859,7 +1046,7 @@ void UfoAgentOverlaySet(void* cef_view_handle,
       (void)note;
       PositionOverlay();
     }];
-    [cefView release];
+    [retainedCefHandle release];
   });
 }
 
@@ -869,8 +1056,8 @@ void UfoAgentOverlayClear(void* cef_view_handle) {
 }
 
 bool UfoAgentOverlayIsActiveForWindow(void* cef_view_handle) {
-  NSView* view = (NSView*)cef_view_handle;
-  return view && view.window && gPanel && gHostWindow == view.window &&
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  return host && gPanel && gHostWindow == host &&
       gPanel.isVisible && gPanel.alphaValue > 0.5 && !gPanel.ignoresMouseEvents;
 }
 
@@ -881,4 +1068,51 @@ bool UfoAgentOverlayHasActionsForWindow(void* cef_view_handle) {
 
 bool UfoAgentOverlayOwnsWindow(void* ns_window) {
   return ns_window && gPanel && gPanel == (NSWindow*)ns_window;
+}
+
+bool UfoCefOpenChromeProfileWindow(const char* executable,
+                                   const char* user_data_root,
+                                   const char* profile_directory,
+                                   const char* url,
+                                   bool use_mock_keychain) {
+  if (!executable || !*executable || !user_data_root || !*user_data_root ||
+      !profile_directory || !*profile_directory || !url || !*url) {
+    return false;
+  }
+  NSString* launchPath = [NSString stringWithUTF8String:executable];
+  if (![NSFileManager.defaultManager isExecutableFileAtPath:launchPath]) {
+    return false;
+  }
+  NSTask* task = [[NSTask alloc] init];
+  task.launchPath = launchPath;
+  NSMutableArray<NSString*>* arguments = [NSMutableArray arrayWithObjects:
+      [NSString stringWithFormat:@"--url=%s", url],
+      [NSString stringWithFormat:@"--user-data-dir=%s", user_data_root],
+      [NSString stringWithFormat:@"--profile-directory=%s", profile_directory],
+      @"--native-chrome-product-shell",
+      @"--new-window",
+      @"--ufo-profile-window-request",
+      nil];
+  if (use_mock_keychain) [arguments addObject:@"--use-mock-keychain"];
+  task.arguments = arguments;
+  NSMutableDictionary* environment =
+      [[[NSProcessInfo processInfo] environment] mutableCopy];
+  for (NSString* name in @[
+      @"UFO_BROWSER_NATIVE_ATTACHED_HOST",
+      @"UFO_BROWSER_ATTACHED_OVERVIEW_URL",
+      @"UFO_BROWSER_OVERVIEW_CONTROL_SOCKET",
+      @"UFO_BROWSER_PRESENTATION_SOCKET",
+      @"UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET",
+  ]) {
+    [environment removeObjectForKey:name];
+  }
+  task.environment = environment;
+  [environment release];
+  task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+  task.standardError = [NSFileHandle fileHandleWithNullDevice];
+  NSError* error = nil;
+  const bool launched = [task launchAndReturnError:&error];
+  if (!launched) NSLog(@"UFO failed to forward Chrome Profile window: %@", error);
+  [task release];
+  return launched;
 }
