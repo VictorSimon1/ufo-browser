@@ -394,6 +394,10 @@ static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* gChromeControlsMetadat
 static NSMapTable<NSWindow*, NSNumber*>* gCompositorAwakeState;
 static NSMapTable<NSWindow*, UfoNativeSpaceWindowBinding*>*
     gNativeSpaceWindowBindings;
+static NSWindow* gProductControllerWindow;
+static NSWindow* gMountedSpaceWindow;
+static id gProductControllerMoveObserver;
+static id gProductControllerResizeObserver;
 
 // CefWindowHandle is an NSView* for Views-hosted browsers and an NSWindow*
 // for Chromium-owned native Chrome windows. Resolve both without forcing the
@@ -404,6 +408,39 @@ static NSWindow* HostWindowForCefHandle(void* cef_handle) {
   if ([object isKindOfClass:NSWindow.class]) return (NSWindow*)object;
   if ([object isKindOfClass:NSView.class]) return ((NSView*)object).window;
   return nil;
+}
+
+static void SyncMountedSpaceFrame() {
+  if (!gProductControllerWindow || !gMountedSpaceWindow) return;
+  [gMountedSpaceWindow setFrame:gProductControllerWindow.frame display:YES];
+}
+
+static void UnmountSpaceWindow(NSWindow* host) {
+  if (!host || host != gMountedSpaceWindow) return;
+  if (host.parentWindow == gProductControllerWindow) {
+    [gProductControllerWindow removeChildWindow:host];
+  }
+  [gMountedSpaceWindow release];
+  gMountedSpaceWindow = nil;
+}
+
+static void MountSpaceWindow(NSWindow* host) {
+  if (!host || !gProductControllerWindow || host == gProductControllerWindow) {
+    return;
+  }
+  if (gMountedSpaceWindow != host) {
+    UnmountSpaceWindow(gMountedSpaceWindow);
+    gMountedSpaceWindow = [host retain];
+  }
+  NSWindow* old_parent = host.parentWindow;
+  if (old_parent && old_parent != gProductControllerWindow) {
+    [old_parent removeChildWindow:host];
+  }
+  [host setFrame:gProductControllerWindow.frame display:NO];
+  if (host.parentWindow != gProductControllerWindow) {
+    [gProductControllerWindow addChildWindow:host ordered:NSWindowAbove];
+  }
+  [gProductControllerWindow orderFrontRegardless];
 }
 
 static NSMapTable<NSWindow*, UfoChromeControlsMetadata*>* ChromeControlsMetadata() {
@@ -675,6 +712,25 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
       [nativeHandle release];
       return;
     }
+    const bool is_product_controller = host == gProductControllerWindow;
+    if (is_product_controller && !presented) {
+      // Keep the one UFO controller window in place behind the mounted Chrome
+      // surface. It is non-interactive while a Space owns presentation, but
+      // never disappears or forces AppKit to jump focus to a second location.
+      host.ignoresMouseEvents = YES;
+      host.alphaValue = 1.0;
+      [host orderFrontRegardless];
+      [nativeHandle release];
+      return;
+    }
+    if (!is_product_controller && presented) MountSpaceWindow(host);
+    if (is_product_controller && presented && gMountedSpaceWindow) {
+      NSWindow* mounted = gMountedSpaceWindow;
+      mounted.ignoresMouseEvents = YES;
+      mounted.alphaValue = 0.0;
+      [mounted orderOut:nil];
+      UnmountSpaceWindow(mounted);
+    }
     // Keep the window ordered and backed by Chromium even when not presented
     // to a human. This is deliberately separate from the Agent overlay panel.
     // A short AppKit cross-fade removes the hard flash when Overview and a
@@ -709,7 +765,20 @@ void UfoCefWindowSetPresented(void* cef_view_handle, bool presented) {
         gSpaceControllerPanel.animator.alphaValue = presented ? 1.0 : 0.0;
         PositionSpaceController();
       }
-    } completionHandler:nil];
+    } completionHandler:^{
+      if (!presented && host != gProductControllerWindow &&
+          host == gMountedSpaceWindow) {
+        // Detach the visual surface from the controller, but leave ordering
+        // policy to UfoCefWindowSetCompositorAwake. Agent-owned background
+        // Spaces must remain compositor-awake at alpha 0 for screenshots and
+        // CDP input; ordinary sleeping Spaces are ordered out by that separate
+        // low-power path after the transition finishes.
+        const bool keep_compositor_awake =
+            [[CompositorAwakeState() objectForKey:host] boolValue];
+        UnmountSpaceWindow(host);
+        if (keep_compositor_awake) [host orderFront:nil];
+      }
+    }];
     [nativeHandle release];
   };
   if (NSThread.isMainThread) update();
@@ -776,7 +845,83 @@ void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake) {
 
 bool UfoCefWindowIsCompositorAwake(void* cef_view_handle) {
   NSWindow* host = HostWindowForCefHandle(cef_view_handle);
-  return host && host.isVisible;
+  if (!host) return false;
+  NSNumber* scheduled = [CompositorAwakeState() objectForKey:host];
+  return scheduled ? scheduled.boolValue : host.isVisible;
+}
+
+void UfoCefProductControllerSet(void* cef_view_handle) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  if (!retainedCefHandle) return;
+  void (^install)(void) = ^{
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
+    if (!host) {
+      [retainedCefHandle release];
+      return;
+    }
+    if (gProductControllerWindow != host) {
+      NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+      if (gProductControllerMoveObserver) {
+        [center removeObserver:gProductControllerMoveObserver];
+      }
+      if (gProductControllerResizeObserver) {
+        [center removeObserver:gProductControllerResizeObserver];
+      }
+      UnmountSpaceWindow(gMountedSpaceWindow);
+      [gProductControllerWindow release];
+      gProductControllerWindow = [host retain];
+      gProductControllerMoveObserver = [center
+          addObserverForName:NSWindowDidMoveNotification
+                      object:host
+                       queue:NSOperationQueue.mainQueue
+                  usingBlock:^(NSNotification* note) {
+        (void)note;
+        SyncMountedSpaceFrame();
+      }];
+      gProductControllerResizeObserver = [center
+          addObserverForName:NSWindowDidResizeNotification
+                      object:host
+                       queue:NSOperationQueue.mainQueue
+                  usingBlock:^(NSNotification* note) {
+        (void)note;
+        SyncMountedSpaceFrame();
+      }];
+    }
+    [retainedCefHandle release];
+  };
+  if (NSThread.isMainThread) install();
+  else dispatch_async(dispatch_get_main_queue(), install);
+}
+
+void UfoCefProductControllerClear(void* cef_view_handle) {
+  id retainedCefHandle = [(id)cef_view_handle retain];
+  if (!retainedCefHandle) return;
+  void (^clear)(void) = ^{
+    NSWindow* host = HostWindowForCefHandle(retainedCefHandle);
+    if (host && host == gProductControllerWindow) {
+      NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+      if (gProductControllerMoveObserver) {
+        [center removeObserver:gProductControllerMoveObserver];
+      }
+      if (gProductControllerResizeObserver) {
+        [center removeObserver:gProductControllerResizeObserver];
+      }
+      gProductControllerMoveObserver = nil;
+      gProductControllerResizeObserver = nil;
+      UnmountSpaceWindow(gMountedSpaceWindow);
+      [gProductControllerWindow release];
+      gProductControllerWindow = nil;
+    }
+    [retainedCefHandle release];
+  };
+  if (NSThread.isMainThread) clear();
+  else dispatch_async(dispatch_get_main_queue(), clear);
+}
+
+bool UfoCefWindowIsMountedInProductController(void* cef_view_handle) {
+  NSWindow* host = HostWindowForCefHandle(cef_view_handle);
+  return host && host == gMountedSpaceWindow &&
+      host.parentWindow == gProductControllerWindow;
 }
 
 void UfoCefShellControlsSet(void* cef_view_handle, const char* presentation_socket) {

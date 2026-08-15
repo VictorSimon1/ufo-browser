@@ -200,6 +200,7 @@ try {
     chromeControlsFollowWarmSpace: true,
     nativeChromeToolbarAttached: true,
     nativeChromeProductShell: nativeProductShell,
+    spacesMountInsideUfoController: nativeProductShell,
     backgroundClosePreservesControls: true,
     agentOwnedNativeCloseBlocked: true,
     nativeCloseUsesSpaceStateMachine: true,
@@ -220,6 +221,7 @@ async function presentationStatus(path) {
 function hasSpaceControls(status, spaceId) {
   if (nativeProductShell) {
     return status.nativeChromeSpaceIds?.includes(spaceId) &&
+      status.controllerMountedSpaceIds?.includes(spaceId) &&
       status.nativeSpacesButtonSpaceIds?.includes(spaceId) &&
       status.nativeCloseRoutedSpaceIds?.includes(spaceId);
   }

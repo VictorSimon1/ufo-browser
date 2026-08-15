@@ -37,6 +37,8 @@ npm run package:mac:test
 
 Native 包由作为 App 主可执行文件的 CEF host、其管理的 Node Agent 服务和系统 `hdiutil` 生成，不再包含外层 AppKit launcher，也不包含 Electron、`app.asar` 或 Electron Builder 运行时。Node Agent 只附着到已运行的 UFO CEF host，不能再启动第二个浏览器主进程。CEF 二进制来自本地 `test/cef-runtime`，需要时运行 `npm run native:cef:fetch`。
 
+Native App 默认启用 Chromium 自己的 Chrome Product Shell。Overview 始终是 UFO 的产品控制器窗口；打开 Space 时，原生 Chrome surface 会在控制器原位置挂载并跟随移动、缩放，返回 Overview 时再原位卸载，不会把用户跳到另一个窗口位置。仅诊断旧 CEF toolbar 时可设置 `UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL=0`。
+
 旧 Electron 回退包仅用于迁移测试：
 
 ```bash
@@ -63,7 +65,7 @@ npm run package:mac
 1. 构建 Native CEF Agent、renderer 和 CLI。
 2. 构建作为 `UFO-Browser` 主可执行文件的 CEF Chrome host。
 3. 生成不含 Electron/app.asar 的 `release-native/UFO-Browser.app` 和拖拽安装 DMG。
-4. 运行 Native bundle、relocated install、CLI/Skill sync 和 Electron-free 进程树 smoke。
+4. 运行 Native bundle、relocated install、CLI/Skill sync 和 Electron-free 进程树 smoke；Bundle smoke 会实际打开原生 Chrome Space，并确认它挂载在 UFO 控制器内。
 5. 安装流程从 App 内 Skill 目录同步 Claude、Codex 和其他已安装 Agent。
 
 `npm run release:mac` 是同一正式流程的别名。

@@ -13,6 +13,7 @@ test("native CEF profile seed copies login storage once and skips locks/symlinks
     await mkdir(join(source, "Local Storage", "leveldb"), { recursive: true });
     await writeFile(join(source, "Local Storage", "leveldb", "000001.ldb"), "login");
     await writeFile(join(source, "SingletonLock"), "lock");
+    await writeFile(join(source, "Local State"), "foreign-root-metadata");
     await writeFile(join(source, "Preferences"), "prefs");
     await symlink("/tmp", join(source, "symlinked"));
     assert.deepEqual(
@@ -21,6 +22,7 @@ test("native CEF profile seed copies login storage once and skips locks/symlinks
     );
     assert.equal(await readFile(join(target, "Preferences"), "utf8"), "prefs");
     assert.equal(await readFile(join(target, "Local Storage", "leveldb", "000001.ldb"), "utf8"), "login");
+    await assert.rejects(() => readFile(join(target, "Local State")), /ENOENT/);
     await assert.rejects(() => readFile(join(target, "SingletonLock")), /ENOENT/);
     assert.deepEqual(
       await seedNativeCefProfile({ sourceRoot: source, targetRoot: target, sourceProfileId: "default" }),

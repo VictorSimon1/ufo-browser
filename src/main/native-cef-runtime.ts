@@ -81,6 +81,11 @@ type NativeCefSpaceBrowser = {
   url: string;
 };
 
+type NativeBrowserFrameRoute = {
+  rootId?: string;
+  frameIds: Set<string>;
+};
+
 type PendingCommand = {
   resolve: (result: any) => void;
   reject: (error: Error) => void;
@@ -735,7 +740,22 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
         const infos = result?.targetInfos || [];
         const selected = new Set<string>();
         const realChromeProfile = Boolean(this.space.chromeProfileDirectory);
-        const routedFrameTree = realChromeProfile
+        const spaceBrowsers = prioritizeNativeSpaceBrowsers(
+          await this.host.listSharedSpaceBrowsers(this.space.id),
+        );
+        const directBrowserFrames = realChromeProfile
+          ? await inspectNativeSpaceBrowserFrames(this.host, spaceBrowsers)
+          : new Map<number, NativeBrowserFrameRoute>();
+        const directRootTargets = new Map<string, string>();
+        for (const browser of spaceBrowsers) {
+          const frameRoute = directBrowserFrames.get(browser.browserId);
+          if (!frameRoute?.rootId) continue;
+          const syntheticId = `cef-browser:${browser.browserId}`;
+          directRootTargets.set(frameRoute.rootId, syntheticId);
+          this.ownedTargetIds.add(frameRoute.rootId);
+          for (const frameId of frameRoute.frameIds) selected.add(frameId);
+        }
+        const routedFrameTree = !realChromeProfile
           ? await connection.send("Page.getFrameTree").catch(() => undefined)
           : undefined;
         const routedFrameId = routedFrameTree?.frameTree?.frame?.id ||
@@ -770,15 +790,23 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
             selected.add(target.targetId);
           }
         }
-        for (const target of infos) {
-          if (selected.has(target.targetId) && target.browserContextId) {
-            this.browserContextId ||= String(target.browserContextId);
-          }
-        }
-        if (this.browserContextId) {
+        // Custom CEF RequestContexts map one browserContextId to one logical
+        // Space, so context expansion is useful there. A real Chrome Profile
+        // intentionally shares its browserContextId across Overview and every
+        // Space using that Profile; expanding it would leak Overview/sibling
+        // tabs into this Space. Real Profile ownership therefore stays on the
+        // exact routed CefBrowser, frame/opener graph, and native browser list.
+        if (!realChromeProfile) {
           for (const target of infos) {
-            if (target.browserContextId === this.browserContextId) {
-              selected.add(target.targetId);
+            if (selected.has(target.targetId) && target.browserContextId) {
+              this.browserContextId ||= String(target.browserContextId);
+            }
+          }
+          if (this.browserContextId) {
+            for (const target of infos) {
+              if (target.browserContextId === this.browserContextId) {
+                selected.add(target.targetId);
+              }
             }
           }
         }
@@ -800,6 +828,10 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
             selected.add(target.targetId);
           }
         }
+        const remapParentTarget = (targetId: unknown) =>
+          typeof targetId === "string"
+            ? directRootTargets.get(targetId) || targetId
+            : undefined;
         const targets: NativeCefTarget[] = infos
           // Keep the exact UUID selected so OOPIF/opener relationships can be
           // followed, but expose the primary page through its direct
@@ -808,15 +840,16 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
           // direct Runtime/Page commands on that CefBrowser are reliable.
           .filter((target: any) =>
             selected.has(target.targetId) &&
-            target.targetId !== routedPrimaryTargetId)
+            target.targetId !== routedPrimaryTargetId &&
+            !directRootTargets.has(target.targetId))
           .map((target: any) => ({
             id: target.targetId,
             type: target.type,
             title: target.title,
             url: target.url,
-            parentId: target.parentId,
-            parentFrameId: target.parentFrameId,
-            openerId: target.openerId,
+            parentId: remapParentTarget(target.parentId),
+            parentFrameId: remapParentTarget(target.parentFrameId),
+            openerId: remapParentTarget(target.openerId),
             browserContextId: target.browserContextId,
             ufoSpaceId: this.space.id,
           }));
@@ -826,7 +859,13 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
         // the primary Browser's Target.getTargets result. Publish a stable
         // synthetic page target backed by that CefBrowser's direct DevTools
         // endpoint so Agent tab/popup APIs see the complete logical Space.
-        const spaceBrowsers = await this.host.listSharedSpaceBrowsers(this.space.id);
+        // Chrome Runtime may report a transient/sibling CefBrowser before the
+        // Browser that UFO registered as this Space's primary route. Cookie
+        // initialization and the first page readiness probe both select the
+        // first page target, so returning an auxiliary route first can stall
+        // on Chromium's browser-info handshake even though the primary page
+        // is already ready. Preserve every popup/tab, but make primary-first
+        // ordering an explicit protocol invariant.
         this.directTargetRoutes.clear();
         const hasDiscoveredPrimaryPage = !realChromeProfile && targets.some((target) =>
           target.type === "page" && !target.id.startsWith("cef-browser:"),
@@ -834,6 +873,10 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
         for (const browser of spaceBrowsers) {
           const id = `cef-browser:${browser.browserId}`;
           this.directTargetRoutes.set(id, browser.route);
+          const frameRoute = directBrowserFrames.get(browser.browserId);
+          if (frameRoute?.rootId) {
+            this.directTargetRoutes.set(frameRoute.rootId, browser.route);
+          }
           // A real Chrome Profile may be shared with the internal Overview or
           // another Space. In that case browser-level Target.getTargets is
           // process-wide and CEF can reject cross-WebContents attachment while
@@ -841,11 +884,16 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
           // already exact, so publish it as a stable synthetic target whenever
           // UUID discovery did not identify this Space's primary page.
           if (browser.primary && hasDiscoveredPrimaryPage) continue;
+          const exactTarget = frameRoute?.rootId
+            ? infos.find((candidate: any) => candidate.targetId === frameRoute.rootId)
+            : undefined;
           targets.push({
             id,
             type: "page",
-            title: "",
-            url: browser.url || "about:blank",
+            title: exactTarget?.title || "",
+            url: exactTarget?.url || browser.url || "about:blank",
+            openerId: remapParentTarget(exactTarget?.openerId),
+            browserContextId: exactTarget?.browserContextId,
             ufoSpaceId: this.space.id,
           });
         }
@@ -957,6 +1005,70 @@ export class NativeCefSharedSpaceRuntime extends NativeCefRuntime {
   override hasExited() {
     return !this.isRunning();
   }
+}
+
+export function prioritizeNativeSpaceBrowsers(
+  browsers: readonly NativeCefSpaceBrowser[],
+) {
+  return [...browsers].sort((left, right) =>
+    Number(right.primary) - Number(left.primary));
+}
+
+/**
+ * Resolve the DevTools frame id for each exact CEF WebContents route. Chrome's
+ * Browser.getTargets endpoint is process-wide when a real Profile is shared,
+ * while a direct browser route is scoped to one tab. We use that scoped route
+ * to map the raw UUID page/iframe graph back to the stable UFO tab target.
+ */
+async function inspectNativeSpaceBrowserFrames(
+  host: NativeCefRuntime,
+  browsers: readonly NativeCefSpaceBrowser[],
+) {
+  const routes = new Map<number, NativeBrowserFrameRoute>();
+  for (const browser of browsers) {
+    const frameRoute: NativeBrowserFrameRoute = { frameIds: new Set<string>() };
+    let connection: NativeCdpConnectionLike | undefined;
+    try {
+      connection = await host.connectBrowser(browser.route);
+      const frameTree = await connection.send("Page.getFrameTree");
+      const tree = frameTree?.frameTree || frameTree?.result?.frameTree;
+      collectNativeFrameIds(tree, frameRoute.frameIds);
+      const rootId = tree?.frame?.id;
+      if (typeof rootId === "string" && rootId) frameRoute.rootId = rootId;
+    } catch {
+      // A tab can disappear between list-space-browsers and this probe. The
+      // next targets() pass will retry it, while other tabs remain usable.
+    } finally {
+      await connection?.close().catch(() => undefined);
+    }
+    routes.set(browser.browserId, frameRoute);
+  }
+  return routes;
+}
+
+export function collectNativeFrameIds(frameTree: any, result = new Set<string>()) {
+  const frameId = frameTree?.frame?.id;
+  if (typeof frameId === "string" && frameId) result.add(frameId);
+  for (const child of frameTree?.childFrames || []) {
+    collectNativeFrameIds(child, result);
+  }
+  return result;
+}
+
+export function collectNativeDomFrameIds(node: any, result = new Set<string>()) {
+  if (typeof node?.frameId === "string" && node.frameId) {
+    result.add(node.frameId);
+  }
+  for (const child of node?.children || []) {
+    collectNativeDomFrameIds(child, result);
+  }
+  for (const shadowRoot of node?.shadowRoots || []) {
+    collectNativeDomFrameIds(shadowRoot, result);
+  }
+  if (node?.contentDocument) {
+    collectNativeDomFrameIds(node.contentDocument, result);
+  }
+  return result;
 }
 
 async function probeTargetSpace(

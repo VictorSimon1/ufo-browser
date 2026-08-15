@@ -6,8 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildNativeCefArgs,
+  collectNativeFrameIds,
+  collectNativeDomFrameIds,
   NativeCefPrivateConnection,
   NativeCefRuntime,
+  prioritizeNativeSpaceBrowsers,
 } from "../main/native-cef-runtime.js";
 
 test("NativeCefRuntime starts with a deterministic development port", async () => {
@@ -76,6 +79,36 @@ test("Native Chrome Profile probes select a safe real Profile directory", () => 
   assert.throws(() => buildNativeCefArgs({
     chromeProfileDirectory: "../escaped",
   }), /Invalid Chrome profile directory/);
+});
+
+test("Native Chrome Space targets always prefer the registered primary browser", () => {
+  const browsers = prioritizeNativeSpaceBrowsers([
+    { browserId: 2, route: "browser:2", primary: false, url: "https://example.com/" },
+    { browserId: 3, route: "browser:3", primary: true, url: "https://example.com/" },
+    { browserId: 4, route: "browser:4", primary: false, url: "https://popup.example/" },
+  ]);
+  assert.equal(browsers[0]?.browserId, 3);
+  assert.deepEqual(new Set(browsers.map((browser) => browser.browserId)), new Set([2, 3, 4]));
+});
+
+test("Native Chrome frame routing collects only the exact Space frame tree", () => {
+  assert.deepEqual(collectNativeFrameIds({
+    frame: { id: "main-frame" },
+    childFrames: [
+      { frame: { id: "same-process-child" } },
+      { frame: { id: "oopif-child" }, childFrames: [{ frame: { id: "nested" } }] },
+    ],
+  }), new Set(["main-frame", "same-process-child", "oopif-child", "nested"]));
+});
+
+test("Native Chrome DOM routing recovers OOPIF owner frame ids", () => {
+  assert.deepEqual(collectNativeDomFrameIds({
+    nodeName: "#document",
+    children: [
+      { nodeName: "IFRAME", frameId: "oopif-owner" },
+      { nodeName: "DIV", shadowRoots: [{ frameId: "shadow-frame" }] },
+    ],
+  }), new Set(["oopif-owner", "shadow-frame"]));
 });
 
 test("private CEF bridge carries an explicit shared-host browser route", async () => {

@@ -861,10 +861,18 @@ async function waitForPageTarget(runtime: NativeCefRuntime, expectedUrl: string,
   const deadline = Date.now() + timeoutMs;
   let lastTarget: any;
   while (Date.now() < deadline) {
-    const target = (await runtime.targets()).find((candidate) => candidate.type === "page");
-    lastTarget = target;
-    if (target && (target.webSocketDebuggerUrl || runtime.usesPrivateBridge()) && target.url && target.url !== "about:blank") {
-      if (!expectedUrl || target.url === expectedUrl || target.url.startsWith(expectedUrl)) return target;
+    const pages = (await runtime.targets()).filter((candidate) => candidate.type === "page");
+    const readyPages = pages.filter((target) =>
+      (target.webSocketDebuggerUrl || runtime.usesPrivateBridge()) &&
+      target.url && target.url !== "about:blank");
+    const target = readyPages.find((candidate) =>
+      !expectedUrl || candidate.url === expectedUrl || candidate.url.startsWith(expectedUrl));
+    if (target) return target;
+    if (readyPages.length > 0) {
+      // Preserve the legacy timeout fallback, but never let the first
+      // process-wide target (often Overview in a shared Chrome Profile)
+      // prevent a later exact URL match from being considered.
+      lastTarget = readyPages[0];
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }

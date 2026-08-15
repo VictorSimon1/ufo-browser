@@ -9,6 +9,10 @@ const appRoot = join(root, "release-native/UFO-Browser.app");
 const launcher = join(appRoot, "Contents/MacOS/UFO-Browser");
 const cli = join(appRoot, "Contents/Resources/ufo-browser");
 const storageWorker = join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js");
+const infoPlist = await readFile(join(appRoot, "Contents/Info.plist"), "utf8");
+if (!infoPlist.includes("<key>NSPrincipalClass</key><string>UfoCefApplication</string>")) {
+  throw new Error("Native bundle does not declare the CEF macOS principal application class");
+}
 await access(launcher);
 await access(cli);
 await access(storageWorker);
@@ -50,18 +54,43 @@ try {
   agent.stderr.on("data", (chunk) => { stderr += chunk; });
   agent.stdin.end(
     "const task = await bootstrapTaskSpace({ name: 'native bundle smoke', url: 'https://example.com/' })\n" +
+    "cliLog(`UFO_BUNDLE_SPACE:${task.id}`)\n" +
     "cliLog((await pageInfo()).title)\n" +
-    "cliLog(await captureScreenshot())\n" +
-    "await completeTaskSpace(task.id, { keep: false })\n",
+    "cliLog(await captureScreenshot())\n",
   );
-  const exitCode = await waitForExit(agent, 30_000);
+  const exitCode = await waitForExit(agent, 30_000, "packaged CLI", () =>
+    `stdout:\n${stdout}\nstderr:\n${stderr}\napp stderr:\n${appStderr}`);
   if (exitCode !== 0 || !stdout.includes("Example Domain") || !stdout.includes("ego-browser-shot-")) {
     throw new Error(`Native bundle CLI failed (${exitCode})\n${stdout}\n${stderr}\n${appStderr}`);
   }
+  const spaceId = Number(stdout.match(/UFO_BUNDLE_SPACE:(\d+)/)?.[1]);
+  if (!Number.isInteger(spaceId) || spaceId <= 0) {
+    throw new Error(`Packaged CLI did not publish a valid Space id:\n${stdout}`);
+  }
   const controlSocket = join(tmpdir(), `ufo-browser-native-${app.pid}`, "control", "overview.sock");
   await waitForFile(controlSocket, app, 5_000);
+  const overview = JSON.parse(await readFile(join(userData, "overview.json"), "utf8"));
+  const spacesUrl = `${overview.url}api/spaces`;
+  const opened = await fetch(`${spacesUrl}/${spaceId}/open`, { method: "POST" }).then((response) => response.json());
+  if (!opened.ok) throw new Error(`Packaged Space did not open: ${JSON.stringify(opened)}`);
+  let presentation;
+  const presentationDeadline = Date.now() + 5_000;
+  while (Date.now() < presentationDeadline) {
+    presentation = JSON.parse(await sendSocket(controlSocket, JSON.stringify({ command: "presentation-status" })));
+    if (presentation.controllerMountedSpaceIds?.includes(spaceId) &&
+        presentation.nativeChromeSpaceIds?.includes(spaceId) &&
+        presentation.nativeSpacesButtonSpaceIds?.includes(spaceId)) break;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  if (!presentation?.controllerMountedSpaceIds?.includes(spaceId) ||
+      !presentation?.nativeChromeSpaceIds?.includes(spaceId) ||
+      !presentation?.nativeSpacesButtonSpaceIds?.includes(spaceId)) {
+    throw new Error(`Packaged Space did not mount inside the UFO controller: ${JSON.stringify(presentation)}`);
+  }
+  const closed = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
+  if (!closed.ok) throw new Error(`Packaged Space did not close: ${JSON.stringify(closed)}`);
   await sendSocket(controlSocket, JSON.stringify({ command: "request-main-window-close" })).catch(() => undefined);
-  const appExit = await waitForExit(app, 5_000);
+  const appExit = await waitForExit(app, 5_000, "packaged UFO host", () => appStderr);
   if (appExit !== 0) {
     throw new Error(`Closing Native Overview did not exit UFO cleanly (${appExit})\n${appStderr}`);
   }
@@ -81,11 +110,13 @@ try {
     oneUfoMainProcess: true,
     agent: true,
     screenshot: true,
+    nativeChromeProductShell: true,
+    spaceMountedInsideUfoController: true,
     nativeOverviewCloseQuits: true,
   }));
 } finally {
   if (app.exitCode === null) app.kill("SIGTERM");
-  await waitForExit(app, 5_000).catch(() => undefined);
+  await waitForExit(app, 5_000, "packaged UFO host cleanup", () => appStderr).catch(() => undefined);
   await rm(userData, { recursive: true, force: true });
 }
 
@@ -110,10 +141,12 @@ async function waitForFile(path, process, timeoutMs) {
   throw new Error(`Native bundle socket did not start: ${path}\n${appStderr}`);
 }
 
-function waitForExit(child, timeoutMs) {
+function waitForExit(child, timeoutMs, label, diagnostics = () => "") {
   if (child.exitCode !== null) return Promise.resolve(child.exitCode);
   return new Promise((resolveExit, reject) => {
-    const timer = setTimeout(() => reject(new Error("process exit timed out")), timeoutMs);
+    const timer = setTimeout(() => reject(new Error(
+      `${label} exit timed out after ${timeoutMs}ms\n${diagnostics()}`,
+    )), timeoutMs);
     child.once("error", (error) => { clearTimeout(timer); reject(error); });
     child.once("exit", (code) => { clearTimeout(timer); resolveExit(code ?? 1); });
   });

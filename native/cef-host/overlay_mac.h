@@ -27,6 +27,14 @@ void UfoCefWindowFocus(void* cef_view_handle);
 void UfoCefWindowSetCompositorAwake(void* cef_view_handle, bool awake);
 bool UfoCefWindowIsCompositorAwake(void* cef_view_handle);
 
+// The Overview NSWindow is UFO's persistent product controller. Native Chrome
+// Space windows are mounted over this controller at the exact same frame and
+// move/resize with it, so presentation is an in-place surface transition
+// instead of jumping to an unrelated top-level window.
+void UfoCefProductControllerSet(void* cef_view_handle);
+void UfoCefProductControllerClear(void* cef_view_handle);
+bool UfoCefWindowIsMountedInProductController(void* cef_view_handle);
+
 // Add the small native Spaces button used by human-facing Chrome shells. It
 // sends presentation commands to UFO over a private Unix socket and is never
 // part of the CEF page/compositor screenshot path.

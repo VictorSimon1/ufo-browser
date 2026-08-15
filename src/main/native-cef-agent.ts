@@ -82,7 +82,11 @@ const manager = new NativeCefTaskSpaceManager({
   controlSocketsRoot,
   presentationSocket,
   nativeChromeProductShell:
-    process.env.UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL === "1",
+    // The packaged Native product now uses Chromium's own Chrome Runtime UI
+    // by default. Keep an explicit opt-out for diagnostics and migration
+    // comparisons; no environment variable should silently fall back to the
+    // former application-owned CefBrowserView toolbar.
+    process.env.UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL !== "0",
   chromeUserDataRoot: userDataPath,
   // macOS sockaddr_un paths are limited to roughly 104 bytes. Keep transient
   // per-Space sockets under a short TMPDIR root; browser data remains under

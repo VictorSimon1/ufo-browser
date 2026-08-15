@@ -65,6 +65,10 @@ Already covered by the Native vertical slice:
   Spaces (`CefWindowInfo.runtime_style = CEF_RUNTIME_STYLE_CHROME`), including
   the real tab strip, new-tab button, omnibox, navigation controls, profile
   controls, Chrome menu, dialogs, and window behavior;
+- one persistent UFO Overview controller window: a presented native Chrome
+  Space is mounted at the controller's exact frame and follows its move/resize
+  lifecycle, so opening a Space is an in-place surface transition rather than
+  hiding Overview and jumping to an unrelated top-level window;
 - the former `CefBrowserView + GetChromeToolbar()` shell remains available only
   as a diagnostic fallback with `UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL=0`;
 - native Spaces button routed through a private presentation socket so a human
@@ -84,8 +88,13 @@ Already covered by the Native vertical slice:
 - native close routing that locks Agent-owned Space close buttons, sends a
   user-owned Space through the durable Space/Presentation state machine, and
   terminates the full UFO process tree when Overview closes;
-- primary-tab promotion, so closing the first native tab does not orphan the
-  Space's Agent/CDP route while other Chrome tabs remain;
+- stable primary/direct-tab routing, so the initial Chrome bootstrap tab is
+  never mistaken for a requested Space page and closing the first native tab
+  does not orphan the Space's Agent/CDP route while other Chrome tabs remain;
+- real-Profile target isolation based on exact CEF WebContents routes and raw
+  frame/opener relationships. OOPIF/iframe targets are remapped to the stable
+  UFO tab id, so Agent snapshots and frameLocator calls include cross-origin
+  child content without leaking Overview or sibling Spaces;
 - graceful host-first shutdown, so Chromium storage/network helpers flush
   Profile and Cookie state before the process-group kill fallback;
 - drag-installable Native DMG with bundled Node, CLI, Skill, CEF host/helpers.
@@ -155,8 +164,9 @@ and screenshot/input commands all pass the parity suite.
 
 ## CEF Chrome Profile architecture
 
-The native Chrome Product Shell remains opt-in with
-`UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL=1` while wider migration tests run.
+The native Chrome Product Shell is now the Native product default. Set
+`UFO_BROWSER_NATIVE_CHROME_PRODUCT_SHELL=0` only for a diagnostic comparison
+with the former application-owned CEF toolbar.
 Custom `CefRequestContext(cache_path)` objects become OTR contexts in Chrome
 Runtime, so persistent Spaces no longer use them. UFO instead maps each UFO
 Profile to a real Chromium ProfileManager directory (`Default`, `UFO-<id>`,
@@ -171,3 +181,9 @@ Agent route, overlay, close lifecycle, and presentation state all live in the
 original UFO process. The profile probe verifies persistent Cookies across
 restart, Profile isolation, two Spaces sharing one Profile, and tab-route
 ownership.
+
+Real Chrome Profiles intentionally share a Chromium `browserContextId`.
+UFO therefore never uses context-wide target expansion for these Spaces;
+ownership follows the exact CefBrowser route plus frame/opener relationships.
+This keeps Overview and sibling Spaces out of Agent tab enumeration even when
+they reuse the same Profile and login state.

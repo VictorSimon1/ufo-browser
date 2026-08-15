@@ -4,12 +4,19 @@ import { dirname, join } from "node:path";
 import { CHROME_STORAGE_PATHS } from "./chrome-import/storage-preflight.js";
 
 const PROFILE_SEED_VERSION = 1;
-const ROOT_FILES = ["Local State", "Preferences", "Secure Preferences"] as const;
+// Preferences and Secure Preferences belong to an individual Chrome profile.
+// `Local State` does not: it belongs to the shared user-data root and contains
+// ProcessSingleton/ProfileManager/OSCrypt metadata for every profile. Copying
+// another browser's Local State into `UFO-Browser/<profile>/Local State` is
+// both ineffective and structurally wrong, while copying it over UFO's root
+// would overwrite UFO-owned profile metadata. Chromium creates and maintains
+// the correct root Local State itself.
+const PROFILE_FILES = ["Preferences", "Secure Preferences"] as const;
 // Cookie SQLite files are intentionally excluded. Electron/UFO and CEF can
 // use different OSCrypt application keys; copying the encrypted database
 // would preserve bytes but not the authenticated login state. The Native CEF
 // manager imports decrypted Cookies through Network.setCookie instead.
-const SEED_PATHS = [...ROOT_FILES, ...CHROME_STORAGE_PATHS];
+const SEED_PATHS = [...PROFILE_FILES, ...CHROME_STORAGE_PATHS];
 
 type SeedMarker = {
   version: 1;

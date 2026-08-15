@@ -362,10 +362,51 @@ void UfoCefHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
   if (frame && frame->IsMain()) {
     const int space_id = GetBrowserSpaceId(browser);
     if (space_id > 0) {
+      // Chrome Runtime may create a default Google/New Tab CefBrowser first
+      // and the explicitly requested --new-window URL as a sibling browser a
+      // moment later. The requested page must become the Space's primary
+      // browser-level DevTools route; otherwise Target.getTargets/Page frame
+      // commands remain scoped to the bootstrap tab and OOPIFs disappear from
+      // Agent snapshots. Promote exactly once when the requested URL loads,
+      // then close the now-redundant bootstrap tab.
+      CefRefPtr<CefBrowser> bootstrap_browser;
+      const auto spec = native_space_specs_.find(space_id);
+      const auto loaded_url = frame->GetURL().ToString();
+      if (spec != native_space_specs_.end() &&
+          !spec->second.url.empty() &&
+          (loaded_url == spec->second.url ||
+           loaded_url.rfind(spec->second.url, 0) == 0)) {
+        int previous_id = 0;
+        {
+          std::lock_guard<std::mutex> lock(devtools_targets_mutex_);
+          const auto primary = space_browsers_.find(space_id);
+          if (primary != space_browsers_.end() &&
+              primary->second != browser->GetIdentifier()) {
+            previous_id = primary->second;
+            primary->second = browser->GetIdentifier();
+          }
+        }
+        if (previous_id > 0) {
+          for (const auto& candidate : browsers_) {
+            if (candidate->GetIdentifier() == previous_id) {
+              const auto previous_frame = candidate->GetMainFrame();
+              const auto previous_url = previous_frame
+                  ? previous_frame->GetURL().ToString()
+                  : std::string();
+              if (previous_url != loaded_url) bootstrap_browser = candidate;
+              break;
+            }
+          }
+          native_space_browsers_[space_id] = browser;
+        }
+      }
       frame->ExecuteJavaScript(
           std::string("globalThis.__ufoSpaceId=") +
               std::to_string(space_id) + ";",
           frame->GetURL(), 0);
+      if (bootstrap_browser) {
+        bootstrap_browser->GetHost()->CloseBrowser(false);
+      }
     }
     LOG(INFO) << "UFO native Chrome loaded " << frame->GetURL().ToString()
               << " status=" << http_status_code;
@@ -513,11 +554,13 @@ void UfoCefHandler::SetMainWindow(CefRefPtr<CefWindow> window) {
   if (!window) {
     if (main_window_ && !main_window_->IsClosed()) {
       UfoAgentOverlayClear(main_window_->GetWindowHandle());
+      UfoCefProductControllerClear(main_window_->GetWindowHandle());
     }
     main_window_ = nullptr;
     return;
   }
   main_window_ = window;
+  UfoCefProductControllerSet(main_window_->GetWindowHandle());
   if (agent_active_ && main_window_) {
     UfoAgentOverlaySet(main_window_->GetWindowHandle(), true,
                        "Agent controlling", 0, nullptr);
@@ -842,6 +885,7 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       auto chrome_toolbar_spaces = CefListValue::Create();
       auto native_chrome_spaces = CefListValue::Create();
       auto native_spaces_button_spaces = CefListValue::Create();
+      auto controller_mounted_spaces = CefListValue::Create();
       auto native_close_routed_spaces = CefListValue::Create();
       auto native_close_locked_spaces = CefListValue::Create();
       int chrome_controls_space_id = 0;
@@ -892,6 +936,10 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
                 native_close_locked_spaces->GetSize(), candidate_id);
           }
         }
+        if (handle && UfoCefWindowIsMountedInProductController(handle)) {
+          controller_mounted_spaces->SetInt(
+              controller_mounted_spaces->GetSize(), candidate_id);
+        }
         if (!handle || !UfoCefWindowIsPresented(handle)) continue;
         presented_spaces->SetInt(presented_spaces->GetSize(), candidate_id);
         presented_count += 1;
@@ -919,6 +967,8 @@ std::string UfoCefHandler::HandleControlCommandOnUi(
       response->SetList("nativeChromeSpaceIds", native_chrome_spaces);
       response->SetList("nativeSpacesButtonSpaceIds",
                         native_spaces_button_spaces);
+      response->SetList("controllerMountedSpaceIds",
+                        controller_mounted_spaces);
       response->SetList("nativeCloseRoutedSpaceIds",
                         native_close_routed_spaces);
       response->SetList("nativeCloseLockedSpaceIds",

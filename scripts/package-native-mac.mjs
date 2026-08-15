@@ -88,6 +88,8 @@ function plist() {
 <key>CFBundleVersion</key><string>${version}</string>
 <key>CFBundleIconFile</key><string>icon.icns</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
+<key>NSPrincipalClass</key><string>UfoCefApplication</string>
+<key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 </dict></plist>`;
 }
 
