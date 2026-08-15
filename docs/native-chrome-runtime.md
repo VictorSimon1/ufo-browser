@@ -146,8 +146,11 @@ owns no browser UI, so the Native path is Electron-free at runtime.
    password/history/extension data and singleton locks, and writes
    `.ufo-profile-seed.json` so an active native Profile is never overwritten.
    Decrypted Cookie import is also a one-time Profile initialization and writes
-   `.ufo-cookie-seed.json`; opening another Space with the same Profile never
-   repeats the full Cookie transaction. Chromium-normalized legacy Cookie
+   `.ufo-cookie-seed.json`; only a matching marker with `reason: "imported"`
+   counts as complete. Older migration markers are retried automatically, and
+   the initial page is re-navigated before presentation so its first visible
+   request uses the newly imported login state. Opening another Space with the
+   same Profile never repeats the full Cookie transaction. Chromium-normalized legacy Cookie
    attributes may produce a partial verification warning during that first
    seed, but cannot make a Space flash and fall back to Overview. Later source
    changes use the normal hash/checkpoint Profile Sync path.
@@ -173,15 +176,18 @@ owns no browser UI, so the Native path is Electron-free at runtime.
 
    The native overlay is owned by persistent Space state, not by the lifetime
    of a short CLI socket. `ownership=agent` plus `lifecycle=active` installs a
-   transparent AppKit child panel above the presented CEF window; a CLI exit
-   therefore cannot silently unlock the page. The panel draws a neutral,
-   lightly pulsing capsule with explicit **接管** and **终止任务** actions.
+   AppKit child panel above the presented CEF window; a CLI exit therefore
+   cannot silently unlock the page. The panel draws the neutral dot-matrix
+   veil, subtle blue edge light and low-frequency ambient sweep from the
+   established UFO control experience, plus the bottom task bar, Agent pointer,
+   and explicit **接管** / **终止任务** actions.
    Those actions route through the Presentation Coordinator, revoke the Agent
    lease/generation fence, and update ownership/lifecycle without closing the
    Space. The panel consumes all other human input and never enters the CEF
    compositor or page screenshot path, so Agent CDP input and screenshots are
-   unaffected. Its animation redraws only the capsule at 12 FPS rather than
-   repainting/repositioning a full-window panel at 30 FPS.
+   unaffected. Its animation runs at 10 FPS and invalidates only the moving
+   sweep strips, bottom bar, and short-lived pointer rather than repainting or
+   repositioning the complete window every frame.
 
    Run `npm run native:cef:overlay:smoke` to prove that the overlay survives a
    CLI disconnect, Agent input/screenshot still work behind it, takeover keeps
@@ -351,6 +357,9 @@ runtime and is not the final browser UI.
   Skill facade, including `page.waitForEvent("popup")`,
   `page.waitForEvent("download")`, console, pageerror, and request events.
 - Profile isolation and imported login state survive restart.
+  `native:cef:profile:smoke` must prove this through a selected real Space and
+  Agent-visible page Cookie state, not merely through a successful import API
+  response.
 - The native Chrome Product Shell is the packaged product default. Real
   ProfileManager persistence and isolation are protected by
   `native:cef:chrome-profile:probe`; custom RequestContexts remain OTR-only.

@@ -80,11 +80,17 @@ Already covered by the Native vertical slice:
 - UFO-owned Node Agent child service and the existing `ufo-browser nodejs` protocol;
 - isolated persistent/temporary Spaces and profile-aware CEF user-data roots;
 - Chrome login-state import, Cookie writes, storage checkpoints, and sync;
+- end-to-end imported Profile application: the Native Profile smoke selects
+  the imported Chrome Profile for a real Space, verifies its Cookie state
+  through the Agent page route, restarts UFO, and verifies that the same Space
+  retains the login state;
 - Overview API/renderer, global four-second preview cadence, and presentation
   transitions;
 - outer AppKit Agent-control overlay and native input interception;
-- ownership-persistent AppKit control capsule with explicit human takeover and
-  task termination routed through the UFO lease/state machine;
+- ownership-persistent AppKit control experience with the original neutral
+  veil, low-frequency ambient sweep, bottom control bar, task text, Agent
+  pointer, explicit human takeover, and task termination routed through the
+  UFO lease/state machine;
 - native close routing that locks Agent-owned Space close buttons, sends a
   user-owned Space through the durable Space/Presentation state machine, and
   terminates the full UFO process tree when Overview closes;
