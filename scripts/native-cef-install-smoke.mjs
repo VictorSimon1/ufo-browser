@@ -2,6 +2,7 @@ import { access, mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { hashSkillDirectory } from "./sync-agent-skills.mjs";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
@@ -44,6 +45,24 @@ for (const name of ["ufo-browser", "x-browser"]) {
   if (target !== join(resolvedAppRoot, "Contents/Resources", name)) {
     throw new Error(`Installed ${name} CLI points to ${target}, expected the DMG App bundle`);
   }
+}
+// Prove the symlinked CLI resolves its Node/runtime from the App bundle. The
+// `--help` path still connects to the Agent socket before parsing argv, so a
+// tiny local server lets us exercise the exact post-install launch path
+// without starting a browser or touching the user's real socket.
+const cliSocket = join(installRoot, "cli.sock");
+const cliServer = createServer(() => {});
+await new Promise((resolveListen, rejectListen) => {
+  cliServer.once("error", rejectListen);
+  cliServer.listen(cliSocket, resolveListen);
+});
+try {
+  const help = await runCliHelp(join(isolatedBin, "ufo-browser"), cliSocket, syncEnv);
+  if (help.code !== 0 || !help.stdout.includes("ufo-browser nodejs")) {
+    throw new Error(`Installed symlinked CLI did not execute from the App bundle: ${JSON.stringify(help)}`);
+  }
+} finally {
+  await new Promise((resolveClose) => cliServer.close(() => resolveClose()));
 }
 const sourceSkill = join(appRoot, "Contents/Resources/skills/ufo-browser");
 const expectedHash = await hashSkillDirectory(sourceSkill);
@@ -132,6 +151,34 @@ async function runNode(script, args, env) {
     child.once("exit", (code) => {
       if (code === 0) return resolveRun();
       rejectRun(new Error(`${script} failed (${code})\n${output}${error}`));
+    });
+  });
+}
+
+function runCliHelp(cliPath, socketPath, env) {
+  return new Promise((resolveResult, rejectResult) => {
+    const child = spawn(cliPath, ["nodejs", "--help"], {
+      cwd: root,
+      env: { ...env, UFO_BROWSER_SOCKET: socketPath },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      rejectResult(new Error("installed CLI help timed out"));
+    }, 10_000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      rejectResult(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolveResult({ code: code ?? 1, signal, stdout, stderr });
     });
   });
 }

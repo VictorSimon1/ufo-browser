@@ -58,8 +58,27 @@ async function main() {
   await cp("dist/bin/ufo-keychain-helper", join(appRoot, "Contents/Resources/ufo-keychain-helper"));
   await cp("dist/agent/ufo-browser.js", join(appRoot, "Contents/Resources/ufo-browser.js"));
   await cp("dist/renderer", join(appRoot, "Contents/Resources/renderer"), { recursive: true });
-  await writeFile(join(appRoot, "Contents/Resources/ufo-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');
-  await writeFile(join(appRoot, "Contents/Resources/x-browser"), '#!/bin/sh\nset -eu\nROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$ROOT/node" "$ROOT/ufo-browser.js" "$@"\n');
+  // The post-install CLI is a symlink in ~/.local/bin. Resolve that symlink
+  // before locating the bundled Node/runtime, otherwise a dragged-in DMG
+  // searches for ufo-browser.js beside the symlink instead of inside the App.
+  const cliLauncher = [
+    "#!/bin/sh",
+    "set -eu",
+    "SELF=\"$0\"",
+    "while [ -L \"$SELF\" ]; do",
+    "  SELF_DIR=\"$(CDPATH= cd -- \"$(dirname -- \"$SELF\")\" && pwd)\"",
+    "  LINK=\"$(readlink \"$SELF\")\"",
+    "  case \"$LINK\" in",
+    "    /*) SELF=\"$LINK\" ;;",
+    "    *) SELF=\"$SELF_DIR/$LINK\" ;;",
+    "  esac",
+    "done",
+    "ROOT=\"$(CDPATH= cd -- \"$(dirname -- \"$SELF\")\" && pwd)\"",
+    "exec \"$ROOT/node\" \"$ROOT/ufo-browser.js\" \"$@\"",
+    "",
+  ].join("\n");
+  await writeFile(join(appRoot, "Contents/Resources/ufo-browser"), cliLauncher);
+  await writeFile(join(appRoot, "Contents/Resources/x-browser"), cliLauncher);
   await cp(process.execPath, join(appRoot, "Contents/Resources/node"));
   await cp("skills/ufo-browser", join(appRoot, "Contents/Resources/skills/ufo-browser"), { recursive: true });
   await cp("resources/icon.icns", join(appRoot, "Contents/Resources/icon.icns"));
