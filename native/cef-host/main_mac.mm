@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cerrno>
 #include <cstdlib>
 #include <filesystem>
 #include <fcntl.h>
@@ -29,7 +28,13 @@ static int g_signal_pipe[2] = {-1, -1};
 static std::thread g_signal_thread;
 static std::atomic<bool> g_signal_thread_stop{false};
 static NSTask* g_agent_task = nil;
-static bool g_stopping_agent = false;
+static NSMutableDictionary* g_agent_environment = nil;
+static NSString* g_agent_info_file = nil;
+static pid_t g_agent_pid = -1;
+static std::atomic<bool> g_stopping_agent{false};
+static std::atomic<bool> g_launcher_termination_requested{false};
+
+static void StopPackagedAgentService();
 
 static NSString* UfoResourcePath(NSString* name) {
   return [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:name];
@@ -45,8 +50,12 @@ static NSString* EnvironmentValue(NSString* name, NSString* fallback) {
   return value.length ? value : fallback;
 }
 
-static bool StartPackagedAgentService() {
+static bool PreparePackagedAgentService() {
   if (!IsPackagedUfoProduct()) return true;
+  if (const char* disabled = std::getenv("UFO_BROWSER_DISABLE_EMBEDDED_AGENT");
+      disabled && std::string(disabled) == "1") {
+    return true;
+  }
 
   NSFileManager* files = NSFileManager.defaultManager;
   NSString* user_data = EnvironmentValue(
@@ -84,11 +93,9 @@ static bool StartPackagedAgentService() {
 
   NSMutableDictionary* environment =
       [[[NSProcessInfo processInfo] environment] mutableCopy];
-  environment[@"UFO_BROWSER_NATIVE_ATTACHED_HOST"] = @"1";
-  environment[@"UFO_BROWSER_NATIVE_HOST_PID"] =
-      [NSString stringWithFormat:@"%d", getpid()];
   environment[@"UFO_BROWSER_NATIVE_SHARED_HOST"] = @"1";
-  environment[@"UFO_BROWSER_NATIVE_OVERVIEW_MODE"] = @"external";
+  environment[@"UFO_BROWSER_DISABLE_EMBEDDED_AGENT"] = @"1";
+  environment[@"UFO_BROWSER_PACKAGED_AGENT_OWNER"] = @"1";
   environment[@"UFO_BROWSER_NATIVE_USER_DATA"] = user_data;
   environment[@"UFO_BROWSER_SOCKET"] = agent_socket;
   environment[@"UFO_BROWSER_OVERVIEW_INFO_FILE"] = info_file;
@@ -105,12 +112,25 @@ static bool StartPackagedAgentService() {
   environment[@"UFO_BROWSER_NATIVE_WORKING_DIR"] = NSBundle.mainBundle.bundlePath;
   environment[@"UFO_CEF_HOST"] = NSBundle.mainBundle.executablePath;
 
+  // The packaged executable is a lightweight lifecycle supervisor. Its
+  // bundled Agent owns the single long-lived CEF product host, which is the
+  // same topology used by development and avoids the unstable reverse-attach
+  // path where a child Agent tried to bind an already-running CEF process.
+  [g_agent_environment release];
+  g_agent_environment = environment;
+  [g_agent_info_file release];
+  g_agent_info_file = [info_file copy];
+  return true;
+}
+
+static bool StartPackagedAgentService() {
+  if (!g_agent_environment || !g_agent_info_file || g_agent_task) return true;
+
   NSTask* task = [[NSTask alloc] init];
   task.launchPath = UfoResourcePath(@"node");
   task.arguments = @[UfoResourcePath(@"native-cef-agent.js")];
   task.currentDirectoryPath = NSBundle.mainBundle.bundlePath;
-  task.environment = environment;
-  [environment release];
+  task.environment = g_agent_environment;
   task.standardOutput = [NSFileHandle fileHandleWithStandardOutput];
   task.standardError = [NSFileHandle fileHandleWithStandardError];
   NSError* launch_error = nil;
@@ -120,10 +140,11 @@ static bool StartPackagedAgentService() {
     return false;
   }
   g_agent_task = task;
+  g_agent_pid = task.processIdentifier;
   task.terminationHandler = ^(NSTask* finished) {
     (void)finished;
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (g_stopping_agent || g_termination_requested) return;
+      if (g_stopping_agent.load() || g_termination_requested) return;
       if (auto* handler = UfoCefHandler::GetInstance()) {
         handler->RequestApplicationClose(true);
       } else {
@@ -134,54 +155,83 @@ static bool StartPackagedAgentService() {
 
   NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:15.0];
   NSString* overview_url = nil;
-  while ([deadline timeIntervalSinceNow] > 0 && task.isRunning) {
-    NSData* data = [NSData dataWithContentsOfFile:info_file];
-    if (data.length) {
-      NSDictionary* info = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-      NSString* candidate = [info isKindOfClass:NSDictionary.class] ? info[@"url"] : nil;
-      if ([candidate isKindOfClass:NSString.class] &&
-          [candidate hasPrefix:@"http://127.0.0.1:"]) {
-        overview_url = candidate;
-        break;
+  NSString* agent_socket = g_agent_environment[@"UFO_BROWSER_SOCKET"];
+  bool agent_ready = false;
+  while ([deadline timeIntervalSinceNow] > 0 && task.isRunning &&
+         !g_stopping_agent.load()) {
+    if (!overview_url.length) {
+      NSData* data = [NSData dataWithContentsOfFile:g_agent_info_file];
+      if (data.length) {
+        NSDictionary* info =
+            [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        NSString* candidate =
+            [info isKindOfClass:NSDictionary.class] ? info[@"url"] : nil;
+        if ([candidate isKindOfClass:NSString.class] &&
+            [candidate hasPrefix:@"http://127.0.0.1:"]) {
+          overview_url = candidate;
+        }
       }
     }
+    agent_ready = overview_url.length && agent_socket.length &&
+        [NSFileManager.defaultManager fileExistsAtPath:agent_socket];
+    if (agent_ready) break;
     [NSThread sleepForTimeInterval:0.05];
   }
-  if (!overview_url.length) {
+  if (!overview_url.length || !agent_ready) {
+    if (g_stopping_agent.load()) return true;
     NSLog(@"UFO Agent service did not publish the Overview URL");
-    g_stopping_agent = true;
+    g_stopping_agent.store(true);
     if (task.isRunning) [task terminate];
     [task release];
     g_agent_task = nil;
-    g_stopping_agent = false;
+    g_stopping_agent.store(false);
     return false;
   }
-
-  setenv("UFO_BROWSER_NATIVE_ATTACHED_HOST", "1", 1);
-  setenv("UFO_BROWSER_ATTACHED_OVERVIEW_URL", overview_url.UTF8String, 1);
-  setenv("UFO_BROWSER_NATIVE_USER_DATA", user_data.UTF8String, 1);
-  setenv("UFO_BROWSER_OVERVIEW_CONTROL_SOCKET", overview_control.UTF8String, 1);
-  setenv("UFO_BROWSER_PRESENTATION_SOCKET", presentation.UTF8String, 1);
-  setenv("UFO_BROWSER_SHARED_HOST_DEVTOOLS_SOCKET", devtools.UTF8String, 1);
   return true;
 }
 
-static void StopPackagedAgentService() {
+static int RunPackagedAgentOwnedProduct() {
   NSTask* task = g_agent_task;
-  if (!task) return;
-  g_agent_task = nil;
-  g_stopping_agent = true;
-  if (task.isRunning) {
-    [task terminate];
-    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
-    while (task.isRunning && [deadline timeIntervalSinceNow] > 0) {
-      [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                               beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+  if (!task) return 1;
+  signal(SIGTERM, [](int) { g_launcher_termination_requested.store(true); });
+  signal(SIGINT, [](int) { g_launcher_termination_requested.store(true); });
+  while (task.isRunning) {
+    if (g_launcher_termination_requested.exchange(false)) {
+      g_stopping_agent.store(true);
+      [task terminate];
     }
-    if (task.isRunning) [task interrupt];
+    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
   }
-  [task release];
-  g_stopping_agent = false;
+  const int status = task.terminationStatus;
+  StopPackagedAgentService();
+  return status;
+}
+
+static void StopPackagedAgentService() {
+  g_stopping_agent.store(true);
+  NSTask* task = g_agent_task;
+  g_agent_task = nil;
+  if (task) {
+    if (task.isRunning) {
+      [task terminate];
+      NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+      while (task.isRunning && [deadline timeIntervalSinceNow] > 0) {
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+      }
+      if (task.isRunning) [task interrupt];
+    }
+    [task release];
+  }
+  if (!task && g_agent_pid > 1) {
+    kill(g_agent_pid, SIGTERM);
+  }
+  [g_agent_environment release];
+  g_agent_environment = nil;
+  [g_agent_info_file release];
+  g_agent_info_file = nil;
+  g_agent_pid = -1;
 }
 
 void UfoCefRequestProductTermination() {
@@ -351,7 +401,11 @@ BOOL IsTitlebarDragEvent(NSEvent* event) {
   // test harness. Do not wait for page beforeunload/Views close negotiation
   // here: the outer App has already decided to terminate, so force the CEF
   // browser tree closed and let OnBeforeClose quit the message loop.
-  if (handler && !handler->IsClosing()) handler->RequestApplicationClose(true);
+  if (handler && !handler->IsClosing()) {
+    handler->RequestApplicationClose(true);
+  } else if (g_agent_task && g_agent_task.isRunning) {
+    g_launcher_termination_requested.store(true);
+  }
 }
 @end
 
@@ -397,9 +451,20 @@ int main(int argc, char* argv[]) {
     command_line->InitFromArgv(argc, argv);
     const bool profile_window_request =
         command_line->HasSwitch("ufo-profile-window-request");
-    if (!profile_window_request && !StartPackagedAgentService()) {
+    if (!profile_window_request && !PreparePackagedAgentService()) {
       StopSignalPump();
       return 1;
+    }
+    // The managed Agent starts the only CEF product host and publishes both
+    // the Overview URL and Agent socket before the supervisor returns control.
+    if (!profile_window_request && !StartPackagedAgentService()) {
+      StopPackagedAgentService();
+      StopSignalPump();
+      return 1;
+    }
+    if (!profile_window_request &&
+        g_agent_environment[@"UFO_BROWSER_PACKAGED_AGENT_OWNER"]) {
+      return RunPackagedAgentOwnedProduct();
     }
 
     CefSettings settings;

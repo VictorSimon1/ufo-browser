@@ -1,7 +1,7 @@
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 
@@ -10,8 +10,14 @@ const appRoot = join(root, "release-native/UFO-Browser.app");
 const launcher = join(appRoot, "Contents/MacOS/UFO-Browser");
 const cli = join(appRoot, "Contents/Resources/ufo-browser");
 const storageWorker = join(appRoot, "Contents/Resources/profile-sync-storage-revision-worker.js");
-const infoPlist = await readFile(join(appRoot, "Contents/Info.plist"), "utf8");
-if (!infoPlist.includes("<key>NSPrincipalClass</key><string>UfoCefApplication</string>")) {
+const infoPlistPath = join(appRoot, "Contents/Info.plist");
+await readFile(infoPlistPath, "utf8");
+const principalClass = execFileSync(
+  "/usr/bin/plutil",
+  ["-extract", "NSPrincipalClass", "raw", infoPlistPath],
+  { encoding: "utf8" },
+).trim();
+if (principalClass !== "UfoCefApplication") {
   throw new Error("Native bundle does not declare the CEF macOS principal application class");
 }
 await access(launcher);
@@ -39,6 +45,7 @@ const app = spawn(launcher, [], {
     UFO_BROWSER_NATIVE_USER_DATA: userData,
     UFO_BROWSER_SOURCE_PARTITIONS: join(userData, "NoSource"),
     UFO_CEF_USE_MOCK_KEYCHAIN: "1",
+    UFO_CEF_DEBUG_STDIO: "1",
   },
   stdio: ["ignore", "ignore", "pipe"],
 });
@@ -92,7 +99,7 @@ try {
   if (!presentation?.controllerMountedSpaceIds?.includes(spaceId) ||
       !presentation?.nativeChromeSpaceIds?.includes(spaceId) ||
       !presentation?.nativeSpacesButtonSpaceIds?.includes(spaceId)) {
-    throw new Error(`Packaged Space did not mount inside the UFO controller: ${JSON.stringify(presentation)}`);
+    throw new Error(`Packaged Space did not mount inside the UFO controller: ${JSON.stringify(presentation)}\n${appStderr}`);
   }
   const closed = await fetch(`${spacesUrl}/${spaceId}/close`, { method: "POST" }).then((response) => response.json());
   if (!closed.ok) throw new Error(`Packaged Space did not close: ${JSON.stringify(closed)}`);

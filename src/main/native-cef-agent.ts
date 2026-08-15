@@ -66,6 +66,7 @@ const profiles = new BrowserProfileRegistry(
 );
 await profiles.initialize();
 let profileSync: NativeCefProfileSync | undefined;
+let sharedHostRuntime: NativeCefRuntime | undefined;
 const keychainHelper = process.env.UFO_BROWSER_KEYCHAIN_HELPER ||
   process.env.UFO_BROWSER_NATIVE_KEYCHAIN_HELPER ||
   join(homedir(), "Library/Application Support/UFO-Browser", "ufo-keychain-helper");
@@ -183,6 +184,7 @@ if (sharedHostEnabled) {
     devtoolsSocket: sharedHostDevtoolsSocket,
     useMockKeychain: process.env.UFO_CEF_USE_MOCK_KEYCHAIN === "1",
   });
+  sharedHostRuntime = sharedHost;
   if (attachedHostEnabled) {
     await sharedHost.attach();
     manager.setSharedHost(sharedHost, false);
@@ -217,10 +219,18 @@ const attachedHostMonitor = attachedHostEnabled && Number.isInteger(attachedHost
     }, 1_000)
   : undefined;
 attachedHostMonitor?.unref();
+const ownedHostMonitor = !attachedHostEnabled && sharedHostRuntime
+  ? setInterval(() => {
+      if (shuttingDown || sharedHostRuntime?.isRunning()) return;
+      void shutdown().finally(() => process.exit(0));
+    }, 500)
+  : undefined;
+ownedHostMonitor?.unref();
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   if (attachedHostMonitor) clearInterval(attachedHostMonitor);
+  if (ownedHostMonitor) clearInterval(ownedHostMonitor);
   await server.close().catch(() => undefined);
   await profileSync?.close().catch(() => undefined);
   await manager.shutdown().catch(() => undefined);
