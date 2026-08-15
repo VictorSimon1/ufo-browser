@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createCipheriv, createHash, pbkdf2Sync } from "node:crypto";
+import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,18 +16,25 @@ const secret = "ufo-native-profile-fixture-secret";
 const executable = join(root, "native/cef-host/build/ufo-cef-host.app/Contents/MacOS/ufo-cef-host");
 await access(executable);
 await createChromeFixture(chromeRoot, secret);
-
-const app = new NativeCefApplication({
-  userDataDir: userData,
-  cefExecutable: executable,
-  useMockKeychain: true,
-  env: {
-    UFO_CEF_PRIVATE_BRIDGE: "1",
-    UFO_CEF_MOCK_KEYCHAIN_SECRET: secret,
-    UFO_BROWSER_CHROME_USER_DATA: chromeRoot,
-    UFO_BROWSER_SOURCE_PARTITIONS: join(userData, "NoSource"),
-  },
+const fixture = createServer((_request, response) => {
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.end("<!doctype html><title>Native Profile Session</title><p>profile session fixture</p>");
 });
+await new Promise((resolveListen) => fixture.listen(0, "127.0.0.1", resolveListen));
+const fixtureUrl = `http://127.0.0.1:${fixture.address().port}/`;
+
+const createApp = () => new NativeCefApplication({
+    userDataDir: userData,
+    cefExecutable: executable,
+    useMockKeychain: true,
+    env: {
+      UFO_CEF_PRIVATE_BRIDGE: "1",
+      UFO_CEF_MOCK_KEYCHAIN_SECRET: secret,
+      UFO_BROWSER_CHROME_USER_DATA: chromeRoot,
+      UFO_BROWSER_SOURCE_PARTITIONS: join(userData, "NoSource"),
+    },
+  });
+let app = createApp();
 
 try {
   await app.start();
@@ -65,14 +73,75 @@ try {
   const importedProfile = profiles.profiles?.find((profile) => profile.source?.type === "chrome");
   assert.ok(importedProfile, "Native Overview did not publish the imported Chrome Profile");
   assert.equal(importedProfile.isDefault, true);
+  const created = await fetch(`${info.url}api/spaces`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: "native imported profile session",
+      profileId: importedProfile.id,
+    }),
+  }).then((response) => response.json());
+  assert.ok(created.space?.id, JSON.stringify(created));
+  assert.equal(created.space.profileId, importedProfile.id);
+  const spaceId = Number(created.space.id);
+  const socket = join(userData, "ufo-browser.sock");
+  const firstSession = await verifyImportedSession(socket, spaceId, fixtureUrl);
+  assert.equal(firstSession.cookieAvailable, true, JSON.stringify(firstSession));
+
+  // A persisted Native Chrome Profile must keep the imported login state
+  // without repeating the source Cookie transaction on the next app launch.
+  await app.stop();
+  app = createApp();
+  await app.start();
+  const restartedSession = await verifyImportedSession(socket, spaceId, fixtureUrl);
+  assert.equal(restartedSession.cookieAvailable, true, JSON.stringify(restartedSession));
+
   console.log(JSON.stringify({
     nativeProfileImport: true,
     importedCookies: imported.cookies.imported,
+    selectedProfileAppliedToSpace: true,
+    importedLoginStateSurvivesRestart: true,
     oneUfoMainProcessDuringProfileImport: true,
   }));
 } finally {
-  await app.stop();
+  await app.stop().catch(() => undefined);
+  await new Promise((resolveClose) => fixture.close(resolveClose));
   await rm(testRoot, { recursive: true, force: true });
+}
+
+async function verifyImportedSession(socket, spaceId, url) {
+  const output = await runCli(socket, `
+    await takeOverTaskSpace(${spaceId})
+    await gotoAndWait(${JSON.stringify(url)})
+    const cookieAvailable = await js("document.cookie.split(';').some((item) => item.trim().startsWith('native='))")
+    await handOffTaskSpace(${spaceId})
+    cliLog(JSON.stringify({ cookieAvailable }))
+  `);
+  return JSON.parse(output.trim().split("\n").at(-1));
+}
+
+function runCli(socket, source) {
+  return new Promise((resolveOutput, reject) => {
+    const cli = spawn(join(root, "dist/bin/ufo-browser"), ["nodejs"], {
+      cwd: root,
+      env: { ...process.env, UFO_BROWSER_SOCKET: socket },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    cli.stdout.setEncoding("utf8");
+    cli.stderr.setEncoding("utf8");
+    cli.stdout.on("data", (chunk) => { stdout += chunk; });
+    cli.stderr.on("data", (chunk) => { stderr += chunk; });
+    const timeout = setTimeout(() => cli.kill("SIGTERM"), 30_000);
+    cli.once("error", reject);
+    cli.once("exit", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolveOutput(stdout);
+      else reject(new Error(`Native Profile CLI failed (${code})\n${stdout}\n${stderr}`));
+    });
+    cli.stdin.end(source);
+  });
 }
 
 function ps() {
@@ -126,14 +195,16 @@ async function createChromeFixture(chromeRootPath, secretText) {
     );
   `);
   const key = pbkdf2Sync(Buffer.from(secretText), "saltysalt", 1003, 16, "sha1");
-  const host = "fixture.example";
+  const host = "127.0.0.1";
   const plaintext = Buffer.concat([createHash("sha256").update(host).digest(), Buffer.from("native-cookie")]);
   const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
   const encrypted = Buffer.concat([Buffer.from("v10"), cipher.update(plaintext), cipher.final()]);
   database.prepare(`
-    INSERT INTO cookies(host_key, name, encrypted_value, has_cross_site_ancestor, samesite)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(host, "native", encrypted, 0, 1);
+    INSERT INTO cookies(
+      host_key, name, encrypted_value, is_secure, is_httponly,
+      source_scheme, has_cross_site_ancestor, samesite
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(host, "native", encrypted, 0, 0, 1, 0, 1);
   database.close();
   key.fill(0);
   plaintext.fill(0);

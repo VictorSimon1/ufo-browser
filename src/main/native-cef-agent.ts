@@ -100,7 +100,7 @@ const manager = new NativeCefTaskSpaceManager({
     const profile = profiles.getOrThrow(profileId);
     const sourceRoot = profileSourceRoot(profile, sourcePartitionsRoot);
     const cookiePath = await firstFile(join(sourceRoot, "Network", "Cookies"), join(sourceRoot, "Cookies"));
-    if (!cookiePath) return;
+    if (!cookiePath) return false;
     const result = await readChromeCookies(
       cookiePath,
       createNativeKeychain(keychainHelper),
@@ -120,6 +120,7 @@ const manager = new NativeCefTaskSpaceManager({
       }
       console.warn(`[UFO Native CEF] Cookie seed completed with partial verification: ${message}`);
     }
+    return true;
   },
 });
 await manager.initialize();

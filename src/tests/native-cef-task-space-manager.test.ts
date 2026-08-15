@@ -102,6 +102,7 @@ test("Native Profile Cookie seeding is serialized and marked after the first run
     seedCookies: async () => {
       calls += 1;
       await new Promise((resolve) => setTimeout(resolve, 20));
+      return true;
     },
   });
   (manager as any).createNativeCookieTarget = async () => ({
@@ -130,7 +131,7 @@ test("Native Profile Cookie seeding retries legacy markers that did not import C
     store: {} as any,
     profiles: {} as any,
     partitionsRoot: root,
-    seedCookies: async () => { calls += 1; },
+    seedCookies: async () => { calls += 1; return true; },
   });
   (manager as any).createNativeCookieTarget = async () => ({
     dispose: async () => undefined,
@@ -159,7 +160,7 @@ test("Native Profile Cookie seeding trusts only a matching imported marker", asy
     store: {} as any,
     profiles: {} as any,
     partitionsRoot: root,
-    seedCookies: async () => { calls += 1; },
+    seedCookies: async () => { calls += 1; return true; },
   });
   (manager as any).createNativeCookieTarget = async () => ({
     dispose: async () => undefined,
@@ -175,6 +176,30 @@ test("Native Profile Cookie seeding trusts only a matching imported marker", asy
     }));
     await (manager as any).seedCookiesOnce("profile-a", {} as any, space, root);
     assert.equal(calls, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Native Profile Cookie seeding does not reload when the source has no Cookies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-native-cookie-seed-empty-"));
+  let calls = 0;
+  const manager = new NativeCefTaskSpaceManager({
+    store: {} as any,
+    profiles: {} as any,
+    partitionsRoot: root,
+    seedCookies: async () => { calls += 1; return false; },
+  });
+  (manager as any).createNativeCookieTarget = async () => ({
+    dispose: async () => undefined,
+  });
+  const space = { tabs: [{ url: "https://example.com/" }] } as any;
+  try {
+    const first = await (manager as any).seedCookiesOnce("profile-a", {} as any, space, root);
+    const second = await (manager as any).seedCookiesOnce("profile-a", {} as any, space, root);
+    assert.equal(first, false);
+    assert.equal(second, false);
+    assert.equal(calls, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

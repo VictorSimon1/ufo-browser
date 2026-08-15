@@ -30,7 +30,8 @@ export type NativeCefTaskSpaceManagerOptions = {
   devtoolsSocketsRoot?: string;
   /** Unix socket used by the native Chrome Spaces button. */
   presentationSocket?: string;
-  seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<void>;
+  /** Returns true only when Cookies were written and the initial page must reload. */
+  seedCookies?: (profileId: string, target: CookieWriteTarget) => Promise<boolean | void>;
   onBeforeRuntimeStart?: (spaceId: number, profileId: string, dataDir: string) => Promise<void>;
   onRuntimeReady?: (spaceId: number, profileId: string, runtime: NativeCefRuntime) => Promise<void>;
   /** The one native CEF main process that owns all logical Space surfaces. */
@@ -532,13 +533,14 @@ export class NativeCefTaskSpaceManager {
     const operation = (async () => {
       if (await this.hasCompletedCookieSeed(markerPath, profileId)) return false;
       const target = await this.createNativeCookieTarget(runtime, space);
+      let cookiesWritten = false;
       try {
-        await this.options.seedCookies?.(profileId, target);
+        cookiesWritten = await this.options.seedCookies?.(profileId, target) === true;
       } finally {
         await target.dispose();
       }
       await this.writeCookieSeedMarker(profileId, dataDir, "imported");
-      return true;
+      return cookiesWritten;
     })();
     this.cookieSeedLocks.set(dataDir, operation);
     try {
