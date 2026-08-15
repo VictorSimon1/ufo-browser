@@ -407,18 +407,34 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
         handler->CancelPendingNativeSpace(canonical_cache.string(), space_id);
         return false;
       }
-      // Keep persistent Profile Spaces inside the already-running UFO CEF
-      // process. The previous ProcessSingleton forwarding path launched a
-      // short-lived copy of the app and asked Chromium to re-home its native
-      // window. Besides breaking the one-product-process contract, that path
-      // could publish a visible window before CEF's browser-info handshake
-      // had registered the frame, leaving Profile cookies inaccessible to
-      // Agent routing and the first navigation stuck on about:blank.
+      // Chrome Runtime owns real persistent Profiles through Chromium's
+      // ProfileManager. A CefRequestContext supplied to CreateBrowser cannot
+      // select another native Chrome Profile once this host has started: CEF
+      // silently reuses the process-global BrowserContext, which made UFO's
+      // Space metadata say "Profile B" while the page still used Profile A.
       //
-      // The selected Profile's canonical directory is already `cache_path`.
-      // A dedicated persistent RequestContext gives the in-process Chrome
-      // Runtime window the same cookies/storage while preserving Chromium's
-      // own tab strip, omnibox and toolbar.
+      const auto command_line = CefCommandLine::GetGlobalCommandLine();
+      const auto active_profile_directory = command_line
+          ->GetSwitchValue("profile-directory").ToString();
+      if (active_profile_directory != chrome_profile_directory) {
+        // Use Chromium's normal ProcessSingleton forwarding path only when
+        // switching Profiles. The helper invocation exits immediately; the
+        // resulting Profile window is created inside this already-running UFO
+        // host and is claimed by the pending Space below. Re-forwarding the
+        // already active Profile makes CEF 151's packaged public DevTools path
+        // wait forever on an internal top-chrome renderer, so that common path
+        // deliberately falls through to the real global BrowserContext.
+        const bool launched = UfoCefOpenChromeProfileWindow(
+            command_line->GetProgram().ToString().c_str(),
+            chrome_user_data_root.c_str(),
+            chrome_profile_directory.c_str(),
+            url.c_str(),
+            command_line->HasSwitch("use-mock-keychain"));
+        if (!launched) {
+          handler->CancelPendingNativeSpace(canonical_cache.string(), space_id);
+        }
+        return launched;
+      }
     }
   }
 
@@ -429,13 +445,11 @@ bool CreateSharedSpace(CefRefPtr<UfoCefHandler> handler,
   // even though ordinary expiry-bearing cookies and storage already live
   // under cache_path.
   context_settings.persist_session_cookies = true;
-  // Chrome Runtime 151 owns one process-wide Chrome BrowserContext. Creating
-  // multiple native Chrome windows with unrelated custom RequestContexts can
-  // leave the internal top-chrome renderer waiting forever for browser-info.
-  // UFO's Profile layer still seeds the selected Profile into the Space before
-  // Agent use; native Chrome windows therefore share the supported global
-  // BrowserContext while non-Chrome diagnostic surfaces retain isolated CEF
-  // contexts.
+  // Chrome Runtime 151 owns one process-wide BrowserContext unless a real
+  // ProfileManager window was requested above. This global context is correct
+  // for the already active persistent Profile (the directory match was checked
+  // above) and for non-persistent native diagnostics; a different persistent
+  // Profile can reach this line only by a programming error.
   auto request_context = native_chrome_shell
       ? CefRequestContext::GetGlobalContext()
       : CefRequestContext::CreateContext(context_settings, nullptr);

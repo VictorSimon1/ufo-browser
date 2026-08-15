@@ -88,6 +88,14 @@ try {
       !hasSpaceControls(autoCreatedPresentation, createdSpaceId)) {
     throw new Error(`Newly created Space was not presented immediately: ${JSON.stringify(autoCreatedPresentation)}`);
   }
+  const autoCreatedBrowser = await waitForCommittedSpaceBrowser(
+    controlSocket,
+    createdSpaceId,
+    "https://www.google.com/",
+  );
+  if (!autoCreatedBrowser.primary) {
+    throw new Error(`Newly created Space did not expose its primary Google page: ${JSON.stringify(autoCreatedBrowser)}`);
+  }
   const before = await fetch(spacesUrl).then((response) => response.json());
   if (!before.spaces?.some((space) => space.id === spaceId) || !before.spaces?.some((space) => space.id === createdSpaceId)) throw new Error("Space missing from Overview API");
   const showOverviewAfterCreate = await sendSocket(presentationSocket, "show-overview");
@@ -212,6 +220,7 @@ try {
     nativeChromeToolbarAttached: true,
     nativeChromeProductShell: nativeProductShell,
     spacesMountInsideUfoController: nativeProductShell,
+    newSpaceLoadsGoogleBeforePresentation: true,
     backgroundClosePreservesControls: true,
     agentOwnedNativeCloseBlocked: true,
     nativeCloseUsesSpaceStateMachine: true,
@@ -227,6 +236,27 @@ try {
 
 async function presentationStatus(path) {
   return JSON.parse(await sendSocket(path, JSON.stringify({ command: "presentation-status" })));
+}
+
+async function waitForCommittedSpaceBrowser(path, spaceId, expectedUrl) {
+  const deadline = Date.now() + 5_000;
+  let browsers = [];
+  while (Date.now() < deadline) {
+    const response = JSON.parse(await sendSocket(path, JSON.stringify({
+      command: "list-space-browsers",
+      spaceId,
+    })));
+    browsers = response.browsers || [];
+    const committed = browsers.find((browser) =>
+      browser.primary &&
+      (browser.url === expectedUrl || String(browser.url || "").startsWith(expectedUrl)),
+    );
+    if (committed) return committed;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  throw new Error(
+    `Space ${spaceId} did not commit ${expectedUrl} before presentation: ${JSON.stringify(browsers)}`,
+  );
 }
 
 function hasSpaceControls(status, spaceId) {
