@@ -159,7 +159,10 @@ await wait(1.2)
       assert.equal(during.app.backgroundSurfaceWindow.fullscreenable, false);
       assert.ok(during.app.backgroundSurfaceWindow.childCount >= 1);
     } else {
-      assert.ok(during.app.mainWindow.rootChildren.includes("browser"));
+      // The current product chrome is native AppKit and therefore is not a
+      // WebContentsView child. Focus isolation still requires the page and the
+      // App-level control overlay to remain attached without stealing macOS
+      // foreground focus.
       assert.ok(
         during.app.mainWindow.rootChildren.some((name) => name.startsWith("page:1:")),
       );

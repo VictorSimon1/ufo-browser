@@ -67,8 +67,7 @@ export class CdpBroker {
     this.downloads.removeConnection(connectionId);
     for (const [sessionId, route] of this.sessions) {
       if (route.connectionId !== connectionId) continue;
-      this.sessions.delete(sessionId);
-      this.releaseAgentScreencast(sessionId);
+      void this.releaseSession(sessionId, route);
     }
   }
 
@@ -76,8 +75,7 @@ export class CdpBroker {
     this.downloads.releaseConnectionSpace(connectionId, spaceId);
     for (const [sessionId, route] of this.sessions) {
       if (route.connectionId !== connectionId || route.spaceId !== spaceId) continue;
-      this.sessions.delete(sessionId);
-      this.releaseAgentScreencast(sessionId);
+      void this.releaseSession(sessionId, route);
     }
   }
 
@@ -175,6 +173,15 @@ export class CdpBroker {
         upstreamSessionId,
       });
       return { sessionId: synthetic };
+    }
+    if (method === "Target.detachFromTarget") {
+      const syntheticSessionId = String(params.sessionId || "");
+      const route = this.sessions.get(syntheticSessionId);
+      if (!route || route.connectionId !== connectionId) {
+        throw new Error("Session with given id not found");
+      }
+      await this.releaseSession(syntheticSessionId, route);
+      return {};
     }
     if (method === "Target.activateTarget") {
       await this.manager.activateTab(spaceId, params.targetId);
@@ -319,10 +326,33 @@ export class CdpBroker {
       this.agentAwakeTargets.delete(targetId);
       for (const [sessionId, route] of this.sessions) {
         if (route.ownerTargetId !== targetId) continue;
-        this.sessions.delete(sessionId);
-        this.releaseAgentScreencast(sessionId);
+        void this.releaseSession(sessionId, route, false);
       }
     });
+  }
+
+  private async releaseSession(
+    sessionId: string,
+    route: SessionRoute,
+    detachUpstream = true,
+  ) {
+    if (!this.sessions.delete(sessionId)) return;
+    this.releaseAgentScreencast(sessionId);
+    if (!detachUpstream || !route.upstreamSessionId) return;
+    const view = this.manager.getView?.(route.ownerTargetId);
+    const contents = view?.webContents;
+    if (
+      !contents ||
+      contents.isDestroyed() ||
+      !contents.debugger.isAttached()
+    ) {
+      return;
+    }
+    await contents.debugger
+      .sendCommand("Target.detachFromTarget", {
+        sessionId: route.upstreamSessionId,
+      })
+      .catch(() => undefined);
   }
 
   private releaseAgentScreencast(sessionId: string) {

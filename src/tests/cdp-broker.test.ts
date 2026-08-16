@@ -172,6 +172,41 @@ test("Agent disconnect releases screencast priority only after the last session"
   assert.deepEqual(resumed, ["page-1"]);
 });
 
+test("releasing a connection detaches upstream OOPIF sessions", async () => {
+  const debuggerTransport = new FakeDebugger();
+  debuggerTransport.attached = true;
+  const contents = new FakeContents(debuggerTransport);
+  const manager = {
+    getView: () => ({ webContents: contents }),
+  };
+  const broker = new CdpBroker(
+    manager as any,
+    { assert: () => undefined } as any,
+  );
+  (broker as any).sessions.set("synthetic-oopif", {
+    connectionId: "connection-1",
+    spaceId: 1,
+    targetId: "oopif-1",
+    ownerTargetId: "page-1",
+    generation: 1,
+    upstreamSessionId: "upstream-oopif",
+  });
+
+  broker.removeConnection("connection-1");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    debuggerTransport.commands.filter(
+      (command) => command.method === "Target.detachFromTarget",
+    ),
+    [
+      {
+        method: "Target.detachFromTarget",
+        params: { sessionId: "upstream-oopif" },
+      },
+    ],
+  );
+});
+
 test("focus emulation is limited to the trusted Input gesture window", async () => {
   const debuggerTransport = new FakeDebugger();
   const contents = new FakeContents(debuggerTransport);
@@ -343,7 +378,7 @@ test("download behavior is handled locally and emits isolated synthetic Page eve
 });
 
 class FakeDebugger extends EventEmitter {
-  private attached = false;
+  attached = false;
   readonly commands: Array<{ method: string; params: any }> = [];
 
   isAttached() {

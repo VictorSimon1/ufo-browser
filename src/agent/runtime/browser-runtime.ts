@@ -157,6 +157,8 @@ export function invalidateSession() {
   state.sessionId = null;
   state.sessionTargetId = null;
   state.sessionAt = 0;
+  if (sessionId) releaseSyntheticSession(sessionId);
+  releaseIframeSessions();
   if (sessionId) {
     for (const listener of sessionInvalidationSubscribers) {
       try {
@@ -359,7 +361,7 @@ function handleMessage(message) {
 
 export function browserSnapshotRefsToRefMap(refMap, refs = []) {
   refMap.clear();
-  iframeSessions.clear();
+  releaseIframeSessions();
   for (const ref of refs) {
     if (!ref || typeof ref !== "object") {
       continue;
@@ -377,4 +379,21 @@ export function browserSnapshotRefsToRefMap(refMap, refs = []) {
       ref.loc,
     );
   }
+}
+
+function releaseIframeSessions() {
+  for (const sessionId of iframeSessions.values()) {
+    releaseSyntheticSession(sessionId);
+  }
+  iframeSessions.clear();
+}
+
+function releaseSyntheticSession(sessionId: string) {
+  if (!sessionId || !isBrowserRuntime()) return;
+  void rawCdp(
+    "Target.detachFromTarget",
+    { sessionId },
+    undefined,
+    1000,
+  ).catch(() => undefined);
 }

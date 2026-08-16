@@ -5,6 +5,7 @@ import type {
   NativeImage,
   Rectangle,
   Session,
+  WebContents,
   WebContentsView,
 } from "electron";
 import {
@@ -350,7 +351,9 @@ export class TaskSpaceManager {
       if (index < 0) return false;
       const [space] = this.state.spaces.splice(index, 1);
       this.activeAgentConnections.delete(spaceId);
-      for (const tab of space.tabs) this.destroyRuntime(tab.targetId);
+      for (const tab of space.tabs) {
+        await this.destroyRuntime(tab.targetId, { waitForContents: true });
+      }
       this.visiblePreviewSpaceIds.delete(spaceId);
       this.previewDueAt.delete(spaceId);
       this.previewLastCaptureAt.delete(spaceId);
@@ -489,7 +492,7 @@ export class TaskSpaceManager {
       const index = space.tabs.findIndex((tab) => tab.targetId === targetId);
       if (index < 0) throw new Error(`tab not found: ${targetId}`);
       space.tabs.splice(index, 1);
-      this.destroyRuntime(targetId);
+      await this.destroyRuntime(targetId);
       if (space.tabs.length === 0) {
         const replacement = this.newTabRecord(X_BROWSER_DEFAULT_NEW_TAB_URL);
         space.tabs.push(replacement);
@@ -2172,8 +2175,35 @@ export class TaskSpaceManager {
     await view.webContents.loadURL(url);
   }
 
-  private destroyRuntime(targetId: string) {
+  private async destroyRuntime(
+    targetId: string,
+    options: { waitForContents?: boolean } = {},
+  ) {
     const runtime = this.runtimes.get(targetId);
+    const contents = runtime?.view.webContents;
+    const overview = this.overviewScreencast;
+    if (overview?.targetId === targetId) {
+      this.overviewScreencast = undefined;
+      if (overview.resubscribeTimer) clearTimeout(overview.resubscribeTimer);
+      overview.resubscribeTimer = undefined;
+      this.endOverviewFrameSubscription(overview);
+      this.setPageForegroundCadence(
+        targetId,
+        "overview-live-preview",
+        false,
+      );
+      this.previewPhases.delete(overview.spaceId);
+    }
+    this.overviewScreencastSuspendedTargets.delete(targetId);
+    this.overviewScreencastRetryAt.delete(targetId);
+    if (contents && !contents.isDestroyed()) {
+      try {
+        contents.endFrameSubscription();
+      } catch {
+        // A capture callback or renderer teardown may have ended it first.
+      }
+    }
+    this.frameSubscriptionCaptures.delete(targetId);
     if (runtime) this.detachBackgroundSurfaceNow(targetId, runtime.view);
     else {
       this.hiddenSurfaceTargets.delete(targetId);
@@ -2195,10 +2225,32 @@ export class TaskSpaceManager {
     this.previewCache.delete(targetId);
     const space = this.findSpaceByTargetId(targetId);
     if (space) this.previewDueAt.delete(space.id);
-    if (runtime && !runtime.view.webContents.isDestroyed()) {
-      runtime.view.webContents.close();
+    if (contents && !contents.isDestroyed()) {
+      // Retire any outstanding Viz mailbox after frame subscriptions and the
+      // native surface have been detached. Closing immediately is the source
+      // of SharedImage "non-existent mailbox" churn during Space teardown.
+      // The logical Tab/Space is already gone at this point, so do not make
+      // Agent commands synchronously pay this compositor retirement window.
+      const retirement = this.retireDetachedContents(contents);
+      if (options.waitForContents) await retirement;
+      else void retirement;
     }
     this.requestOverviewScreencastReconcile();
+  }
+
+  private async retireDetachedContents(contents: WebContents) {
+    await delay(120);
+    if (contents.isDestroyed()) return;
+    const destroyed = new Promise<void>((resolve) => {
+      contents.once("destroyed", resolve);
+    });
+    try {
+      contents.close({ waitForBeforeUnload: false });
+      await Promise.race([destroyed, delay(500)]);
+    } catch {
+      // App shutdown or a competing close path may destroy the WebContents
+      // during the retirement delay. Cleanup is idempotent in that case.
+    }
   }
 
   private detachBackgroundSurfaceNow(

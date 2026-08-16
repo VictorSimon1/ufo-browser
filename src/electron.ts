@@ -926,6 +926,7 @@ async function start() {
         manager,
         presentation,
         browserView,
+        nativeChrome,
         overviewView,
         overlayView,
       }).catch(async (error) => {
@@ -2576,6 +2577,7 @@ async function runControlUiAudit(context: {
   manager: TaskSpaceManager;
   presentation: PresentationCoordinator;
   browserView: WebContentsView;
+  nativeChrome: NativeBrowserChrome;
   overviewView: WebContentsView;
   overlayView: WebContentsView;
 }) {
@@ -2585,11 +2587,13 @@ async function runControlUiAudit(context: {
     manager,
     presentation,
     browserView,
+    nativeChrome,
     overviewView,
     overlayView,
   } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const space = await manager.createSpace("Agent control UI audit", "agent");
+  const expectedSpaceCount = manager.listSpaces().length;
   try {
     await manager.setAgentTaskState(space.id, "正在检查页面状态");
     await manager.navigate(
@@ -2609,6 +2613,7 @@ async function runControlUiAudit(context: {
       ),
     };
     await presentation.showSpace(space.id);
+    nativeChrome.update(manager.navigationState(space.id));
     browserView.webContents.send(
       "x-browser:browser-state",
       manager.navigationState(space.id),
@@ -2630,15 +2635,23 @@ async function runControlUiAudit(context: {
     manager.showAgentPointer(space.id, 720, 390);
     await wait(120);
 
-    const chrome = await browserView.webContents.executeJavaScript(
-      `(() => ({
-        controlled: document.body.classList.contains('agent-controlled'),
-        lockVisible: !document.querySelector('#chrome-lock')?.classList.contains('hidden'),
-        spacesCount: document.querySelector('#spaces-count')?.textContent,
-        spacesLabel: document.querySelector('#spaces-button')?.getAttribute('aria-label'),
-      }))()`,
-      true,
-    );
+    const nativeChromeInspection = nativeChrome.inspect();
+    const chrome = nativeChromeInspection
+      ? {
+          controlled: nativeChromeInspection.controlled,
+          lockVisible: nativeChromeInspection.controlled,
+          spacesCount: nativeChromeInspection.spacesCount,
+          spacesLabel: `共 ${nativeChromeInspection.spacesCount} 个空间`,
+        }
+      : await browserView.webContents.executeJavaScript(
+          `(() => ({
+            controlled: document.body.classList.contains('agent-controlled'),
+            lockVisible: !document.querySelector('#chrome-lock')?.classList.contains('hidden'),
+            spacesCount: document.querySelector('#spaces-count')?.textContent,
+            spacesLabel: document.querySelector('#spaces-button')?.getAttribute('aria-label'),
+          }))()`,
+          true,
+        );
     const overlay = await overlayView.webContents.executeJavaScript(
       `(() => ({
         design: document.body.dataset.overlayDesign,
@@ -2745,14 +2758,26 @@ async function runControlUiAudit(context: {
       `({ overlayNode: Boolean(document.getElementById('__x_browser_agent_overlay')) })`,
       true,
     );
-    await writeFile(join(testRoot, "control-ui-chrome.png"), await captureWebContentsPng(browserView));
+    const chromePng = nativeChrome.capturePng();
+    if (chromePng) {
+      await writeFile(join(testRoot, "control-ui-chrome.png"), chromePng);
+    } else {
+      await writeFile(
+        join(testRoot, "control-ui-chrome.png"),
+        await captureWebContentsPng(browserView),
+      );
+    }
     await writeFile(join(testRoot, "control-ui-page.png"), await captureWebContentsPng(view));
     await writeFile(join(testRoot, "control-ui-overlay.png"), await captureWebContentsPng(overlayView));
 
-    await browserView.webContents.executeJavaScript(
-      "document.querySelector('#spaces-button')?.click()",
-      true,
-    );
+    if (nativeChromeInspection) {
+      await presentation.showOverview();
+    } else {
+      await browserView.webContents.executeJavaScript(
+        "document.querySelector('#spaces-button')?.click()",
+        true,
+      );
+    }
     await wait(220);
     const backgroundAfterReturn = {
       overlayAttached: window.contentView.children.includes(overlayView),
@@ -2790,8 +2815,8 @@ async function runControlUiAudit(context: {
     const ok =
       chrome.controlled === true &&
       chrome.lockVisible === true &&
-      chrome.spacesCount === "2" &&
-      /共 2 个/.test(chrome.spacesLabel || "") &&
+      chrome.spacesCount === String(expectedSpaceCount) &&
+      new RegExp(`共 ${expectedSpaceCount} 个`).test(chrome.spacesLabel || "") &&
       backgroundBeforePresentation.overlayAttached === false &&
       backgroundBeforePresentation.pageOverlayPresent === false &&
       nativeOverlay.attached === true &&

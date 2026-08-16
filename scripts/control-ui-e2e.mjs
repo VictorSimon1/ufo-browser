@@ -35,7 +35,10 @@ child.stderr.on("data", (chunk) => {
 });
 
 try {
-  const audit = await freshJson("control-ui-audit.json", 12_000);
+  // Native AppKit capture writes several multi-megabyte PNGs before the final
+  // JSON. On a busy macOS compositor the old 12s watchdog could kill the App
+  // while writeFile had already truncated the audit file to zero bytes.
+  const audit = await freshJson("control-ui-audit.json", 45_000);
   assert.equal(audit.ok, true, JSON.stringify(audit));
   process.stdout.write(`${JSON.stringify(audit, null, 2)}\n`);
 } catch (error) {
