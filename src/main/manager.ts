@@ -370,7 +370,7 @@ export class TaskSpaceManager {
 
   async createTab(spaceId: number, input = X_BROWSER_DEFAULT_NEW_TAB_URL) {
     let created!: TabRecord;
-    await this.mutate(spaceId, async (space) => {
+    await this.mutateSoon(spaceId, async (space) => {
       created = this.newTabRecord(normalizeNavigationUrl(input));
       space.tabs.push(created);
       space.activeTabId = created.targetId;
@@ -441,7 +441,7 @@ export class TaskSpaceManager {
 
   async activateTab(spaceId: number, targetId: string) {
     const alreadyActive = this.getSpaceOrThrow(spaceId).activeTabId === targetId;
-    await this.mutate(spaceId, async (space) => {
+    await this.mutateSoon(spaceId, async (space) => {
       if (!space.tabs.some((tab) => tab.targetId === targetId)) {
         throw new Error(`tab not found: ${targetId}`);
       }
@@ -492,7 +492,6 @@ export class TaskSpaceManager {
       const index = space.tabs.findIndex((tab) => tab.targetId === targetId);
       if (index < 0) throw new Error(`tab not found: ${targetId}`);
       space.tabs.splice(index, 1);
-      await this.destroyRuntime(targetId);
       if (space.tabs.length === 0) {
         const replacement = this.newTabRecord(X_BROWSER_DEFAULT_NEW_TAB_URL);
         space.tabs.push(replacement);
@@ -512,6 +511,11 @@ export class TaskSpaceManager {
         this.getSpaceOrThrow(spaceId).activeTabId,
       );
     }
+    // The logical tab and native controls are committed before compositor
+    // retirement. Closing a renderer, detaching CDP/frame subscriptions and
+    // waiting for Viz mailbox safety are cleanup work; putting them ahead of
+    // notify() is what made the close affordance occasionally feel ignored.
+    void this.destroyRuntime(targetId).catch(() => undefined);
   }
 
   async activeView(spaceId: number) {

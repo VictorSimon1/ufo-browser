@@ -35,6 +35,12 @@ export class PresentationCoordinator {
   private activeTransitionToken = "";
   private readonly expectedTransitionTokens = new Set<string>();
   private readonly overviewTargets = new Map<number, Rect>();
+  private navigationGeneration = 0;
+  private navigationHandoff?: {
+    requestToken: string;
+    nativeToken: string;
+    targetId: string;
+  };
   private snapshotRefreshTimer?: ReturnType<typeof setTimeout>;
   private snapshotRefreshGeneration = 0;
   private disposed = false;
@@ -76,6 +82,7 @@ export class PresentationCoordinator {
     this.disposed = true;
     this.generation += 1;
     this.cancelSnapshotRefresh();
+    this.cancelNavigationHandoff();
     if (this.activeTransitionToken) {
       this.nativeTransition?.cancel(this.activeTransitionToken);
     }
@@ -101,6 +108,7 @@ export class PresentationCoordinator {
 
   showOverview(options?: PresentationRequestOptions) {
     this.cancelSnapshotRefresh();
+    this.cancelNavigationHandoff();
     return this.request({ kind: "overview" }, undefined, options);
   }
 
@@ -164,6 +172,78 @@ export class PresentationCoordinator {
     return Promise.resolve();
   }
 
+  async navigate(spaceId: number, input: string) {
+    const current = this.presentation;
+    const tab = this.manager.getActiveTab(spaceId);
+    if (
+      current.kind !== "space" ||
+      current.spaceId !== spaceId ||
+      this.attachedPage !== this.manager.getView(tab.targetId) ||
+      !this.nativeTransition
+    ) {
+      await this.manager.navigate(spaceId, input);
+      return;
+    }
+
+    const generation = ++this.navigationGeneration;
+    const requestToken = `navigation-${tab.targetId}-${generation}`;
+    const existing = this.navigationHandoff;
+    if (existing?.targetId === tab.targetId) {
+      // Rapid consecutive omnibox submissions keep the original old-page
+      // pixels. Capturing the underlying WebContents again here could snapshot
+      // Chromium's cleared navigation surface and reintroduce the white flash.
+      existing.requestToken = requestToken;
+    } else {
+      this.cancelNavigationHandoff(false);
+      const [width, height] = this.window.getContentSize();
+      const bounds = calculateShellLayout(width, height).page;
+      const nativeToken = requestToken;
+      const started = await this.nativeTransition.beginNavigationHandoff(
+        nativeToken,
+        this.attachedPage,
+        bounds,
+      );
+      if (generation !== this.navigationGeneration) {
+        if (started) this.nativeTransition.finishNavigationHandoff(nativeToken);
+        return;
+      }
+      if (started) {
+        this.navigationHandoff = {
+          requestToken,
+          nativeToken,
+          targetId: tab.targetId,
+        };
+      }
+    }
+
+    try {
+      await this.manager.navigate(spaceId, input);
+      const handoff = this.navigationHandoff;
+      if (
+        handoff?.requestToken === requestToken &&
+        this.presentation.kind === "space" &&
+        this.presentation.spaceId === spaceId &&
+        this.manager.getActiveTab(spaceId).targetId === tab.targetId
+      ) {
+        // loadURL resolves at the completed main document. Wait for one
+        // detailed compositor frame as the final guard before exposing it.
+        await this.manager.waitForPresentationFrame(tab.targetId, 900);
+      }
+    } finally {
+      const handoff = this.navigationHandoff;
+      if (handoff?.requestToken === requestToken) {
+        this.nativeTransition.finishNavigationHandoff(handoff.nativeToken);
+        this.navigationHandoff = undefined;
+      }
+    }
+  }
+
+  navigationHandoffVisible() {
+    return Boolean(
+      this.navigationHandoff && this.nativeTransition?.navigationHandoffVisible(),
+    );
+  }
+
   refreshControlOverlay() {
     this.syncControlOverlay();
   }
@@ -223,6 +303,12 @@ export class PresentationCoordinator {
       // flash repeatedly.
       this.manager.setOverviewPreviewActive(false);
       nextTargetId = this.manager.getActiveTab(next.spaceId).targetId;
+      if (
+        this.navigationHandoff &&
+        this.navigationHandoff.targetId !== nextTargetId
+      ) {
+        this.cancelNavigationHandoff();
+      }
       // Attach the real WebContents as soon as its navigation starts. Chromium
       // can then paint its ordinary loading lifecycle instead of leaving the
       // Overview's last frame visible until loadURL fully resolves.
@@ -645,6 +731,15 @@ export class PresentationCoordinator {
     if (!this.snapshotRefreshTimer) return;
     clearTimeout(this.snapshotRefreshTimer);
     this.snapshotRefreshTimer = undefined;
+  }
+
+  private cancelNavigationHandoff(incrementGeneration = true) {
+    if (incrementGeneration) this.navigationGeneration += 1;
+    const handoff = this.navigationHandoff;
+    this.navigationHandoff = undefined;
+    if (handoff) {
+      this.nativeTransition?.finishNavigationHandoff(handoff.nativeToken);
+    }
   }
 
   private async captureVisibleSnapshot(spaceId: number) {

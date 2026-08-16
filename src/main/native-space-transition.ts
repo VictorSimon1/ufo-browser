@@ -17,6 +17,13 @@ type NativeTransitionAddon = {
     key: string,
     options: Rect & { token: string; direction?: "enter" | "exit" },
   ): { started: boolean; durationMs?: number };
+  beginNavigationHandoff(
+    nativeWindowHandle: Buffer,
+    pagePng: Buffer,
+    options: Rect & { token: string },
+  ): boolean;
+  finishNavigationHandoff(token: string): boolean;
+  navigationHandoffVisible(): boolean;
   finishTransition(token: string): boolean;
   cancelTransition(token: string): boolean;
 };
@@ -127,6 +134,57 @@ export class NativeSpaceTransition {
     if (!run || !this.addon) return false;
     try {
       return this.addon.cancelTransition(token);
+    } catch {
+      return false;
+    }
+  }
+
+  async beginNavigationHandoff(
+    token: string,
+    pageView: WebContentsView,
+    bounds: Rect,
+  ) {
+    if (
+      !this.addon ||
+      !token ||
+      pageView.webContents.isDestroyed() ||
+      bounds.width < 1 ||
+      bounds.height < 1
+    ) {
+      return false;
+    }
+    try {
+      const image = await pageView.webContents.capturePage({
+        x: 0,
+        y: 0,
+        width: bounds.width,
+        height: bounds.height,
+      });
+      if (image.isEmpty() || pageView.webContents.isDestroyed()) return false;
+      return Boolean(
+        this.addon.beginNavigationHandoff(
+          this.window.getNativeWindowHandle(),
+          image.toPNG(),
+          { ...bounds, token },
+        ),
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  finishNavigationHandoff(token: string) {
+    if (!this.addon || !token) return false;
+    try {
+      return this.addon.finishNavigationHandoff(token);
+    } catch {
+      return false;
+    }
+  }
+
+  navigationHandoffVisible() {
+    try {
+      return Boolean(this.addon?.navigationHandoffVisible());
     } catch {
       return false;
     }

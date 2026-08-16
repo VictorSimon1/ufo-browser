@@ -64,9 +64,20 @@
 @implementation UFOActiveTransition
 @end
 
+@interface UFOActiveNavigationHandoff : NSObject
+@property(nonatomic, strong) NSString *token;
+@property(nonatomic, weak) NSView *hostView;
+@property(nonatomic, strong) UFOTransitionBlockerView *snapshotView;
+@property(nonatomic, strong) UFOSnapshotRecord *snapshot;
+@end
+
+@implementation UFOActiveNavigationHandoff
+@end
+
 NSMutableDictionary<NSString *, UFOSnapshotRecord *> *snapshotCache;
 NSMutableArray<NSString *> *snapshotLRU;
 UFOActiveTransition *activeTransition;
+UFOActiveNavigationHandoff *activeNavigationHandoff;
 
 constexpr NSUInteger kMaximumCachedSnapshots = 6;
 
@@ -197,6 +208,12 @@ void removeActiveTransition() {
   }
   [activeTransition.panel orderOut:nil];
   activeTransition = nil;
+}
+
+void removeActiveNavigationHandoff() {
+  if (!activeNavigationHandoff) return;
+  [activeNavigationHandoff.snapshotView removeFromSuperview];
+  activeNavigationHandoff = nil;
 }
 
 void configureSpring(CASpringAnimation *animation, bool exitsToOverview) {
@@ -332,6 +349,7 @@ napi_value beginTransition(napi_env env, napi_callback_info info) {
     return result;
   }
 
+  removeActiveNavigationHandoff();
   removeActiveTransition();
   touchSnapshot(key);
 
@@ -499,6 +517,112 @@ napi_value beginTransition(napi_env env, napi_callback_info info) {
   return result;
 }
 
+napi_value beginNavigationHandoff(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  if (argc < 3) {
+    throwError(env, "beginNavigationHandoff requires a native window handle, page PNG and options");
+    return nullptr;
+  }
+
+  void *handleBytes = nullptr;
+  size_t handleLength = 0;
+  void *pageBytes = nullptr;
+  size_t pageLength = 0;
+  if (napi_get_buffer_info(env, argv[0], &handleBytes, &handleLength) != napi_ok ||
+      handleLength < sizeof(void *) ||
+      napi_get_buffer_info(env, argv[1], &pageBytes, &pageLength) != napi_ok ||
+      pageLength == 0) {
+    throwError(env, "beginNavigationHandoff received invalid image data");
+    return nullptr;
+  }
+
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  std::string tokenValue;
+  napi_value token;
+  if (!readNamedDouble(env, argv[2], "x", &x) ||
+      !readNamedDouble(env, argv[2], "y", &y) ||
+      !readNamedDouble(env, argv[2], "width", &width) ||
+      !readNamedDouble(env, argv[2], "height", &height) ||
+      napi_get_named_property(env, argv[2], "token", &token) != napi_ok ||
+      !readString(env, token, &tokenValue) || tokenValue.empty() ||
+      width < 1 || height < 1) {
+    throwError(env, "beginNavigationHandoff options are invalid");
+    return nullptr;
+  }
+
+  uintptr_t nativePointer = 0;
+  std::memcpy(&nativePointer, handleBytes, sizeof(nativePointer));
+  NSView *host = (__bridge NSView *)reinterpret_cast<void *>(nativePointer);
+  if (!host || !host.window) return booleanValue(env, false);
+
+  CGImageRef page = decodeImage(pageBytes, pageLength);
+  if (!page) return booleanValue(env, false);
+  const CGFloat scale = std::max<CGFloat>(
+      1.0,
+      static_cast<CGFloat>(CGImageGetWidth(page) / width));
+  UFOSnapshotRecord *snapshot =
+      [[UFOSnapshotRecord alloc] initWithImage:page scale:scale];
+  CGImageRelease(page);
+
+  removeActiveTransition();
+  removeActiveNavigationHandoff();
+
+  x = std::clamp(x, 0.0, std::max(0.0, NSWidth(host.bounds) - 1.0));
+  y = std::clamp(y, 0.0, std::max(0.0, NSHeight(host.bounds) - 1.0));
+  width = std::min(width, NSWidth(host.bounds) - x);
+  height = std::min(height, NSHeight(host.bounds) - y);
+  const CGFloat nativeY = host.isFlipped
+      ? y
+      : NSHeight(host.bounds) - y - height;
+
+  UFOTransitionBlockerView *view = [[UFOTransitionBlockerView alloc]
+      initWithFrame:NSMakeRect(x, nativeY, width, height)];
+  view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  view.wantsLayer = YES;
+  view.layer.contents = (__bridge id)snapshot.image;
+  view.layer.contentsScale = snapshot.scale;
+  view.layer.contentsGravity = kCAGravityResize;
+  view.layer.minificationFilter = kCAFilterLinear;
+  view.layer.magnificationFilter = kCAFilterLinear;
+  view.layer.backgroundColor = NSColor.whiteColor.CGColor;
+  [host addSubview:view positioned:NSWindowAbove relativeTo:nil];
+
+  activeNavigationHandoff = [[UFOActiveNavigationHandoff alloc] init];
+  activeNavigationHandoff.token =
+      [NSString stringWithUTF8String:tokenValue.c_str()];
+  activeNavigationHandoff.hostView = host;
+  activeNavigationHandoff.snapshotView = view;
+  activeNavigationHandoff.snapshot = snapshot;
+  return booleanValue(env, true);
+}
+
+napi_value finishNavigationHandoff(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  std::string tokenValue;
+  if (argc < 1 || !readString(env, argv[0], &tokenValue) ||
+      !activeNavigationHandoff) {
+    return booleanValue(env, false);
+  }
+  NSString *token = [NSString stringWithUTF8String:tokenValue.c_str()];
+  if (![activeNavigationHandoff.token isEqualToString:token]) {
+    return booleanValue(env, false);
+  }
+  removeActiveNavigationHandoff();
+  return booleanValue(env, true);
+}
+
+napi_value navigationHandoffVisible(napi_env env, napi_callback_info info) {
+  return booleanValue(env, activeNavigationHandoff != nil &&
+      activeNavigationHandoff.snapshotView.superview != nil);
+}
+
 napi_value finishTransition(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
@@ -527,6 +651,12 @@ napi_value initialize(napi_env env, napi_value exports) {
        napi_default, nullptr},
       {"beginTransition", nullptr, beginTransition, nullptr, nullptr, nullptr,
        napi_default, nullptr},
+      {"beginNavigationHandoff", nullptr, beginNavigationHandoff, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
+      {"finishNavigationHandoff", nullptr, finishNavigationHandoff, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
+      {"navigationHandoffVisible", nullptr, navigationHandoffVisible, nullptr,
+       nullptr, nullptr, napi_default, nullptr},
       {"finishTransition", nullptr, finishTransition, nullptr, nullptr, nullptr,
        napi_default, nullptr},
       {"cancelTransition", nullptr, cancelTransition, nullptr, nullptr, nullptr,

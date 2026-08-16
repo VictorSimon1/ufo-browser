@@ -1843,7 +1843,7 @@ function registerIpc(context: IpcContext) {
   shell("x-browser:browser:navigate", (_event, input: string) => {
     const spaceId = currentSpaceId(presentation);
     assertUserControl(manager, spaceId);
-    return manager.navigate(spaceId, String(input));
+    return presentation.navigate(spaceId, String(input));
   });
   shell("x-browser:browser:back", () => {
     const spaceId = currentSpaceId(presentation);
@@ -1910,7 +1910,7 @@ async function handleNativeBrowserChromeEvent(
       await manager.closeTab(spaceId, String(event.targetId));
       break;
     case "navigate":
-      await manager.navigate(spaceId, String(event.value));
+      await presentation.navigate(spaceId, String(event.value));
       break;
     case "back":
       await manager.goBack(spaceId);
@@ -1999,6 +1999,14 @@ async function runNativeBrowserInteractionAudit(context: {
 }) {
   const { testRoot, window, manager, presentation, nativeChrome } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitUntil = async (predicate: () => boolean, timeoutMs = 800) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() >= deadline) return false;
+      await wait(5);
+    }
+    return true;
+  };
   const pageUrl =
     "data:text/html,<title>Native%20Chrome%20Audit</title><main>Native%20Chrome%20Audit</main>";
   const space = await manager.createSpace("Native browser interaction audit", "user");
@@ -2025,34 +2033,52 @@ async function runNativeBrowserInteractionAudit(context: {
     const initialRootChildCount = window.contentView.children.length;
 
     const tabsBeforeNew = manager.getSpaceOrThrow(space.id).tabs.length;
-    await handleNativeBrowserChromeEvent(
+    const newTabStartedAt = performance.now();
+    const newTabOperation = handleNativeBrowserChromeEvent(
       { type: "new-tab" },
       manager,
       presentation,
       nativeChrome,
     );
+    const newTabChromeCommitted = await waitUntil(
+      () => nativeChrome.inspect()?.tabCount === tabsBeforeNew + 1,
+    );
+    const newTabChromeLatencyMs = performance.now() - newTabStartedAt;
+    await newTabOperation;
     await wait(120);
     const afterNewSpace = manager.getSpaceOrThrow(space.id);
     const afterNewTabCount = afterNewSpace.tabs.length;
     const newTargetId = afterNewSpace.activeTabId;
     const afterNew = nativeChrome.inspect();
 
-    await handleNativeBrowserChromeEvent(
+    const activateStartedAt = performance.now();
+    const activateOperation = handleNativeBrowserChromeEvent(
       { type: "activate-tab", targetId: page.targetId },
       manager,
       presentation,
       nativeChrome,
     );
+    const activateChromeCommitted = await waitUntil(
+      () => manager.getSpaceOrThrow(space.id).activeTabId === page.targetId,
+    );
+    const activateChromeLatencyMs = performance.now() - activateStartedAt;
+    await activateOperation;
     await wait(80);
     const afterActivate = nativeChrome.inspect();
     const activatedTargetId = manager.getSpaceOrThrow(space.id).activeTabId;
 
-    await handleNativeBrowserChromeEvent(
+    const closeStartedAt = performance.now();
+    const closeOperation = handleNativeBrowserChromeEvent(
       { type: "close-tab", targetId: newTargetId },
       manager,
       presentation,
       nativeChrome,
     );
+    const closeChromeCommitted = await waitUntil(
+      () => nativeChrome.inspect()?.tabCount === tabsBeforeNew,
+    );
+    const closeChromeLatencyMs = performance.now() - closeStartedAt;
+    await closeOperation;
     await wait(80);
     const afterClose = nativeChrome.inspect();
     const contextToken = await pageView.webContents.executeJavaScript(
@@ -2063,6 +2089,25 @@ async function runNativeBrowserInteractionAudit(context: {
     if (chromePng) {
       await writeFile(join(testRoot, "browser-interaction-polish.png"), chromePng);
     }
+
+    const delayedNavigationUrl = `data:text/html;charset=utf-8,${encodeURIComponent(`
+      <title>Native navigation handoff</title>
+      <style>html { background: #173d2b; color: white; }</style>
+      <main>New document is ready</main>
+      <script type="module">
+        await new Promise((resolve) => setTimeout(resolve, 480));
+        document.documentElement.dataset.ready = "true";
+      </script>
+    `)}`;
+    const navigation = presentation.navigate(space.id, delayedNavigationUrl);
+    const navigationHandoffShown = await waitUntil(
+      () => presentation.navigationHandoffVisible(),
+      600,
+    );
+    await wait(80);
+    const navigationHandoffHeld = presentation.navigationHandoffVisible();
+    await navigation;
+    const navigationHandoffRemoved = !presentation.navigationHandoffVisible();
 
     const agentSpace = await manager.createSpace(
       "Native Agent titlebar drag audit",
@@ -2097,12 +2142,21 @@ async function runNativeBrowserInteractionAudit(context: {
       initialRootChildCount === 1 &&
       afterNewTabCount === tabsBeforeNew + 1 &&
       afterNew?.tabCount === tabsBeforeNew + 1 &&
+      newTabChromeCommitted &&
+      newTabChromeLatencyMs < 180 &&
       afterNew.addressFocused === true &&
       activatedTargetId === page.targetId &&
+      activateChromeCommitted &&
+      activateChromeLatencyMs < 180 &&
       afterActivate?.tabCount === tabsBeforeNew + 1 &&
       manager.getSpaceOrThrow(space.id).tabs.length === tabsBeforeNew &&
+      closeChromeCommitted &&
+      closeChromeLatencyMs < 180 &&
       afterClose?.tabCount === tabsBeforeNew &&
       contextToken === "kept-context" &&
+      navigationHandoffShown &&
+      navigationHandoffHeld &&
+      navigationHandoffRemoved &&
       Boolean(chromePng && chromePng.byteLength > 1_000) &&
       agentControlled?.controlled === true &&
       agentControlled.controlledTabDraggable === true &&
@@ -2119,9 +2173,18 @@ async function runNativeBrowserInteractionAudit(context: {
           initialRootChildCount,
           afterNew,
           afterNewTabCount,
+          newTabChromeCommitted,
+          newTabChromeLatencyMs,
           afterActivate,
+          activateChromeCommitted,
+          activateChromeLatencyMs,
           afterClose,
+          closeChromeCommitted,
+          closeChromeLatencyMs,
           contextToken,
+          navigationHandoffShown,
+          navigationHandoffHeld,
+          navigationHandoffRemoved,
           chromePngBytes: chromePng?.byteLength ?? 0,
           agentControlled,
           overview,
