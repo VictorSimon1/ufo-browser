@@ -142,6 +142,10 @@ export function createEgoCompatibilityContext(
   const gotoAndWait = (url: string, options: Record<string, any> = {}) =>
     call(harness.goto ?? page.goto, url, {
       ...options,
+      // Agent workflows normally need the page to be interactive, not every
+      // analytics stream, video and lazy resource to finish. Callers that
+      // truly need the full load event can still request waitUntil: "load".
+      waitUntil: options.waitUntil ?? "domcontentloaded",
       timeout: secondsToMilliseconds(options.timeout, 20_000),
       settle: secondsToMilliseconds(options.settle, 0),
     });
@@ -234,11 +238,18 @@ export function createEgoCompatibilityContext(
     completeTaskSpace: harness.completeTaskSpace ?? taskSpaces.complete,
     handOffTaskSpace: harness.handOffTaskSpace ?? taskSpaces.handOff,
     takeOverTaskSpace: harness.takeOverTaskSpace ?? taskSpaces.takeOver,
-    waitForAgentControl: (nameOrId?: string | number, options: Record<string, any> = {}) =>
+    // Unlike Playwright-style page methods, the task-space helper owns its
+    // public timeout contract and already interprets interval/timeout as
+    // seconds. Converting here made a requested 1 second timeout arrive as
+    // 1000 seconds and effectively hung an Agent after handoff.
+    waitForAgentControl: (
+      nameOrId?: string | number,
+      options: Record<string, any> = {},
+    ) =>
       call(
         harness.waitForAgentControl ?? taskSpaces.waitForAgentControl,
         nameOrId,
-        withSecondOptions(options),
+        { ...options },
       ),
 
     // Navigation and observation names used by the installed ego Skill.

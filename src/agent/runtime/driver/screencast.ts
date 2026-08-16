@@ -7,6 +7,7 @@ import {
   subscribeBrowserEvent,
 } from "../browser-runtime.js";
 import { VideoRecorder } from "../video-recorder.js";
+import { ffmpegAvailability } from "../video-recorder.js";
 import { pageInfo } from "./nav.js";
 
 type Size = { width: number; height: number };
@@ -22,10 +23,27 @@ const defaults = {
   pageInfo,
   subscribeBrowserEvent,
   createRecorder: (options) => new VideoRecorder(options),
+  ffmpegAvailability,
   now: Date.now,
 };
 let dependencies = { ...defaults };
 let activeRecording: any;
+
+/**
+ * Return whether the local runtime can encode WebM screencasts.
+ * @returns {Promise<boolean>} True when an executable FFmpeg is available.
+ */
+export async function isScreencastAvailable() {
+  return (await dependencies.ffmpegAvailability()).available;
+}
+
+/**
+ * Describe the FFmpeg capability used by page.screencast.start().
+ * @returns {Promise<{available:boolean,path?:string,source?:string,reason?:string}>}
+ */
+export async function screencastAvailability() {
+  return dependencies.ffmpegAvailability();
+}
 
 /**
  * Start recording the current page viewport to a silent VP8 WebM file.
@@ -57,11 +75,18 @@ export async function startScreencast(options: ScreencastOptions) {
     );
   }
   if (activeRecording) throw new Error("Screencast is already started");
+  const availability = await dependencies.ffmpegAvailability();
+  if (!availability.available) {
+    throw new Error(
+      `${availability.reason} Check await page.screencast.isAvailable() before recording.`,
+    );
+  }
   const sessionId = await dependencies.ensureSession();
   const size = evenSize(options.size ?? (await defaultSize()));
   const recorder = dependencies.createRecorder({
     outputPath: resolve(options.path),
     size,
+    ffmpegPath: availability.path,
   });
   await recorder.start();
   const recording: any = {

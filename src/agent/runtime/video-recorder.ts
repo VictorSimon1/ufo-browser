@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { spawn } from "node:child_process";
-import { mkdir, rename, unlink } from "node:fs/promises";
-import { dirname } from "node:path";
+import { constants as fsConstants } from "node:fs";
+import { access, mkdir, rename, unlink } from "node:fs/promises";
+import { delimiter, dirname, join } from "node:path";
 
 type Size = { width: number; height: number };
 type SpawnProcess = typeof spawn;
@@ -16,6 +17,71 @@ type VideoRecorderOptions = {
 
 const FPS = 25;
 const MAX_STDERR_LENGTH = 64 * 1024;
+
+export type FfmpegAvailability = {
+  available: boolean;
+  path?: string;
+  source?: "option" | "environment" | "bundle" | "path";
+  reason?: string;
+};
+
+export async function ffmpegAvailability(
+  explicitPath?: string,
+): Promise<FfmpegAvailability> {
+  const configured =
+    explicitPath ||
+    process.env.UFO_BROWSER_FFMPEG_PATH ||
+    process.env.EGO_BROWSER_FFMPEG_PATH;
+  if (configured) {
+    return executableAvailability(
+      configured,
+      explicitPath ? "option" : "environment",
+      `Configured FFmpeg is not executable: ${configured}`,
+    );
+  }
+
+  const bundledCandidates = [
+    process.resourcesPath && join(process.resourcesPath, "bin", "ffmpeg"),
+    process.resourcesPath &&
+      join(process.resourcesPath, "app.asar.unpacked", "dist", "bin", "ffmpeg"),
+  ].filter(Boolean) as string[];
+  for (const candidate of bundledCandidates) {
+    const result = await executableAvailability(candidate, "bundle");
+    if (result.available) return result;
+  }
+
+  const executableName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  for (const directory of String(process.env.PATH || "")
+    .split(delimiter)
+    .filter(Boolean)) {
+    const result = await executableAvailability(
+      join(directory, executableName),
+      "path",
+    );
+    if (result.available) return result;
+  }
+  return {
+    available: false,
+    reason:
+      "FFmpeg is unavailable. Install ffmpeg or set UFO_BROWSER_FFMPEG_PATH before calling page.screencast.start().",
+  };
+}
+
+async function executableAvailability(
+  path: string,
+  source: FfmpegAvailability["source"],
+  unavailableReason?: string,
+): Promise<FfmpegAvailability> {
+  try {
+    await access(path, fsConstants.X_OK);
+    return { available: true, path, source };
+  } catch {
+    return {
+      available: false,
+      reason: unavailableReason || `FFmpeg is not executable: ${path}`,
+    };
+  }
+}
 
 export class VideoRecorder {
   private _options: VideoRecorderOptions;
@@ -38,6 +104,10 @@ export class VideoRecorder {
 
   async start() {
     const { outputPath, size } = this._options;
+    const availability = await ffmpegAvailability(this._options.ffmpegPath);
+    if (!availability.available) {
+      throw new Error(availability.reason);
+    }
     await mkdir(dirname(outputPath), { recursive: true });
     this._tempOutputPath = `${outputPath}.${process.pid}-${Math.random()
       .toString(16)
@@ -85,9 +155,7 @@ export class VideoRecorder {
     ];
     const spawnProcess = this._options.spawnProcess ?? spawn;
     this._process = spawnProcess(
-      this._options.ffmpegPath ??
-        process.env.EGO_BROWSER_FFMPEG_PATH ??
-        "ffmpeg",
+      availability.path!,
       args,
       { stdio: ["pipe", "ignore", "pipe"] },
     );

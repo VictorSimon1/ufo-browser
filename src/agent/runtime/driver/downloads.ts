@@ -49,7 +49,9 @@ export async function waitForEvent(
 
 async function waitForPopup(options: WaitForEventOptions = {}) {
   const timeout = options.timeout ?? state.defaultTimeout;
-  const existing = new Set((await listTabs()).map((tab) => tab.targetId));
+  const initialTabs = await listTabs();
+  const existing = new Set(initialTabs.map((tab) => tab.targetId));
+  const openerTargetId = initialTabs.find((tab) => tab.active)?.targetId;
   const deadline = state.now() + Math.max(0, timeout);
   do {
     const tabs = await listTabs();
@@ -57,6 +59,7 @@ async function waitForPopup(options: WaitForEventOptions = {}) {
     if (popup) {
       return {
         targetId: popup.targetId,
+        openerTargetId,
         url: () => popup.url,
         title: () => popup.title,
         close: () => closeTab(popup.targetId),

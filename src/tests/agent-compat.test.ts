@@ -86,7 +86,11 @@ test("legacy ego Skill helper names map to the facade harness", async () => {
       keyboard: { type: fn("type") },
     },
     browser: { openOrReuseTab: fn("openOrReuseTab") },
-    taskSpaces: { bootstrap: fn("bootstrap"), use: fn("use") },
+    taskSpaces: {
+      bootstrap: fn("bootstrap"),
+      use: fn("use"),
+      waitForAgentControl: fn("waitForAgentControl"),
+    },
     fetch: { server: fn("serverFetch"), browser: fn("browserFetch") },
     site: {
       skills: fn("siteSkills"),
@@ -115,6 +119,10 @@ test("legacy ego Skill helper names map to the facade harness", async () => {
     "bootstrap",
   );
   assert.equal(await context.useTaskSpace(3), "use");
+  assert.equal(
+    await context.waitForAgentControl(3, { timeout: 1, interval: 0.05 }),
+    "waitForAgentControl",
+  );
   assert.equal(await context.snapshotText(), "snapshot");
   assert.equal(await context.snapshotRaw(), "snapshotRaw");
   assert.equal(await context.elementCenter("@12"), "elementCenter");
@@ -153,12 +161,17 @@ test("legacy ego Skill helper names map to the facade harness", async () => {
   assert.deepEqual(calls.find((call) => call[0] === "goto"), [
     "goto",
     "https://example.com",
-    { timeout: 3000, settle: 0 },
+    { timeout: 3000, settle: 0, waitUntil: "domcontentloaded" },
   ]);
   assert.deepEqual(calls.find((call) => call[0] === "openOrReuseTab"), [
     "openOrReuseTab",
     "https://example.com",
     { timeout: 20_000, settle: 250 },
+  ]);
+  assert.deepEqual(calls.find((call) => call[0] === "waitForAgentControl"), [
+    "waitForAgentControl",
+    3,
+    { timeout: 1, interval: 0.05 },
   ]);
   assert.match(context.help("snapshotText"), /semantic page tree/);
   assert.match(context.help("snapshotRaw"), /structured semantic snapshot/);

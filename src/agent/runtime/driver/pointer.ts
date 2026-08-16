@@ -1,6 +1,10 @@
 // @ts-nocheck
 import { cdp, evaluate } from "../cdp-eval.js";
-import { browserCdp } from "../browser-runtime.js";
+import {
+  browserCdp,
+  pendingDialog,
+  subscribeBrowserEvent,
+} from "../browser-runtime.js";
 import { elementCenter, screenshot } from "./observe.js";
 import {
   releaseHandle,
@@ -104,6 +108,7 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
     if (!isInputDispatchTimeout(error)) throw error;
     dispatchError = error;
   }
+  if (pendingDialog(point.sessionId)) return;
   const completed = await finishClickProbe(point, probeId, clickCount);
   if (dispatchError && !completed) throw dispatchError;
 }
@@ -191,9 +196,17 @@ async function clickSelector(selector: string, options: ClickOptions) {
       } catch (error) {
         dispatchError = error;
       }
-      outcome = await finishElementClickProbe(probeId, handle);
+      outcome = pendingDialog(point.sessionId)
+        ? { seen: true, contextGone: false }
+        : await finishElementClickProbe(probeId, handle);
     } finally {
-      await releaseHandle(handle.objectId, handle.sessionId);
+      // Runtime.releaseObject is also blocked while a modal JavaScript dialog
+      // pauses the renderer. The object belongs to that execution context and
+      // will be reclaimed after the dialog/navigation; do not turn a
+      // successful dialog-opening click into a 15 second cleanup stall.
+      if (!pendingDialog(point.sessionId)) {
+        await releaseHandle(handle.objectId, handle.sessionId);
+      }
     }
     if (outcome.seen || outcome.contextGone) return;
     if (dispatchError && !isInputDispatchTimeout(dispatchError)) {
@@ -772,7 +785,36 @@ async function dispatchMouse(
   type: string,
   options: MouseEventOptions = {},
 ) {
-  await browserCdp(
+  // Chromium can synchronously pause the renderer when an input event opens a
+  // JavaScript dialog. In that state the dialog event is proof that the input
+  // was delivered, but the Input.dispatchMouseEvent reply may not arrive until
+  // the user accepts the dialog. Treat the opening event as successful input
+  // instead of waiting for the CDP timeout.
+  if (pendingDialog(point.sessionId)) return;
+  let stopWatching = () => undefined;
+  const dialogOpened = new Promise<{ kind: "dialog" } | { kind: "none" }>(
+    (resolve) => {
+      let settled = false;
+      const finish = (result: { kind: "dialog" } | { kind: "none" }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve(result);
+      };
+      const unsubscribe = subscribeBrowserEvent(
+        "Page.javascriptDialogOpening",
+        point.sessionId,
+        () => finish({ kind: "dialog" }),
+      );
+      const timer = setTimeout(
+        () => finish({ kind: "none" }),
+        INPUT_DISPATCH_TIMEOUT_MS,
+      );
+      stopWatching = () => finish({ kind: "none" });
+    },
+  );
+  const dispatched = browserCdp(
     "Input.dispatchMouseEvent",
     {
       type,
@@ -782,7 +824,15 @@ async function dispatchMouse(
     },
     point.sessionId,
     INPUT_DISPATCH_TIMEOUT_MS,
+  ).then(
+    () => ({ kind: "dispatched" as const }),
+    (error) => ({ kind: "error" as const, error }),
   );
+  const first = await Promise.race([dispatched, dialogOpened]);
+  if (first.kind === "dialog") return;
+  stopWatching();
+  const result = first.kind === "none" ? await dispatched : first;
+  if (result.kind === "error") throw result.error;
 }
 
 function isInputDispatchTimeout(error: unknown) {

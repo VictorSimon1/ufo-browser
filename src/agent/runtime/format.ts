@@ -514,6 +514,37 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<string>",
     example: "console.log(await page.screenshot({ path: '/tmp/page.png' }))",
   },
+  "page.screencast.isAvailable": {
+    signature: "page.screencast.isAvailable() => Promise<boolean>",
+    description:
+      "Return whether an executable FFmpeg encoder is available before starting a WebM screencast.",
+    returns: "Promise<boolean>",
+    example: "if (await page.screencast.isAvailable()) { /* record */ }",
+  },
+  "page.screencast.availability": {
+    signature: "page.screencast.availability() => Promise<object>",
+    description:
+      "Describe the local FFmpeg capability, including the resolved executable or an actionable unavailable reason.",
+    returns:
+      "Promise<{ available: boolean, path?: string, source?: string, reason?: string }>",
+    example: "console.log(await page.screencast.availability())",
+  },
+  "page.screencast.start": {
+    signature: "page.screencast.start(options) => Promise<Disposable>",
+    description:
+      "Record the current viewport to a silent VP8 WebM file. Requires FFmpeg; call isAvailable() first.",
+    params: [
+      {
+        name: "options",
+        type: "{ path: string, size?: { width: number, height: number }, quality?: number }",
+        required: true,
+        description: "Absolute .webm output path, optional frame size, and JPEG quality.",
+      },
+    ],
+    returns: "Promise<Disposable>",
+    example:
+      "const recording = await page.screencast.start({ path: '/tmp/page.webm' })",
+  },
   "page.snapshot": {
     signature: "page.snapshot(options?) => Promise<string>",
     description:

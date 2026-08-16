@@ -260,6 +260,7 @@ async function waitForNetworkMatch(
   const requests = new Map();
   const networkEvents = acquireNetworkEvents();
   let matched;
+  let bodyBuffering: Promise<unknown> | undefined;
   try {
     await networkEvents.ready;
     await waitForBrowserEvent((event) => {
@@ -267,7 +268,11 @@ async function waitForNetworkMatch(
       return Boolean(matched);
     }, browserEventTimeout(timeout));
     if (kind === "response") {
-      await matched?.__bufferBody?.();
+      // A response event is useful even when the body is large, streamed, or
+      // already evicted by Chromium. Start buffering immediately so body()/
+      // text()/json() can reuse it, but never delay returning the Response
+      // facade merely because the body is not ready yet.
+      bodyBuffering = matched?.__bufferBody?.();
     }
     return matched;
   } catch (error) {
@@ -278,7 +283,13 @@ async function waitForNetworkMatch(
     }
     throw error;
   } finally {
-    await networkEvents.release();
+    if (bodyBuffering) {
+      void bodyBuffering
+        .catch(() => undefined)
+        .finally(() => networkEvents.release());
+    } else {
+      await networkEvents.release();
+    }
   }
 }
 

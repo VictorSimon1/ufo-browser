@@ -337,6 +337,8 @@ export async function waitForActionableHandle(
   let lastReason = "not-ready";
   let interceptedBy;
   let interceptedSince = 0;
+  let stableInterceptor;
+  let stableInterceptionEndedEarly = false;
   let attempts = 0;
   const callLog = ["等待元素解析、显示、启用并稳定"];
   do {
@@ -365,9 +367,18 @@ export async function waitForActionableHandle(
       lastReason = value.reason || lastReason;
       interceptedBy = value.interceptedBy || interceptedBy;
       if (value.reason === "intercepted") {
-        if (!interceptedSince) interceptedSince = state.now();
+        if (stableInterceptor !== value.interceptedBy) {
+          stableInterceptor = value.interceptedBy;
+          interceptedSince = state.now();
+        } else if (
+          interceptedSince &&
+          state.now() - interceptedSince >= 300
+        ) {
+          stableInterceptionEndedEarly = true;
+        }
       } else {
         interceptedSince = 0;
+        stableInterceptor = undefined;
       }
       const detail =
         value.reason === "intercepted" && value.interceptedBy
@@ -391,13 +402,24 @@ export async function waitForActionableHandle(
       }
     }
     if (handle) await releaseHandle(handle.objectId, handle.sessionId);
+    if (stableInterceptionEndedEarly) break;
     const remaining = deadline - state.now();
     if (remaining <= 0) break;
     await state.sleep(Math.min(16, remaining));
   } while (state.now() <= deadline);
-  callLog.push(`超时：${timeout} ms，最终原因 ${lastReason}`);
-  if (lastReason === "intercepted" && interceptedSince && state.now() - interceptedSince >= 300) {
-    callLog.push("建议：遮挡已持续超过 300 ms；先检查 dialog/overlay，再决定是否重试或使用 force");
+  callLog.push(
+    stableInterceptionEndedEarly
+      ? `提前结束：同一遮挡已持续 300 ms，最终原因 ${lastReason}`
+      : `超时：${timeout} ms，最终原因 ${lastReason}`,
+  );
+  if (
+    lastReason === "intercepted" &&
+    interceptedSince &&
+    state.now() - interceptedSince >= 300
+  ) {
+    callLog.push(
+      "建议：遮挡已持续超过 300 ms；先检查 dialog/overlay，再决定是否重试或使用 force",
+    );
   }
   throw new ActionabilityError({
     operation,

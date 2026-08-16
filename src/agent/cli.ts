@@ -1,7 +1,4 @@
-import { createConnection, type Socket } from "node:net";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import type { Socket } from "node:net";
 import {
   assertEgoCreateTabUrl,
   createEgoCompatibilityContext,
@@ -9,6 +6,11 @@ import {
   installEgoCompatibilityGlobals,
 } from "./compat.js";
 import * as runtime from "./runtime/helpers.js";
+import {
+  connectAgentSocket,
+  resolveSocketCandidates,
+} from "./socket-path.js";
+import { assertRawCdpPayload } from "./raw-cdp.js";
 
 type Pending = {
   resolve(value: unknown): void;
@@ -61,7 +63,7 @@ class AgentHost {
   getBrowserVersion = () => this.rpc("getBrowserVersion");
 
   sendCDPMessage = (payload: string) => {
-    this.write({ type: "cdp-send", payload });
+    this.write({ type: "cdp-send", payload: assertRawCdpPayload(payload) });
   };
 
   close() {
@@ -108,8 +110,7 @@ class AgentHost {
   }
 }
 
-const socketPath = resolveSocketPath();
-const socket = await connect(socketPath);
+const { socket } = await connectAgentSocket(resolveSocketCandidates());
 const host = new AgentHost(socket);
 (globalThis as any).ego = host;
 
@@ -178,32 +179,4 @@ function readStdin() {
 
 function consoleOutput(...values: unknown[]) {
   process.stdout.write(`${values.map(formatCliLogValue).join(" ")}\n`);
-}
-
-function resolveSocketPath() {
-  if (process.env.UFO_BROWSER_SOCKET) return process.env.UFO_BROWSER_SOCKET;
-  if (process.env.X_BROWSER_SOCKET) return process.env.X_BROWSER_SOCKET;
-  for (const marker of [
-    join(process.cwd(), ".ufo-browser-test/socket-path"),
-    join(process.cwd(), ".x-browser-test/socket-path"),
-  ]) {
-    if (existsSync(marker)) return readFileSync(marker, "utf8").trim();
-  }
-  const primary = join(
-    homedir(),
-    "Library/Application Support/UFO-Browser/ufo-browser.sock",
-  );
-  const legacy = join(
-    homedir(),
-    "Library/Application Support/X-Browser/x-browser.sock",
-  );
-  return existsSync(primary) || !existsSync(legacy) ? primary : legacy;
-}
-
-function connect(path: string) {
-  return new Promise<Socket>((resolve, reject) => {
-    const socket = createConnection(path);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
 }

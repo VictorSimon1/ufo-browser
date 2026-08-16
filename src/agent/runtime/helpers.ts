@@ -869,7 +869,9 @@ function createPageFacade() {
         typeof predicateOrOptions === "function"
           ? maybeOptions
           : predicateOrOptions;
-      return downloads.waitForEvent(eventName, options);
+      return downloads.waitForEvent(eventName, options).then((event) =>
+        eventName === "popup" ? createPopupFacade(event) : event,
+      );
     },
     evaluate,
     screenshot: observe.screenshot,
@@ -878,6 +880,8 @@ function createPageFacade() {
     elementCenter: observe.elementCenter,
     drainEvents: observe.drainEvents,
     screencast: {
+      isAvailable: screencast.isScreencastAvailable,
+      availability: screencast.screencastAvailability,
       start: screencast.startScreencast,
       stop: screencast.stopScreencast,
     },
@@ -909,6 +913,142 @@ function createPageFacade() {
     },
   };
   return facade;
+}
+
+function createPopupFacade(popup) {
+  const run = (operation) => withPopupTarget(popup, operation);
+  const popupPageInfo = async () => {
+    const [info, tabs] = await Promise.all([
+      run(() => nav.pageInfo()),
+      nav.listTabs(),
+    ]);
+    const tab = tabs.find((candidate) => candidate.targetId === popup.targetId);
+    return {
+      ...info,
+      url: tab?.url || info.url,
+      title: tab?.title || info.title,
+    };
+  };
+  return {
+    targetId: popup.targetId,
+    openerTargetId: popup.openerTargetId,
+    url: async () => (await popupPageInfo()).url,
+    title: async () => (await popupPageInfo()).title,
+    pageInfo: popupPageInfo,
+    info: popupPageInfo,
+    snapshotText: (options = {}) => run(() => observe.snapshot(options)),
+    snapshot: (options = {}) => run(() => observe.snapshot(options)),
+    snapshotRaw: (options = {}) => run(() => observe.snapshotRaw(options)),
+    captureScreenshot: (options = {}) =>
+      run(() => observe.screenshot(options)),
+    screenshot: (options = {}) => run(() => observe.screenshot(options)),
+    evaluate: (pageFunction, arg = undefined) =>
+      run(() => evaluate(pageFunction, arg)),
+    waitForLoadState: (stateName = "load", options = {}) =>
+      run(() => waits.waitForLoadState(stateName, options)),
+    waitForURL: (matcher, options = {}) =>
+      run(() => waits.waitForURL(matcher, options)),
+    waitForSelector: (selector, options = {}) =>
+      run(() => waits.waitForSelector(selector, options)),
+    locator: (selector) => scopePopupLocator(popup, createLocator(selector)),
+    getByRole: (role, options = {}) =>
+      scopePopupLocator(popup, createLocator(roleSelector(role, options))),
+    getByText: (text, options = {}) =>
+      scopePopupLocator(
+        popup,
+        createLocator(textSelector("text", text, options)),
+      ),
+    getByLabel: (text, options = {}) =>
+      scopePopupLocator(
+        popup,
+        createLocator(textSelector("label", text, options)),
+      ),
+    getByPlaceholder: (text, options = {}) =>
+      scopePopupLocator(
+        popup,
+        createLocator(textSelector("placeholder", text, options)),
+      ),
+    getByAltText: (text, options = {}) =>
+      scopePopupLocator(
+        popup,
+        createLocator(textSelector("alt", text, options)),
+      ),
+    getByTitle: (text, options = {}) =>
+      scopePopupLocator(
+        popup,
+        createLocator(textSelector("title", text, options)),
+      ),
+    bringToFront: () => nav.switchTab(popup.targetId),
+    close: async () => {
+      const closed = await nav.closeTab(popup.targetId);
+      if (popup.openerTargetId) {
+        const tabs = await nav.listTabs();
+        if (tabs.some((tab) => tab.targetId === popup.openerTargetId)) {
+          await nav.switchTab(popup.openerTargetId);
+        }
+      }
+      return closed;
+    },
+  };
+}
+
+const POPUP_LOCATOR_BUILDERS = new Set([
+  "locator",
+  "getByRole",
+  "getByText",
+  "filter",
+  "first",
+  "last",
+  "nth",
+]);
+
+function scopePopupLocator(popup, locatorFacade) {
+  return new Proxy(locatorFacade, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") return value;
+      if (property === "all") {
+        return async (...args) =>
+          (await withPopupTarget(popup, () => value.apply(target, args))).map(
+            (child) => scopePopupLocator(popup, child),
+          );
+      }
+      if (POPUP_LOCATOR_BUILDERS.has(String(property))) {
+        return (...args) =>
+          scopePopupLocator(popup, value.apply(target, args));
+      }
+      return (...args) =>
+        withPopupTarget(popup, () => value.apply(target, args));
+    },
+  });
+}
+
+async function withPopupTarget(popup, operation) {
+  const tabs = await nav.listTabs();
+  if (!tabs.some((tab) => tab.targetId === popup.targetId)) {
+    throw new Error(`popup target has closed: ${popup.targetId}`);
+  }
+  const active = tabs.find((tab) => tab.active);
+  const restoreTargetId =
+    popup.openerTargetId &&
+    tabs.some((tab) => tab.targetId === popup.openerTargetId)
+      ? popup.openerTargetId
+      : active?.targetId !== popup.targetId
+        ? active?.targetId
+        : undefined;
+  if (active?.targetId !== popup.targetId) {
+    await nav.switchTab(popup.targetId);
+  }
+  try {
+    return await operation();
+  } finally {
+    if (restoreTargetId && restoreTargetId !== popup.targetId) {
+      const remaining = await nav.listTabs().catch(() => []);
+      if (remaining.some((tab) => tab.targetId === restoreTargetId)) {
+        await nav.switchTab(restoreTargetId).catch(() => undefined);
+      }
+    }
+  }
 }
 
 function mousePointArgs(x, y, options) {
@@ -956,16 +1096,35 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.on/off/once("console" | "pageerror" | "request" | "requestfailed"), page.waitForEvent("download" | "popup" | "console" | "pageerror" | "request" | "requestfailed"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). Use expect(locator/page) for auto-retrying assertions. waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. All page timeout values are milliseconds; flat Ego-compatible helpers use seconds. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.on/off/once("console" | "pageerror" | "request" | "requestfailed"), page.waitForEvent("download" | "popup" | "console" | "pageerror" | "request" | "requestfailed"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.isAvailable(), page.screencast.availability(), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). Use expect(locator/page) for auto-retrying assertions. waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
     "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), all(), click({ trial?, force? }), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), inputValue(), isVisible(), isEnabled(), isEditable(), getAttribute(name), screenshot(), count(), allInnerTexts(), allTextContents(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Actions retry while elements become visible, enabled, stable, and able to receive events. Failed actions throw ActionabilityError with a call log, interceptor, retry count, recovery suggestions, and final screenshot when available. Snapshot refs automatically recover after navigation, DOM replacement, and a new heredoc within the same App run when a unique stable locator is available. Narrow multiple matches; use all()/first()/nth() only for confirmed legitimate duplicates.",
   browser:
     "browser: tab and storage facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), browser.closeTab(target), browser.storageState(options), and browser.setStorageState(stateOrPath, options). Treat targetId as short-lived: obtain and validate it in the current script before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.bootstrap(options), taskSpaces.use(id), taskSpaces.claim(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.bootstrap(options), taskSpaces.use(id), taskSpaces.claim(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options). For Ego-compatible task-space helpers, timeout and interval are seconds.",
+  timeouts:
+    "Timeout units: flat Ego-compatible helpers such as gotoAndWait(), wait(), and waitForAgentControl() use seconds. Playwright-style page.* methods and page.setDefaultTimeout() use milliseconds. Parameters explicitly ending in Ms are always milliseconds.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
+};
+
+const FLAT_HELP_ALIASES: Record<string, string> = {
+  click: "page.locator",
+  doubleClick: "page.locator",
+  hover: "page.locator",
+  fillInput: "page.locator",
+  storageState: "page.storageState",
+  setStorageState: "page.setStorageState",
+  pageInfo: "page.info",
+  gotoAndWait: "page.goto",
+  captureScreenshot: "page.screenshot",
+  snapshotText: "page.snapshot",
+  snapshotRaw: "page.snapshotRaw",
+  waitForResponse: "page.waitForResponse",
+  waitForRequest: "page.waitForRequest",
+  sendCDPMessage: "cdp",
 };
 
 export function helperContext(extra: any = {}) {
@@ -987,6 +1146,10 @@ export function helperContext(extra: any = {}) {
     help: (...names: string[]) => {
       if (names.length === 1 && FACADE_HELP[names[0]]) {
         return FACADE_HELP[names[0]];
+      }
+      if (names.length === 1 && FLAT_HELP_ALIASES[names[0]]) {
+        const result = helpRuntime(all, FLAT_HELP_ALIASES[names[0]]);
+        return typeof result === "string" ? result : formatHelp(result);
       }
       if (names.length === 0) {
         return Object.values(FACADE_HELP).join("\n\n");

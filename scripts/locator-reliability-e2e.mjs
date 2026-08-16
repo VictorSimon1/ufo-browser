@@ -92,6 +92,9 @@ try {
   assert.equal(audit.stableRef.action.ok, true, JSON.stringify(audit.stableRef));
   assert.equal(audit.stableRef.count, 1, JSON.stringify(audit.stableRef));
   assert.equal(audit.popup.path, "/popup", JSON.stringify(audit.popup));
+  assert.equal(audit.popup.title, "Popup fixture", JSON.stringify(audit.popup));
+  assert.match(audit.popup.snapshot, /Popup ready/, JSON.stringify(audit.popup));
+  assert.equal(audit.popup.evaluate, "Popup fixture", JSON.stringify(audit.popup));
   assert.equal(audit.delayed.clicked, 1, JSON.stringify(audit.delayed));
   assert.deepEqual(audit.actionOptions, {
     trialClicks: 0,
@@ -104,6 +107,9 @@ try {
   assert.match(audit.events.requestFailure, /ERR_|Failed|Aborted|blocked/i);
   assert.ok(audit.events.consoleObserved >= 1);
   assert.ok(audit.events.pageErrorsObserved >= 1);
+  assert.equal(audit.dialog.click.ok, true, JSON.stringify(audit.dialog));
+  assert.ok(audit.dialog.elapsedMs < 500, JSON.stringify(audit.dialog));
+  assert.equal(audit.dialog.message, "ufo-dialog", JSON.stringify(audit.dialog));
   assert.ok(audit.delayed.elapsedMs < 300, JSON.stringify(audit.delayed));
   assert.ok(audit.performance.typeTextP50Ms < 10, JSON.stringify(audit.performance));
   assert.ok(audit.performance.snapshotP50Ms < 2, JSON.stringify(audit.performance));
@@ -287,6 +293,17 @@ const events = {
   failuresObserved: failedRequests.length,
 }
 
+const dialogStarted = performance.now()
+const dialogClick = await resultOf(() => page.locator('#dialog').click({ timeout: 1000 }))
+const dialogElapsedMs = performance.now() - dialogStarted
+const dialogInfo = await pageInfo()
+await cdp('Page.handleJavaScriptDialog', { accept: true })
+const dialog = {
+  click: dialogClick,
+  elapsedMs: dialogElapsedMs,
+  message: dialogInfo.dialog?.message || '',
+}
+
 await page.evaluate(() => {
   localStorage.setItem('ufo-state', 'alpha')
   document.cookie = 'ufo_state_cookie=alpha; path=/'
@@ -459,10 +476,16 @@ const discoveredPopup = popupTabs.find(tab => tab.targetId !== opener.targetId &
 const popupUrl = popupResult.ok
   ? (typeof popupResult.value.url === 'function' ? await popupResult.value.url() : popupResult.value.url)
   : discoveredPopup?.url || ''
+const popupInfo = popupResult.ok ? await popupResult.value.pageInfo() : null
+const popupSnapshot = popupResult.ok ? await popupResult.value.snapshotText() : ''
+const popupEvaluate = popupResult.ok ? await popupResult.value.evaluate(() => document.title) : ''
 const popup = {
   click: popupClick,
   result: popupResult.ok ? { ok: true } : popupResult,
   path: popupUrl ? new URL(popupUrl).pathname : '',
+  title: popupInfo?.title || '',
+  snapshot: popupSnapshot,
+  evaluate: popupEvaluate,
 }
 if (discoveredPopup) await closeTab(discoveredPopup.targetId)
 await switchTab(opener.targetId)
@@ -515,6 +538,7 @@ cliLog('__UFO_LOCATOR_RELIABILITY__' + JSON.stringify({
   actionOptions,
   expectation,
   events,
+  dialog,
   performance: {
     typeTextSamples,
     typeTextP50Ms: median(typeTextSamples),
@@ -601,6 +625,7 @@ function createFixtureServer() {
       <div id="shadow-host"></div>
       <iframe id="fixture-frame" src="/frame"></iframe>
       <button id="popup">Open popup</button>
+      <button id="dialog">Open dialog</button>
       <div id="delayed-root"></div>
       <input id="typing">
       <input id="upload" type="file">
@@ -619,6 +644,7 @@ function createFixtureServer() {
         document.querySelector('#stale').onclick = () => state.stale++;
         document.querySelector('#stable-link').onclick = event => { event.preventDefault(); state.stableLink++; };
         document.querySelector('#popup').onclick = () => window.open('/popup', '_blank');
+        document.querySelector('#dialog').onclick = () => alert('ufo-dialog');
         const shadow = document.querySelector('#shadow-host').attachShadow({ mode: 'open' });
         shadow.innerHTML = '<button id="shadow-button">Shadow action</button>';
         shadow.querySelector('#shadow-button').onclick = () => state.shadow++;

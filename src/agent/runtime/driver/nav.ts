@@ -91,6 +91,40 @@ export async function pageInfo() {
     if (dialog) {
       return { dialog };
     }
+    try {
+      const [metrics, history, rawTabs] = await Promise.all([
+        cdp("Page.getLayoutMetrics"),
+        cdp("Page.getNavigationHistory").catch(() => null),
+        browserEgo().listTabs(),
+      ]);
+      const tabs = assertNoEgoError(rawTabs, "pageInfo").tabs || [];
+      const tab =
+        tabs.find((candidate) => candidate.targetId === state.preferredTargetId) ||
+        tabs.find((candidate) => candidate.targetId === state.sessionTargetId) ||
+        tabs.find((candidate) => candidate.active) ||
+        tabs[0] ||
+        {};
+      const viewport = metrics.cssLayoutViewport || metrics.layoutViewport || {};
+      const content = metrics.cssContentSize || metrics.contentSize || {};
+      const historyEntry = history?.entries?.[history.currentIndex];
+      const info = {
+        url: historyEntry?.url || tab.url || "",
+        title: historyEntry?.title || tab.title || "",
+        w: Number(viewport.clientWidth || 0),
+        h: Number(viewport.clientHeight || 0),
+        sx: Number(viewport.pageX || 0),
+        sy: Number(viewport.pageY || 0),
+        pw: Number(content.width || viewport.clientWidth || 0),
+        ph: Number(content.height || viewport.clientHeight || 0),
+      };
+      if (isPhysicalNewTabUrl(info.url)) {
+        info.url = "x-browser://newtab/";
+      }
+      return info;
+    } catch {
+      // Unusual/internal targets may not expose layout metrics. Preserve the
+      // existing Runtime.evaluate path as a compatibility fallback.
+    }
   }
   const expression = `(() => {
     const root = document.documentElement;

@@ -237,7 +237,8 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 
 ## Caveats
 
-- `wait(...)` and `timeout` values are in **seconds**; only parameters whose names end in `Ms` are milliseconds.
+- Flat Ego-compatible helpers such as `wait(...)`, `gotoAndWait(...)`, and `waitForAgentControl(...)` use **seconds**. Playwright-style `page.*` methods use **milliseconds**. Parameters whose names end in `Ms` are always milliseconds; use `help('timeouts')` when mixing the two surfaces.
+- Before recording, call `await page.screencast.isAvailable()`. `page.screencast.start(...)` requires an executable FFmpeg; `await page.screencast.availability()` explains how it was resolved or why recording is unavailable.
 - `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs only visible content.
 - `@N` refs come from the latest `snapshotText()` result. UFO-Browser automatically refreshes a stale ref after navigation or DOM replacement when it can recover the element through a unique stable locator. If the element disappeared or the locator became ambiguous, the action still fails instead of guessing. Repeated controls are marked with an `ambiguous` hint; use `locator.all()`, `count()` + `nth(index)`, or a narrower parent locator. AX `dialog` is a role, not necessarily a literal `<dialog>` tag; prefer `page.getByRole('dialog')`.
 - `page.waitForSelector(...)` throws `TimeoutError` by default. Pass `{ returnFalseOnTimeout: true }` only when a missing element is an expected branch. The legacy flat `waitForElement(...)` helper keeps its boolean timeout behavior for Ego compatibility.
