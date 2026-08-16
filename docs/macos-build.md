@@ -71,7 +71,7 @@ npm run package:mac
 DMG 生成后，使用明确的 DMG 路径执行安装流程：
 
 ```bash
-npm run install:mac -- release/UFO-Browser-0.1.8-arm64.dmg
+npm run install:mac -- release/UFO-Browser-0.1.9-arm64.dmg
 ```
 
 该流程只替换明确的 `/Applications/UFO-Browser.app`：
