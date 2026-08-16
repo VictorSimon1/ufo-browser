@@ -546,26 +546,33 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
       "const recording = await page.screencast.start({ path: '/tmp/page.webm' })",
   },
   "page.snapshot": {
-    signature: "page.snapshot(options?) => Promise<string>",
+    signature: "page.snapshot(options?) => Promise<string | object>",
     description:
-      "Return a semantic page snapshot with refs and stable locators.",
+      "Return semantic snapshot text or a revision delta with refs and stable locators.",
     params: [
       {
         name: "options",
-        type: "object",
-        description: "Snapshot options such as scope.",
+        type: "{ format?: 'text'|'structured', scope?, interactive?, compact?, depth?, selector?, urls?, boxes?, sinceRevision?, maxResultLength? }",
+        description:
+          "Filter the semantic tree or request a delta from a prior revision. format: 'structured' returns Snapshot V2 metadata instead of text.",
       },
     ],
-    returns: "Promise<string>",
+    returns: "Promise<string | SnapshotV2Result>",
     example: "console.log(await page.snapshot())",
   },
   "page.snapshotRaw": {
     signature: "page.snapshotRaw(options?) => Promise<object>",
-    description: "Return the raw structured snapshot object.",
+    description:
+      "Return the structured Snapshot V2 object, including revision, full/delta kind, refs, changes, and any safe full-fallback reason.",
     params: [
-      { name: "options", type: "object", description: "Snapshot options." },
+      {
+        name: "options",
+        type: "{ scope?, interactive?, compact?, depth?, selector?, urls?, boxes?, sinceRevision?, maxResultLength? }",
+        description: "Snapshot filters and optional prior revision.",
+      },
     ],
-    returns: "Promise<object>",
+    returns:
+      "Promise<{ content: string, refs: object[], revision: string, kind: 'full'|'delta', baseRevision?: string, fallbackReason?: string, changes?: object }>",
     example: "console.log(await page.snapshotRaw())",
   },
   "page.storageState": {

@@ -391,7 +391,7 @@ export class AgentServer {
       );
       this.manager.setAgentConnectionActive(spaceId, false);
       this.leases.release(spaceId, connection.id);
-      if (this.manager.getSpace(spaceId)) {
+      if (this.journal && this.manager.getSpace(spaceId)) {
         this.journal?.append({
           spaceId,
           connectionId: connection.id,

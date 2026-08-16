@@ -31,6 +31,7 @@
     "verify:helper-parity": "npm run build && node scripts/helper-parity-e2e.mjs",
     "verify:agent-trace": "npm run build && node --test dist/tests/agent-trace.test.js && node scripts/agent-trace-e2e.mjs",
     "verify:space-event-journal": "npm run build && node --test dist/tests/space-event-journal.test.js",
+    "verify:snapshot-delta": "npm run build && node --test dist/tests/snapshot.test.js && node scripts/snapshot-delta-e2e.mjs",
     "verify:agent-data-redaction": "npm run build && node --test dist/tests/space-event-journal.test.js dist/tests/agent-trace.test.js",
     "verify:locator-reliability": "npm run build && node scripts/locator-reliability-e2e.mjs",
     "verify:window-lifecycle": "npm run build && node scripts/window-lifecycle-e2e.mjs",

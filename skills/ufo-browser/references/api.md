@@ -5,6 +5,7 @@
 - [Facades](#facades)
 - [Task Space lifecycle](#task-space-lifecycle)
 - [Host bindings](#host-bindings)
+- [Snapshot V2](#snapshot-v2)
 - [Assertions and events](#assertions-and-events)
 - [Actionability and timeout errors](#actionability-and-timeout-errors)
 - [Request routing](#request-routing)
@@ -109,6 +110,51 @@ process can therefore reuse an old `@N` from a previous heredoc. Recovery first
 uses the saved stable locator, then falls back to an exact role/name match, and
 only succeeds for one current element. The history does not survive an App or
 tab restart.
+
+## Snapshot V2
+
+`snapshotText(options)` remains the Ego-compatible text API. `snapshotRaw(options)`
+returns the structured result. The facade form
+`page.snapshot({ format: 'structured', ...options })` is equivalent:
+
+```js
+const initial = await snapshotRaw({
+  interactive: true,
+  compact: true,
+  selector: '#register-form',
+  depth: 6,
+  urls: true,
+  boxes: true,
+})
+
+const next = await snapshotRaw({
+  interactive: true,
+  compact: true,
+  selector: '#register-form',
+  depth: 6,
+  urls: true,
+  boxes: true,
+  sinceRevision: initial.revision,
+})
+```
+
+The result is `{ content, refs, revision, kind, baseRevision?, fallbackReason?,
+changes? }`. A compatible baseline returns `kind: 'delta'` with changed, added,
+and removed lines. Navigation/document replacement, an evicted baseline, an
+oversized change set, or incomplete iframe coverage returns a safe full result
+and an explicit `fallbackReason`; replay code must not treat fallback as a
+delta. Use the exact same filtering options on both calls.
+
+Refs use backend DOM identity, so the same node keeps its ref across full,
+compact, interactive, selector, depth, URL, box, and viewport views. OOPIF refs
+use deterministic collision-safe public ids. `scope: 'only_within_viewport'`
+uses CDP layout snapshots, `selector` uses CDP DOM queries, and `boxes` uses
+bounded `DOM.getBoxModel` calls; none execute arbitrary page JavaScript. The
+revision cache is tab-local, memory-only, bounded to 12 view revisions, and is
+cleared with the WebContents/App lifecycle. Selector roots and box lookups each
+have an explicit 2,000-node limit rather than silently doing unbounded work.
+Sensitive URL credentials/query parameters are redacted, and Snapshot delta
+text applies the same password/OTP/Token pattern redaction as Agent diagnostics.
 
 ## Assertions and events
 

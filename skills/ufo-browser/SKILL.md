@@ -35,7 +35,7 @@ The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and E
 
 - Task spaces: `listTaskSpaces`, `bootstrapTaskSpace`, `useTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `waitForAgentControl`, `completeTaskSpace`
 - Navigation / state: `listTabs`, `openOrReuseTab`, `closeTab`, `gotoAndWait`, `currentTab`, `switchTab`, `gotoUrl`, `pageInfo`, `ensureRealTab`
-- Observation: `snapshotText`, `captureScreenshot`, `drainEvents`
+- Observation: `snapshotText`, `snapshotRaw`, `captureScreenshot`, `drainEvents`
 - Scroll / mouse: `scrollBy`, `scrollToBottomUntil`, `scroll`, `click`, `doubleClick`, `hover`, `dragMouse`
 - Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
 - File: `uploadFile`
@@ -64,6 +64,7 @@ For Playwright-style automation, use the structured `page` facade:
 - Assertions: `await expect(locator).toHaveText(...)`, `toBeVisible`, `toBeEnabled`, `toHaveCount`, `toHaveValue`, and `await expect(page).toHaveURL(...)` retry until success or throw `TimeoutError`. Add `.not` for negated assertions.
 - Events: `page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`, `request`, and `requestfailed`; popup/download waits remain supported.
 - Persistent diagnostics: `await taskSpaces.events.list(spaceId, { after, categories, limit })` reads the App-owned bounded event journal across separate heredoc rounds. `await taskSpaces.trace.list(spaceId, options)` returns Agent action steps, and `await taskSpaces.trace.export(spaceId, { path, format: 'markdown' | 'json' })` writes a redacted local report. Flat aliases `listSpaceEvents`, `listAgentTrace`, and `exportAgentTrace` are also available.
+- Snapshot V2: use `await snapshotRaw({ interactive: true, compact: true, selector, depth, urls, boxes })` when structured metadata is useful. Save its `revision`, then pass `sinceRevision` with the same view options to receive a small `kind: 'delta'` result. Navigation, an expired baseline, an oversized change set, or incomplete iframe coverage safely returns `kind: 'full'` with `fallbackReason`. `snapshotText(options)` accepts the same options but returns only `content` for Ego compatibility.
 - Actionability: locator clicks wait for visibility, enabled state, stability, and an unobstructed hit target. `click({ trial: true })` checks without clicking. Use `force: true` only when intentionally bypassing normal page hit-testing. If an action is intercepted, inspect the reported overlay/dialog before retrying.
 
 
@@ -240,7 +241,7 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 
 - Flat Ego-compatible helpers such as `wait(...)`, `gotoAndWait(...)`, and `waitForAgentControl(...)` use **seconds**. Playwright-style `page.*` methods use **milliseconds**. Parameters whose names end in `Ms` are always milliseconds; use `help('timeouts')` when mixing the two surfaces.
 - Before recording, call `await page.screencast.isAvailable()`. `page.screencast.start(...)` requires an executable FFmpeg; `await page.screencast.availability()` explains how it was resolved or why recording is unavailable.
-- `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs only visible content.
+- `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs visible layout nodes. `interactive` keeps actionable and structural nodes, `compact` removes low-value containers, `selector` scopes through CDP without page JavaScript, `depth` bounds emitted nesting, and `boxes` performs explicit bounded layout lookups.
 - `@N` refs come from the latest `snapshotText()` result. UFO-Browser automatically refreshes a stale ref after navigation or DOM replacement when it can recover the element through a unique stable locator. If the element disappeared or the locator became ambiguous, the action still fails instead of guessing. Repeated controls are marked with an `ambiguous` hint; use `locator.all()`, `count()` + `nth(index)`, or a narrower parent locator. AX `dialog` is a role, not necessarily a literal `<dialog>` tag; prefer `page.getByRole('dialog')`.
 - `page.waitForSelector(...)` throws `TimeoutError` by default. Pass `{ returnFalseOnTimeout: true }` only when a missing element is an expected branch. The legacy flat `waitForElement(...)` helper keeps its boolean timeout behavior for Ego compatibility.
 - `js()` returns the evaluated result, not a JSON string — don't wrap it with `JSON.parse(...)`.

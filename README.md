@@ -97,7 +97,7 @@ Common helpers include:
 
 - Task Spaces: `bootstrapTaskSpace`, `useTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `completeTaskSpace`
 - Navigation: `openOrReuseTab`, `gotoAndWait`, `listTabs`, `switchTab`, `closeTab`
-- Observation: `snapshotText`, `pageInfo`, `captureScreenshot`, `drainEvents`
+- Observation: `snapshotText`, `snapshotRaw`, `pageInfo`, `captureScreenshot`, `drainEvents`; Snapshot V2 supports compact/interactive/selector/depth views and revision deltas
 - Input: `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `typeText`, `pressKey`, `scroll`
 - Browser access: `js`, `cdp`, `browserFetch`, `serverFetch`
 - Diagnostics: `listSpaceEvents`, `listAgentTrace`, `exportAgentTrace`, `taskSpaces.events.list`, `taskSpaces.trace.list/export`

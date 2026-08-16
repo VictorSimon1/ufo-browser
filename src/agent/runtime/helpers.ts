@@ -793,6 +793,19 @@ function roleNameMatcher(value) {
   return value;
 }
 
+function pageSnapshot(options: any = {}) {
+  const { format, ...snapshotOptions } = options ?? {};
+  if (format === undefined || format === "text") {
+    return observe.snapshot(snapshotOptions);
+  }
+  if (format === "structured") {
+    return observe.snapshotRaw(snapshotOptions);
+  }
+  throw new TypeError(
+    "EGO_INVALID_ARGUMENT: page.snapshot format must be 'text' or 'structured'",
+  );
+}
+
 function createPageFacade() {
   const facade: any = {
     setDefaultTimeout: (timeout) => {
@@ -875,7 +888,7 @@ function createPageFacade() {
     },
     evaluate,
     screenshot: observe.screenshot,
-    snapshot: observe.snapshot,
+    snapshot: pageSnapshot,
     snapshotRaw: observe.snapshotRaw,
     elementCenter: observe.elementCenter,
     drainEvents: observe.drainEvents,
@@ -937,7 +950,7 @@ function createPopupFacade(popup) {
     pageInfo: popupPageInfo,
     info: popupPageInfo,
     snapshotText: (options = {}) => run(() => observe.snapshot(options)),
-    snapshot: (options = {}) => run(() => observe.snapshot(options)),
+    snapshot: (options = {}) => run(() => pageSnapshot(options)),
     snapshotRaw: (options = {}) => run(() => observe.snapshotRaw(options)),
     captureScreenshot: (options = {}) =>
       run(() => observe.screenshot(options)),
@@ -1130,9 +1143,9 @@ const FLAT_HELP: Record<string, string> = {
   captureScreenshot:
     "captureScreenshot(pathOrOptions?) => Promise<string>; capture the current page and return the saved path. Accepts a path string or screenshot options.",
   snapshotText:
-    "snapshotText(options?) => Promise<string>; return the semantic page tree with reusable @refs and loc= selectors.",
+    "snapshotText(options?) => Promise<string>; return a semantic page tree or revision delta with reusable @refs and loc= selectors. Options: scope, interactive, compact, depth, selector, urls, boxes, sinceRevision, maxResultLength.",
   snapshotRaw:
-    "snapshotRaw(options?) => Promise<{ content, refs }>; return the structured semantic snapshot and ref metadata.",
+    "snapshotRaw(options?) => Promise<{ content, refs, revision, kind, baseRevision?, fallbackReason?, changes? }>; return structured Snapshot V2 metadata. kind is full or delta; invalid/missing baselines and large or incomplete frame changes fall back to full with fallbackReason.",
   waitForResponse:
     "waitForResponse(urlOrPredicate, options?) => Promise<Response>; alias guidance for page.waitForResponse. The Response facade is returned when headers arrive; text(), json(), and body() await the buffered body on demand. page-style timeout is milliseconds.",
   waitForRequest:

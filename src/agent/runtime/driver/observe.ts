@@ -28,6 +28,14 @@ type SnapshotOptions = {
   scope?: "only_within_viewport" | "full_page";
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
+  maxResultLength?: number;
+  interactive?: boolean;
+  compact?: boolean;
+  depth?: number;
+  selector?: string;
+  urls?: boolean;
+  boxes?: boolean;
+  sinceRevision?: string;
 };
 
 type ScreenshotClip = {
@@ -70,11 +78,12 @@ registerSnapshotForRefRefresh(() => snapshotRaw());
 /**
  * Return snapshot content with agent-friendly defaults. The text surface most
  * agents want; use snapshotRaw when you need the structured { content, refs }.
- * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
+ * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean, interactive?: boolean, compact?: boolean, depth?: number, selector?: string, urls?: boolean, boxes?: boolean, sinceRevision?: string}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshot(options: SnapshotOptions = {}) {
   const result = await snapshotRaw({
+    ...options,
     scope: options.scope ?? "full_page",
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,

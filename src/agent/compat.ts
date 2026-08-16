@@ -379,14 +379,14 @@ const LEGACY_HELP: Record<string, string> = {
   openOrReuseTab:
     "openOrReuseTab(url, { wait?, timeout?, settle?, match? }) => Promise<Tab>; timeout and settle are seconds",
   snapshotText:
-    "snapshotText(options?) => Promise<string>; returns the semantic page tree with @refs and locators",
+    "snapshotText(options?) => Promise<string>; returns the semantic page tree or revision delta. Options: scope, interactive, compact, depth, selector, urls, boxes, sinceRevision, maxResultLength",
   fillInput:
     "fillInput(selectorOrRef, value, options?) => Promise<void>",
   pressKey: "pressKey(keyCombo) => Promise<void>",
   captureScreenshot:
     "captureScreenshot(pathOrOptions?) => Promise<string>; ego-compatible path strings and { path?, fullPage?, clip? } are accepted",
   snapshotRaw:
-    "snapshotRaw(options?) => Promise<{ content, refs }>; structured semantic snapshot",
+    "snapshotRaw(options?) => Promise<{ content, refs, revision, kind, baseRevision?, fallbackReason?, changes? }>; structured semantic snapshot using the Snapshot V2 result contract",
   listSpaceEvents:
     "listSpaceEvents(spaceId, { after?, limit?, categories? }) => Promise<{ events, nextSequence, cursorExpired }>",
   listAgentTrace:
