@@ -108,6 +108,14 @@ export function createEgoCompatibilityContext(
   const browser = modern.browser ?? {};
   const taskSpaces = modern.taskSpaces ?? {};
   const site = modern.site ?? {};
+  const listSpaceEvents = (spaceId: number, options: Record<string, any> = {}) =>
+    call(host.listSpaceEvents, spaceId, options);
+  const listAgentTrace = (spaceId: number, options: Record<string, any> = {}) =>
+    call(host.listAgentTrace, spaceId, options);
+  const exportAgentTrace = (
+    spaceId: number,
+    options: { path: string; format?: "markdown" | "json" },
+  ) => call(host.exportAgentTrace, spaceId, options);
   const egoGlobals = Object.fromEntries(
     EGO_GLOBAL_HELPER_NAMES.flatMap((name) =>
       typeof harness[name] === "function" ? [[name, harness[name]]] : [],
@@ -210,6 +218,11 @@ export function createEgoCompatibilityContext(
   return {
     // Keep the current facade API available.
     ...modern,
+    taskSpaces: {
+      ...taskSpaces,
+      events: { list: listSpaceEvents },
+      trace: { list: listAgentTrace, export: exportAgentTrace },
+    },
     // Preserve Ego's complete raw global helper contract. The documented
     // aliases below intentionally override a few names where UFO-Browser must
     // convert Skill timeout values from seconds to milliseconds.
@@ -222,6 +235,9 @@ export function createEgoCompatibilityContext(
     createTab,
     getBrowserVersion: (...args: any[]) => call(host.getBrowserVersion, ...args),
     listProfiles: (...args: any[]) => call(host.listProfiles, ...args),
+    listSpaceEvents,
+    listAgentTrace,
+    exportAgentTrace,
     markTaskSpaceError: (...args: any[]) => call(host.markTaskSpaceError, ...args),
     sendCDPMessage: (...args: any[]) => call(host.sendCDPMessage, ...args),
     setAgentTaskState: (...args: any[]) => call(host.setAgentTaskState, ...args),
@@ -371,6 +387,12 @@ const LEGACY_HELP: Record<string, string> = {
     "captureScreenshot(pathOrOptions?) => Promise<string>; ego-compatible path strings and { path?, fullPage?, clip? } are accepted",
   snapshotRaw:
     "snapshotRaw(options?) => Promise<{ content, refs }>; structured semantic snapshot",
+  listSpaceEvents:
+    "listSpaceEvents(spaceId, { after?, limit?, categories? }) => Promise<{ events, nextSequence, cursorExpired }>",
+  listAgentTrace:
+    "listAgentTrace(spaceId, { after?, limit? }) => Promise<{ events, nextSequence, cursorExpired }>",
+  exportAgentTrace:
+    "exportAgentTrace(spaceId, { path, format? }) => Promise<{ path, format, events }>",
   elementCenter:
     "elementCenter(selectorOrRef) => Promise<{ x, y }>",
   js: "js(expression) => Promise<any>",

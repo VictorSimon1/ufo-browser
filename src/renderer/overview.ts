@@ -4,6 +4,18 @@ const count = document.querySelector<HTMLElement>("#space-count")!;
 const cards = new Map<number, HTMLElement>();
 const previewStates = new Map<number, PreviewPaintState>();
 const create = createCard();
+const traceDialogBackdrop = document.querySelector<HTMLElement>(
+  "#trace-dialog-backdrop",
+)!;
+const traceDialogContent = document.querySelector<HTMLElement>(
+  "#trace-dialog-content",
+)!;
+const traceDialogTitle = document.querySelector<HTMLElement>(
+  "#trace-dialog-title",
+)!;
+const traceDialogSubtitle = document.querySelector<HTMLElement>(
+  "#trace-dialog-subtitle",
+)!;
 const profileDialogBackdrop = document.querySelector<HTMLElement>(
   "#profile-dialog-backdrop",
 )!;
@@ -65,6 +77,12 @@ document.querySelector("#profile-button")!.addEventListener("click", () => {
 document.querySelector("#profile-dialog-close")!.addEventListener("click", () =>
   closeProfileDialog(),
 );
+document.querySelector("#trace-dialog-close")!.addEventListener("click", () =>
+  closeTraceDialog(),
+);
+traceDialogBackdrop.addEventListener("pointerdown", (event) => {
+  if (event.target === traceDialogBackdrop) closeTraceDialog();
+});
 profileDialogBackdrop.addEventListener("pointerdown", (event) => {
   if (event.target === profileDialogBackdrop) closeProfileDialog();
 });
@@ -88,6 +106,10 @@ document.addEventListener("focusin", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (!traceDialogBackdrop.hidden) {
+    closeTraceDialog();
+    return;
+  }
   if (!profileDialogBackdrop.hidden) {
     closeProfileDialog();
     return;
@@ -282,7 +304,17 @@ function spaceCard(spaceId: number) {
     }
   });
 
-  menuPopover.append(rename, close);
+  const trace = document.createElement("button");
+  trace.className = "card-menu-item";
+  trace.setAttribute("role", "menuitem");
+  trace.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4.5h12v11H4z"></path><path d="M7 8h6M7 11h4"></path></svg><span>Agent 执行记录</span>`;
+  trace.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeCardMenu();
+    void openTraceDialog(Number(card.dataset.spaceId));
+  });
+
+  menuPopover.append(rename, trace, close);
   menu.append(menuTrigger, menuPopover);
   menuTrigger.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -340,6 +372,93 @@ function spaceCard(spaceId: number) {
     openCardMenu(card);
   });
   return card;
+}
+
+async function openTraceDialog(spaceId: number) {
+  const space = spaces.find((candidate) => Number(candidate.id) === spaceId);
+  traceDialogBackdrop.hidden = false;
+  document.body.classList.add("dialog-open");
+  traceDialogTitle.textContent = space?.name
+    ? `${space.name} · Agent 执行记录`
+    : "Agent 执行记录";
+  traceDialogSubtitle.textContent = "动作、导航、网络错误与页面生命周期均保存在本机";
+  traceDialogContent.innerHTML =
+    '<div class="dialog-loading"><i></i><span>正在读取执行记录</span></div>';
+  try {
+    const result = await api.overview.events(spaceId, { limit: 200 });
+    renderTraceEvents(Array.isArray(result?.events) ? result.events : []);
+  } catch {
+    traceDialogContent.innerHTML =
+      '<div class="trace-empty"><strong>无法读取执行记录</strong><span>Space 可能已经关闭</span></div>';
+  }
+  document.querySelector<HTMLButtonElement>("#trace-dialog-close")?.focus();
+}
+
+function closeTraceDialog() {
+  if (traceDialogBackdrop.hidden) return;
+  traceDialogBackdrop.hidden = true;
+  document.body.classList.remove("dialog-open");
+  traceDialogContent.replaceChildren();
+}
+
+function renderTraceEvents(events: any[]) {
+  traceDialogContent.replaceChildren();
+  if (!events.length) {
+    traceDialogContent.innerHTML =
+      '<div class="trace-empty"><strong>还没有 Agent 记录</strong><span>Agent 开始操作后，这里会显示本地时间线</span></div>';
+    return;
+  }
+  const list = document.createElement("ol");
+  list.className = "trace-event-list";
+  for (const event of events.slice().reverse()) {
+    const row = document.createElement("li");
+    row.className = "trace-event-row";
+    row.dataset.category = String(event.category || "trace");
+    const marker = document.createElement("i");
+    const copy = document.createElement("div");
+    const heading = document.createElement("span");
+    const title = document.createElement("strong");
+    const time = document.createElement("time");
+    title.textContent = traceEventTitle(event);
+    time.textContent = new Date(Number(event.at) || Date.now()).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    heading.append(title, time);
+    const detail = document.createElement("small");
+    detail.textContent = traceEventDetail(event);
+    copy.append(heading, detail);
+    row.append(marker, copy);
+    list.append(row);
+  }
+  traceDialogContent.append(list);
+}
+
+function traceEventTitle(event: any) {
+  const data = event?.data || {};
+  if (event.type === "action.started") return `开始 ${data.action || "Agent 操作"}`;
+  if (event.type === "action.finished") {
+    return `${data.status === "failed" ? "失败" : "完成"} ${data.action || "Agent 操作"}`;
+  }
+  if (event.type === "Network.loadingFailed") return "网络请求失败";
+  if (event.type === "Network.responseReceived") return `HTTP ${data.status || "错误"}`;
+  if (event.type === "Runtime.exceptionThrown") return "页面脚本异常";
+  if (event.type === "renderer.destroyed") return "Renderer 已销毁";
+  if (event.type === "space.closing") return "Space 正在关闭";
+  return String(event.type || event.category || "Agent 事件");
+}
+
+function traceEventDetail(event: any) {
+  const data = event?.data || {};
+  const parts = [
+    data.target?.target,
+    data.url,
+    data.errorText,
+    data.error,
+    Number.isFinite(Number(data.durationMs)) ? `${Math.round(Number(data.durationMs))} ms` : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || String(event.category || "trace");
 }
 
 function toggleCardMenu(card: HTMLElement) {

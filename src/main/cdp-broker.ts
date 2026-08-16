@@ -3,6 +3,10 @@ import type { WebContents } from "electron";
 import { DownloadRegistry } from "./download-registry.js";
 import { TaskSpaceManager } from "./manager.js";
 import { SpaceLeaseRegistry } from "./space-lease.js";
+import {
+  SpaceEventJournal,
+  type SpaceEventCategory,
+} from "./space-event-journal.js";
 
 type SessionRoute = {
   connectionId: string;
@@ -35,6 +39,7 @@ export class CdpBroker {
   constructor(
     private readonly manager: TaskSpaceManager,
     private readonly leases: SpaceLeaseRegistry,
+    private readonly journal?: SpaceEventJournal,
   ) {
     this.downloads = new DownloadRegistry({
       locateSource: (webContentsId) => {
@@ -88,6 +93,15 @@ export class CdpBroker {
     this.leases.assert(spaceId, connectionId, generation);
     const message = JSON.parse(payload);
     const { id, method, params = {}, sessionId } = message;
+    const startedAt = Date.now();
+    this.recordCdpCommand(
+      connectionId,
+      spaceId,
+      sessionId,
+      method,
+      "started",
+      params,
+    );
     try {
       const result = await this.dispatch(
         connectionId,
@@ -97,8 +111,28 @@ export class CdpBroker {
         params,
         sessionId,
       );
+      this.recordCdpCommand(
+        connectionId,
+        spaceId,
+        sessionId,
+        method,
+        "finished",
+        { status: "success", durationMs: Date.now() - startedAt },
+      );
       this.emit(connectionId, JSON.stringify({ id, result }));
     } catch (error: any) {
+      this.recordCdpCommand(
+        connectionId,
+        spaceId,
+        sessionId,
+        method,
+        "finished",
+        {
+          status: "failed",
+          durationMs: Date.now() - startedAt,
+          error: error?.message || String(error),
+        },
+      );
       this.emit(
         connectionId,
         JSON.stringify({
@@ -303,6 +337,7 @@ export class CdpBroker {
     contents.debugger.on(
       "message",
       (_event, method, params, upstreamSessionId?: string) => {
+        this.recordDebuggerEvent(targetId, method, params);
         const eventSessionId = upstreamSessionId || undefined;
         for (const [sessionId, route] of this.sessions) {
           if (route.ownerTargetId !== targetId) continue;
@@ -315,6 +350,15 @@ export class CdpBroker {
       },
     );
     contents.once("destroyed", () => {
+      const space = this.manager.findSpaceByTargetId(targetId);
+      if (space) {
+        this.journal?.append({
+          spaceId: space.id,
+          tabId: targetId,
+          category: "lifecycle",
+          type: "renderer.destroyed",
+        });
+      }
       this.boundContents.delete(contents.id);
       this.focusEmulatedTargets.delete(targetId);
       const focusTimer = this.focusEmulationTimers.get(targetId);
@@ -487,6 +531,14 @@ export class CdpBroker {
     method: string;
     params: Record<string, unknown>;
   }) {
+    this.journal?.append({
+      spaceId: event.spaceId,
+      connectionId: event.connectionId,
+      tabId: event.targetId,
+      category: "download",
+      type: event.method,
+      data: event.params,
+    });
     const matching = [...this.sessions.entries()].filter(
       ([, route]) =>
         route.connectionId === event.connectionId &&
@@ -506,6 +558,164 @@ export class CdpBroker {
       );
     }
   }
+
+  private recordCdpCommand(
+    connectionId: string,
+    spaceId: number,
+    sessionId: string | undefined,
+    method: string,
+    phase: "started" | "finished",
+    params: Record<string, unknown>,
+  ) {
+    if (!this.journal || !traceableCdpCommand(method)) return;
+    const route = sessionId ? this.sessions.get(sessionId) : undefined;
+    const tabId = route?.ownerTargetId ?? this.manager.getSpace(spaceId)?.activeTabId;
+    this.journal.append({
+      spaceId,
+      connectionId,
+      tabId,
+      category: "trace",
+      type: `cdp.command.${phase}`,
+      data: {
+        method,
+        ...summarizeCdpParams(method, params),
+      },
+    });
+  }
+
+  private recordDebuggerEvent(
+    targetId: string,
+    method: string,
+    params: Record<string, unknown>,
+  ) {
+    if (!this.journal) return;
+    const descriptor = diagnosticEvent(method, params);
+    if (!descriptor) return;
+    const space = this.manager.findSpaceByTargetId(targetId);
+    if (!space) return;
+    this.journal.append({
+      spaceId: space.id,
+      tabId: targetId,
+      category: descriptor.category,
+      type: method,
+      data: descriptor.data,
+    });
+  }
+}
+
+function traceableCdpCommand(method: string) {
+  return (
+    method.startsWith("Input.") ||
+    method === "Page.navigate" ||
+    method === "Page.reload" ||
+    method === "Page.handleJavaScriptDialog" ||
+    method === "Page.captureScreenshot" ||
+    method === "Runtime.evaluate" ||
+    method.startsWith("DOM.")
+  );
+}
+
+function summarizeCdpParams(
+  method: string,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (method === "Runtime.evaluate") {
+    return { expressionLength: String(params.expression ?? "").length };
+  }
+  if (method === "Input.insertText") return { text: "[redacted]" };
+  if (method.startsWith("Input.")) {
+    return {
+      type: params.type,
+      key: params.key,
+      code: params.code,
+      x: params.x,
+      y: params.y,
+      button: params.button,
+      clickCount: params.clickCount,
+      deltaX: params.deltaX,
+      deltaY: params.deltaY,
+    };
+  }
+  if (method === "Page.navigate") return { url: params.url };
+  if (method === "Page.handleJavaScriptDialog") {
+    return { accept: params.accept === true, promptText: "[redacted]" };
+  }
+  return {};
+}
+
+function diagnosticEvent(
+  method: string,
+  params: Record<string, any>,
+): { category: SpaceEventCategory; data?: Record<string, unknown> } | undefined {
+  if (method === "Page.frameNavigated") {
+    if (params.frame?.parentId) return undefined;
+    return {
+      category: "navigation",
+      data: { url: params.frame?.url, frameId: params.frame?.id },
+    };
+  }
+  if (method === "Page.frameStoppedLoading") {
+    return { category: "navigation", data: { frameId: params.frameId } };
+  }
+  if (method.startsWith("Page.javascriptDialog")) {
+    return {
+      category: "dialog",
+      data: {
+        type: params.type,
+        message: params.message,
+        result: params.result,
+        userInput: "[redacted]",
+      },
+    };
+  }
+  if (method === "Network.loadingFailed") {
+    return {
+      category: "network",
+      data: {
+        requestId: params.requestId,
+        errorText: params.errorText,
+        canceled: params.canceled,
+        blockedReason: params.blockedReason,
+      },
+    };
+  }
+  if (method === "Network.responseReceived" && Number(params.response?.status) >= 400) {
+    return {
+      category: "network",
+      data: {
+        requestId: params.requestId,
+        url: params.response?.url,
+        status: params.response?.status,
+        statusText: params.response?.statusText,
+        mimeType: params.response?.mimeType,
+      },
+    };
+  }
+  if (method === "Runtime.exceptionThrown") {
+    return {
+      category: "console",
+      data: {
+        text: params.exceptionDetails?.text,
+        description: params.exceptionDetails?.exception?.description,
+        lineNumber: params.exceptionDetails?.lineNumber,
+        columnNumber: params.exceptionDetails?.columnNumber,
+        url: params.exceptionDetails?.url,
+      },
+    };
+  }
+  if (method === "Runtime.consoleAPICalled" && params.type === "error") {
+    return {
+      category: "console",
+      data: {
+        level: params.type,
+        text: (params.args ?? []).map((item: any) => item.value ?? item.description).join(" "),
+      },
+    };
+  }
+  if (method === "Inspector.targetCrashed") {
+    return { category: "lifecycle", data: { status: params.status } };
+  }
+  return undefined;
 }
 
 type TargetInfo = {

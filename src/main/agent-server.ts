@@ -6,6 +6,11 @@ import { TaskSpaceManager } from "./manager.js";
 import { SpaceLeaseRegistry, type SpaceLease } from "./space-lease.js";
 import { SnapshotService } from "./snapshot.js";
 import { CdpBroker } from "./cdp-broker.js";
+import { AgentTraceService, type AgentTraceSignal } from "./agent-trace.js";
+import {
+  SpaceEventJournal,
+  type SpaceEventCategory,
+} from "./space-event-journal.js";
 
 type Connection = {
   id: string;
@@ -28,6 +33,8 @@ export class AgentServer {
     private readonly snapshotService: SnapshotService,
     private readonly broker: CdpBroker,
     private readonly browserVersion = "0.1.6",
+    private readonly journal?: SpaceEventJournal,
+    private readonly trace?: AgentTraceService,
   ) {}
 
   async listen() {
@@ -110,6 +117,19 @@ export class AgentServer {
   }
 
   private async handle(connection: Connection, message: any) {
+    if (message.type === "trace-event") {
+      try {
+        const selected = this.assertAgentControl(connection);
+        this.trace?.receive(
+          connection.id,
+          selected.spaceId,
+          normalizeTraceSignal(message.payload),
+        );
+      } catch {
+        // Trace is diagnostic and must never delay or fail the real action.
+      }
+      return;
+    }
     if (message.type === "rpc") {
       try {
         const result = await this.rpc(connection, message.method, message.args ?? []);
@@ -234,6 +254,32 @@ export class AgentServer {
           })),
         };
       }
+      case "listSpaceEvents": {
+        const { spaceId } = this.assertAgentControl(connection);
+        assertRequestedSpace(spaceId, args[0], "listSpaceEvents");
+        return this.journal?.list(spaceId, eventListOptions(args[1])) ?? {
+          events: [],
+          nextSequence: 0,
+          cursorExpired: false,
+          latestSequence: 0,
+        };
+      }
+      case "listAgentTrace": {
+        const { spaceId } = this.assertAgentControl(connection);
+        assertRequestedSpace(spaceId, args[0], "listAgentTrace");
+        return this.trace?.list(spaceId, eventListOptions(args[1])) ?? {
+          events: [],
+          nextSequence: 0,
+          cursorExpired: false,
+          latestSequence: 0,
+        };
+      }
+      case "exportAgentTrace": {
+        const { spaceId } = this.assertAgentControl(connection);
+        assertRequestedSpace(spaceId, args[0], "exportAgentTrace");
+        if (!this.trace) throw new Error("EGO_OPERATION_FAILED: trace unavailable");
+        return this.trace.export(spaceId, traceExportOptions(args[1]));
+      }
       case "snapshot": {
         const { spaceId } = this.assertAgentControl(connection);
         return this.snapshotService.snapshot(spaceId, args[0]);
@@ -311,6 +357,14 @@ export class AgentServer {
     const lease = this.leases.acquire(spaceId, connection.id);
     connection.lease = lease;
     this.manager.setAgentConnectionActive(spaceId, true);
+    this.journal?.append({
+      spaceId,
+      connectionId: connection.id,
+      tabId: space.activeTabId,
+      category: "lifecycle",
+      type: "agent.connected",
+      data: { generation: lease.generation },
+    });
   }
 
   private assertSelected(connection: Connection) {
@@ -337,12 +391,21 @@ export class AgentServer {
       );
       this.manager.setAgentConnectionActive(spaceId, false);
       this.leases.release(spaceId, connection.id);
+      if (this.manager.getSpace(spaceId)) {
+        this.journal?.append({
+          spaceId,
+          connectionId: connection.id,
+          category: "lifecycle",
+          type: "agent.released",
+        });
+      }
     }
     connection.lease = undefined;
   }
 
   private disconnect(connection: Connection) {
     if (!this.connections.delete(connection.id)) return;
+    this.trace?.disconnect(connection.id);
     this.release(connection);
     this.leases.releaseConnection(connection.id);
     this.broker.removeConnection(connection.id);
@@ -353,6 +416,89 @@ export class AgentServer {
       connection.socket.write(`${JSON.stringify(message)}\n`);
     }
   }
+}
+
+function normalizeTraceSignal(value: unknown): AgentTraceSignal {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("invalid trace signal");
+  }
+  const signal = value as Record<string, unknown>;
+  if (signal.phase !== "started" && signal.phase !== "finished") {
+    throw new TypeError("invalid trace phase");
+  }
+  return {
+    phase: signal.phase,
+    stepId: typeof signal.stepId === "string" ? signal.stepId : undefined,
+    action: typeof signal.action === "string" ? signal.action : undefined,
+    target: signal.target,
+    status:
+      signal.status === "failed" || signal.status === "success"
+        ? signal.status
+        : undefined,
+    durationMs: Number(signal.durationMs),
+    error: signal.error,
+  };
+}
+
+function assertRequestedSpace(
+  selectedSpaceId: number,
+  value: unknown,
+  operation: string,
+) {
+  const requested = strictSpaceId(value, operation);
+  if (requested !== selectedSpaceId) {
+    throw new Error("EGO_TASK_SPACE_UNAVAILABLE");
+  }
+}
+
+function eventListOptions(value: unknown) {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("event list options must be an object");
+  }
+  const input = value as Record<string, unknown>;
+  const categories = Array.isArray(input.categories)
+    ? input.categories
+        .filter((item): item is string => typeof item === "string")
+        .filter((item): item is SpaceEventCategory =>
+          [
+            "action",
+            "navigation",
+            "network",
+            "console",
+            "dialog",
+            "download",
+            "lifecycle",
+            "trace",
+          ].includes(item),
+        )
+    : undefined;
+  return {
+    after: Number(input.after),
+    limit: Number(input.limit),
+    categories,
+  };
+}
+
+function traceExportOptions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("trace export expects { path, format? }");
+  }
+  const input = value as Record<string, unknown>;
+  if (typeof input.path !== "string" || !input.path.trim()) {
+    throw new TypeError("trace export path must be a non-empty string");
+  }
+  if (
+    input.format !== undefined &&
+    input.format !== "markdown" &&
+    input.format !== "json"
+  ) {
+    throw new TypeError("trace export format must be markdown or json");
+  }
+  return {
+    path: input.path,
+    format: input.format as "markdown" | "json" | undefined,
+  };
 }
 
 function bootstrapTaskSpaceOptions(value: unknown) {

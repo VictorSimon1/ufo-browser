@@ -22,6 +22,7 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **Bounded background rendering** — hidden Agent pages use a shared compositor surface only when required, then park again to reduce GPU usage.
 - **Live Overview** — persistent 3:2 Space previews update with page activity while using adaptive capture cadence and caching.
 - **Ego-compatible Agent API** — the JavaScript helper surface supports the familiar Task Space, snapshot, input, wait, fetch, screenshot, and CDP workflows.
+- **Local Agent timeline** — every Space keeps a bounded, redacted action and diagnostic event journal that survives CLI reconnects without continuously recording video or waking hidden pages.
 
 ## Architecture
 
@@ -99,6 +100,7 @@ Common helpers include:
 - Observation: `snapshotText`, `pageInfo`, `captureScreenshot`, `drainEvents`
 - Input: `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `typeText`, `pressKey`, `scroll`
 - Browser access: `js`, `cdp`, `browserFetch`, `serverFetch`
+- Diagnostics: `listSpaceEvents`, `listAgentTrace`, `exportAgentTrace`, `taskSpaces.events.list`, `taskSpaces.trace.list/export`
 
 See [skills/ufo-browser/SKILL.md](skills/ufo-browser/SKILL.md) for the complete workflow and [skills/ufo-browser/references/cli-parity.md](skills/ufo-browser/references/cli-parity.md) for the Ego compatibility matrix.
 

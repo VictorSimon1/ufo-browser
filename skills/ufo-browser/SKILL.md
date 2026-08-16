@@ -63,6 +63,7 @@ For Playwright-style automation, use the structured `page` facade:
 - Performance traces: `page.tracing.start(...)` and `page.tracing.stop({ path })` write Chrome Trace/Perfetto-compatible JSON.
 - Assertions: `await expect(locator).toHaveText(...)`, `toBeVisible`, `toBeEnabled`, `toHaveCount`, `toHaveValue`, and `await expect(page).toHaveURL(...)` retry until success or throw `TimeoutError`. Add `.not` for negated assertions.
 - Events: `page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`, `request`, and `requestfailed`; popup/download waits remain supported.
+- Persistent diagnostics: `await taskSpaces.events.list(spaceId, { after, categories, limit })` reads the App-owned bounded event journal across separate heredoc rounds. `await taskSpaces.trace.list(spaceId, options)` returns Agent action steps, and `await taskSpaces.trace.export(spaceId, { path, format: 'markdown' | 'json' })` writes a redacted local report. Flat aliases `listSpaceEvents`, `listAgentTrace`, and `exportAgentTrace` are also available.
 - Actionability: locator clicks wait for visibility, enabled state, stability, and an unobstructed hit target. `click({ trial: true })` checks without clicking. Use `force: true` only when intentionally bypassing normal page hit-testing. If an action is intercepted, inspect the reported overlay/dialog before retrying.
 
 
@@ -248,3 +249,4 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 - If `await pageInfo()` reports `w: 0` or `h: 0`, do not continue coordinate actions or screenshots until the viewport is fixed. Try switching to the real tab, reloading, or using CDP viewport metrics, then verify with `await pageInfo()` and `await captureScreenshot()`.
 - Code in the heredoc body runs in Node.js; code inside `js(...)` runs in the browser page. Navigation, waits, and `cliLog(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `js(...)`.
 - Always call `completeTaskSpace(name, { keep })` when the task is done — do not leave the space hanging. Default to `{ keep: false }`; use `{ keep: true }` only for the concrete live-page cases described in Task spaces.
+- When diagnosing a failure that happened in a prior CLI round, prefer `taskSpaces.events.list(spaceId, { after })` over repeating the action. Event records are bounded and redact credentials; they intentionally do not contain response bodies, passwords, Cookies, Authorization headers, or OTP values.

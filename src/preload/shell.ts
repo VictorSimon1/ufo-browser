@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld("xBrowser", {
   },
   overview: {
     list: () => ipcRenderer.invoke("x-browser:overview:list"),
+    trace: (spaceId: number, options?: unknown) =>
+      ipcRenderer.invoke("x-browser:overview:trace", spaceId, options),
+    events: (spaceId: number, options?: unknown) =>
+      ipcRenderer.invoke("x-browser:overview:events", spaceId, options),
     create: (name?: string, profileId?: string) =>
       ipcRenderer.invoke("x-browser:overview:create", name, profileId),
     open: (

@@ -18,6 +18,8 @@ import {
   type NativeBrowserChromeEvent,
 } from "./main/native-browser-chrome.js";
 import { SnapshotService } from "./main/snapshot.js";
+import { AgentTraceService } from "./main/agent-trace.js";
+import { SpaceEventJournal } from "./main/space-event-journal.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
 import {
@@ -443,7 +445,12 @@ async function start() {
 
   const leases = new SpaceLeaseRegistry();
   const snapshot = new SnapshotService(manager);
-  const broker = new CdpBroker(manager, leases);
+  const eventJournal = new SpaceEventJournal({
+    directory: join(app.getPath("userData"), "Agent Events"),
+  });
+  await eventJournal.initialize();
+  const agentTrace = new AgentTraceService(eventJournal, manager);
+  const broker = new CdpBroker(manager, leases, eventJournal);
   const socketPath = isTestApp
     ? join(testRoot, "x-browser.sock")
     : join(app.getPath("userData"), "ufo-browser.sock");
@@ -454,6 +461,8 @@ async function start() {
     snapshot,
     broker,
     app.getVersion(),
+    eventJournal,
+    agentTrace,
   );
   const assistantWorkspace = join(app.getPath("userData"), "Assistant Workspace");
   const skillSource = app.isPackaged
@@ -516,6 +525,19 @@ async function start() {
   );
   presentationSubscriptions.push(
     manager.onBeforeSpaceClose(async (spaceId) => {
+      const closing = manager.getSpace(spaceId);
+      if (closing) {
+        eventJournal.append({
+          spaceId,
+          tabId: closing.activeTabId,
+          category: "lifecycle",
+          type: "space.closing",
+          data: { lifecycle: closing.lifecycle, profileMode: closing.profileMode },
+        });
+        if (closing.profileMode === "temporary") {
+          setTimeout(() => void eventJournal.clear(spaceId), 0);
+        }
+      }
       const current = presentation.current();
       if (current.kind === "space" && current.spaceId === spaceId) {
         await presentation.showOverview({ parkPrevious: false });
@@ -545,6 +567,8 @@ async function start() {
     profileStorageSync,
     profileClone,
     profileAvatars,
+    eventJournal,
+    agentTrace,
   });
   traceStart("ipc-registered");
   const unsubscribeClaude = claude.onEvent((event) => {
@@ -1031,6 +1055,7 @@ async function start() {
       .close()
       .catch(() => undefined)
       .then(() => profileSync.close().catch(() => undefined))
+      .then(() => eventJournal.flush().catch(() => undefined))
       .then(() => manager.flushState().catch(() => undefined))
       .then(() => {
         if (!captureWindow.isDestroyed()) captureWindow.close();
@@ -1592,6 +1617,8 @@ type IpcContext = {
   profileStorageSync: ProfileStorageSyncService;
   profileClone: ProfileCloneService;
   profileAvatars: ProfileAvatarStore;
+  eventJournal: SpaceEventJournal;
+  agentTrace: AgentTraceService;
 };
 
 function registerIpc(context: IpcContext) {
@@ -1609,6 +1636,8 @@ function registerIpc(context: IpcContext) {
     profileStorageSync,
     profileClone,
     profileAvatars,
+    eventJournal,
+    agentTrace,
   } = context;
   const shell = <T extends unknown[]>(
     channel: string,
@@ -1621,6 +1650,16 @@ function registerIpc(context: IpcContext) {
   };
 
   shell("x-browser:overview:list", () => manager.listSpaces());
+  shell("x-browser:overview:trace", (_event, spaceId: number, options?: unknown) => {
+    const id = assertSpaceId(spaceId);
+    manager.getSpaceOrThrow(id);
+    return agentTrace.list(id, overviewTraceOptions(options));
+  });
+  shell("x-browser:overview:events", (_event, spaceId: number, options?: unknown) => {
+    const id = assertSpaceId(spaceId);
+    manager.getSpaceOrThrow(id);
+    return eventJournal.list(id, overviewTraceOptions(options));
+  });
   shell("x-browser:app:info", () => ({
     name: app.getName(),
     version: app.getVersion(),
@@ -1944,6 +1983,18 @@ function assertUserControl(manager: TaskSpaceManager, spaceId: number) {
 function assertSpaceId(value: number) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error("invalid space id");
   return value;
+}
+
+function overviewTraceOptions(value: unknown) {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid trace options");
+  }
+  const input = value as Record<string, unknown>;
+  return {
+    after: Math.max(0, Math.floor(finiteNumber(input.after))),
+    limit: Math.min(500, Math.max(1, Math.floor(finiteNumber(input.limit) || 120))),
+  };
 }
 
 function previewRect(value: unknown): Rect {
@@ -2992,6 +3043,34 @@ async function runSpaceUiAudit(context: {
     await captureWebContentsPng(overviewView),
   );
 
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('[data-space-id="${initial.id}"] .card-menu-item:nth-child(2)')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `!document.querySelector('#trace-dialog-backdrop')?.hidden && !document.querySelector('#trace-dialog-content .dialog-loading')`,
+  );
+  const traceDialog = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      visible: !document.querySelector('#trace-dialog-backdrop')?.hidden,
+      title: document.querySelector('#trace-dialog-title')?.textContent || '',
+      empty: document.querySelector('#trace-dialog-content .trace-empty strong')?.textContent || '',
+    }))()`,
+    true,
+  );
+  await writeFile(
+    join(testRoot, "space-trace.png"),
+    await captureWebContentsPng(overviewView),
+  );
+  await overviewView.webContents.executeJavaScript(
+    `(() => {
+      document.querySelector('#trace-dialog-close')?.click();
+      document.querySelector('[data-space-id="${initial.id}"] .card-menu-trigger')?.click();
+    })()`,
+    true,
+  );
+
   const renameStarted = await overviewView.webContents.executeJavaScript(
     `(() => {
       const card = document.querySelector('[data-space-id="${initial.id}"]');
@@ -3275,7 +3354,10 @@ async function runSpaceUiAudit(context: {
     menu.card === true &&
     menu.expanded === "true" &&
     menu.hidden === false &&
-    menu.items === 2 &&
+    menu.items === 3 &&
+    traceDialog.visible === true &&
+    /Agent 执行记录/.test(traceDialog.title) &&
+    traceDialog.empty === "还没有 Agent 记录" &&
     renameStarted.renaming === true &&
     renameStarted.focused === true &&
     renameStarted.value === initial.name &&
@@ -3346,6 +3428,7 @@ async function runSpaceUiAudit(context: {
       {
         ok,
         menu,
+        traceDialog,
         renameStarted,
         storedName,
         finalDom,

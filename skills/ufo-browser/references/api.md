@@ -32,7 +32,7 @@ It also provides:
 
 `browser` provides tab listing, selection, creation/reuse, closing, iframe target lookup, and real-tab selection.
 
-`taskSpaces` provides `list`, `bootstrap`, `use`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`. `bootstrap({ name, profileId?, url? })` always creates and verifies a fresh Space. `use(id)` accepts only an existing numeric Space ID and never creates, guesses by name, or changes Profile/Session.
+`taskSpaces` provides `list`, `bootstrap`, `use`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`. `bootstrap({ name, profileId?, url? })` always creates and verifies a fresh Space. `use(id)` accepts only an existing numeric Space ID and never creates, guesses by name, or changes Profile/Session. UFO extensions `taskSpaces.events.list`, `taskSpaces.trace.list`, and `taskSpaces.trace.export` expose the selected Space's bounded local diagnostic timeline.
 
 `site` provides optional learned site tools. `fetch.server` issues Node-side requests; `fetch.browser` issues requests from the active browser page. `cdp` sends a raw protocol command.
 
@@ -80,6 +80,8 @@ animationHighlightMouseToPosition
 handOffTaskSpace            takeOverTaskSpace
 completeTaskSpace           markTaskSpaceError
 setAgentTaskState           getBrowserVersion
+listSpaceEvents             listAgentTrace
+exportAgentTrace
 sendCDPMessage
 onCDPMessage                onSendCDPMessageError
 ```
@@ -124,6 +126,29 @@ await expect(page.locator('.error')).not.toBeVisible()
 
 `page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`,
 `request`, and `requestfailed`. Listeners live only for the current CLI process.
+
+For events that already happened, use the App-owned Space journal:
+
+```js
+const result = await taskSpaces.events.list(task.id, {
+  after: lastSequence,
+  categories: ['action', 'network', 'console', 'lifecycle'],
+  limit: 200,
+})
+cliLog(result.events)
+lastSequence = result.nextSequence
+
+await taskSpaces.trace.export(task.id, {
+  path: '/absolute/path/agent-trace.md',
+  format: 'markdown',
+})
+```
+
+Sequences are monotonic across App restarts while retained. If bounded history
+has already evicted the requested cursor, `cursorExpired` is true. The journal
+stores no response bodies and redacts passwords, OTPs, Cookies, Authorization,
+Tokens, credentials, and sensitive URL query parameters before memory or disk
+storage. Temporary Space history is removed when that Space closes.
 
 ```js
 page.on('console', message => cliLog(message.type() + ' ' + message.text()))

@@ -51,6 +51,12 @@ class AgentHost {
     return this.rpc("createTab", url);
   };
   listTabs = () => this.rpc("listTabs");
+  listSpaceEvents = (spaceId: number, options?: unknown) =>
+    this.rpc("listSpaceEvents", spaceId, options);
+  listAgentTrace = (spaceId: number, options?: unknown) =>
+    this.rpc("listAgentTrace", spaceId, options);
+  exportAgentTrace = (spaceId: number, options: unknown) =>
+    this.rpc("exportAgentTrace", spaceId, options);
   snapshot = (options?: unknown) => this.rpc("snapshot", options);
   resolveRef = (refId: number) => this.rpc("resolveRef", refId);
   handOffTaskSpace = () => this.rpc("handOffTaskSpace");
@@ -61,6 +67,10 @@ class AgentHost {
   animationHighlightMouseToPosition = (...args: unknown[]) =>
     this.rpc("animationHighlightMouseToPosition", ...args);
   getBrowserVersion = () => this.rpc("getBrowserVersion");
+
+  traceEvent = (payload: unknown) => {
+    this.write({ type: "trace-event", payload });
+  };
 
   sendCDPMessage = (payload: string) => {
     this.write({ type: "cdp-send", payload: assertRawCdpPayload(payload) });
@@ -153,6 +163,7 @@ async function runCompatibleMain(harness: Record<string, any>) {
     directLog,
     host,
   );
+  instrumentAgentActions(context, host);
   installEgoCompatibilityGlobals(globalThis, context);
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   // Ego installs helpers as globals instead of declaring one function
@@ -165,6 +176,107 @@ async function runCompatibleMain(harness: Record<string, any>) {
     await harness.stopScreencast();
   }
   return 0;
+}
+
+function instrumentAgentActions(context: Record<string, any>, host: AgentHost) {
+  const actions = [
+    "click",
+    "doubleClick",
+    "hover",
+    "dragMouse",
+    "scroll",
+    "fillInput",
+    "typeText",
+    "pressKey",
+    "uploadFile",
+    "gotoAndWait",
+    "openOrReuseTab",
+    "switchTab",
+    "closeTab",
+    "snapshotText",
+    "captureScreenshot",
+  ];
+  for (const action of actions) {
+    if (typeof context[action] !== "function") continue;
+    context[action] = tracedAction(host, action, context[action]);
+  }
+  if (context.page && typeof context.page === "object") {
+    for (const action of ["goto", "reload", "snapshot", "snapshotRaw", "screenshot"]) {
+      if (typeof context.page[action] !== "function") continue;
+      context.page[action] = tracedAction(
+        host,
+        `page.${action}`,
+        context.page[action],
+      );
+    }
+  }
+}
+
+function tracedAction(
+  host: AgentHost,
+  action: string,
+  operation: (...args: any[]) => any,
+) {
+  return async (...args: any[]) => {
+    const stepId = `${process.pid}-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 9)}`;
+    const startedAt = performance.now();
+    host.traceEvent({
+      phase: "started",
+      stepId,
+      action,
+      target: summarizeActionTarget(action, args),
+    });
+    try {
+      const result = await operation(...args);
+      host.traceEvent({
+        phase: "finished",
+        stepId,
+        action,
+        status: "success",
+        durationMs: performance.now() - startedAt,
+      });
+      return result;
+    } catch (error: any) {
+      host.traceEvent({
+        phase: "finished",
+        stepId,
+        action,
+        status: "failed",
+        durationMs: performance.now() - startedAt,
+        error: error?.message || String(error),
+      });
+      throw error;
+    }
+  };
+}
+
+function summarizeActionTarget(action: string, args: any[]) {
+  if (action === "fillInput" || action === "typeText") {
+    return { target: summarizeValue(args[0]), value: "[redacted]" };
+  }
+  if (action === "uploadFile") {
+    return { target: summarizeValue(args[0]), path: "[redacted]" };
+  }
+  if (action === "pressKey") return { key: summarizeValue(args[0]) };
+  if (action.includes("snapshot") || action.includes("Screenshot")) return {};
+  return { target: summarizeValue(args[0]) };
+}
+
+function summarizeValue(value: unknown): unknown {
+  if (typeof value === "string") return value.slice(0, 512);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.slice(0, 4).map(summarizeValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !/value|text|body|password|token|secret/i.test(key))
+        .slice(0, 12)
+        .map(([key, child]) => [key, summarizeValue(child)]),
+    );
+  }
+  return undefined;
 }
 
 function readStdin() {

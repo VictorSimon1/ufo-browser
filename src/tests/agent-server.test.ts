@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createConnection, type Socket } from "node:net";
 import { AgentServer } from "../main/agent-server.js";
 import { SpaceLeaseRegistry } from "../main/space-lease.js";
+import { SpaceEventJournal } from "../main/space-event-journal.js";
+import { AgentTraceService } from "../main/agent-trace.js";
 
 test("selection does not claim a handed-off Space and explicit takeover can resume it", async () => {
   const root = await mkdtemp(join(tmpdir(), "x-browser-agent-server-"));
@@ -348,6 +350,90 @@ test("CDP sends stay multiplexed while an earlier command is pending", async () 
     });
   } finally {
     releaseSlow();
+    socket?.destroy();
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("AgentServer exposes cursor-based Space events and one-way action trace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "x-browser-agent-events-"));
+  const socketPath = join(root, "agent.sock");
+  const space: any = {
+    id: 12,
+    name: "events",
+    taskId: "events",
+    lifecycle: "active",
+    ownership: "agent",
+    activeTabId: "page-12",
+    tabs: [{ targetId: "page-12", title: "Page", url: "https://example.com" }],
+  };
+  const manager = {
+    getSpace: (id: number) => (id === space.id ? space : undefined),
+    getSpaceOrThrow: (id: number) => {
+      if (id !== space.id) throw new Error("task space not found");
+      return space;
+    },
+    setAgentConnectionActive: () => undefined,
+  };
+  const broker = {
+    registerConnection: () => undefined,
+    removeConnection: () => undefined,
+    releaseConnectionSpace: () => undefined,
+  };
+  const journal = new SpaceEventJournal();
+  await journal.initialize();
+  const trace = new AgentTraceService(journal, manager as any);
+  const server = new AgentServer(
+    socketPath,
+    manager as any,
+    new SpaceLeaseRegistry(),
+    { snapshot: async () => ({ content: "", refs: [] }) } as any,
+    broker as any,
+    "0.1.11",
+    journal,
+    trace,
+  );
+  let socket: Socket | undefined;
+  try {
+    await server.listen();
+    socket = await connectSocket(socketPath);
+    await rpc(socket, 1, "useTaskSpace", [space.id]);
+    socket.write(
+      `${JSON.stringify({
+        type: "trace-event",
+        payload: {
+          phase: "started",
+          stepId: "click-1",
+          action: "click",
+          target: "@21",
+        },
+      })}\n`,
+    );
+    socket.write(
+      `${JSON.stringify({
+        type: "trace-event",
+        payload: {
+          phase: "finished",
+          stepId: "click-1",
+          action: "click",
+          status: "success",
+          durationMs: 12,
+        },
+      })}\n`,
+    );
+    const result = await rpc(socket, 2, "listAgentTrace", [space.id, { limit: 20 }]);
+    assert.equal(result.type, "rpc-result");
+    assert.deepEqual(
+      result.result.events.map((event: any) => event.type),
+      ["action.started", "action.finished"],
+    );
+    assert.equal(result.result.events[1].data.durationMs, 12);
+
+    const wrongSpace = await rpc(socket, 3, "listSpaceEvents", [99, {}]);
+    assert.equal(wrongSpace.type, "rpc-error");
+    assert.equal(wrongSpace.error_code, "EGO_TASK_SPACE_UNAVAILABLE");
+  } finally {
     socket?.destroy();
     await server.close();
     await rm(root, { recursive: true, force: true });
