@@ -1110,21 +1110,35 @@ const FACADE_HELP: Record<string, string> = {
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
 };
 
-const FLAT_HELP_ALIASES: Record<string, string> = {
-  click: "page.locator",
-  doubleClick: "page.locator",
-  hover: "page.locator",
-  fillInput: "page.locator",
-  storageState: "page.storageState",
-  setStorageState: "page.setStorageState",
-  pageInfo: "page.info",
-  gotoAndWait: "page.goto",
-  captureScreenshot: "page.screenshot",
-  snapshotText: "page.snapshot",
-  snapshotRaw: "page.snapshotRaw",
-  waitForResponse: "page.waitForResponse",
-  waitForRequest: "page.waitForRequest",
-  sendCDPMessage: "cdp",
+const FLAT_HELP: Record<string, string> = {
+  click:
+    "click(target, options?) => Promise<void>; click a CSS/XPath selector, snapshot @ref/loc, or viewport point. options.timeout is seconds on this flat Ego-compatible helper. Locator actionability waits for visibility, stability, enabled state, and an unobstructed hit target.",
+  doubleClick:
+    "doubleClick(target, options?) => Promise<void>; double-click a selector, snapshot @ref/loc, or viewport point. options.timeout is seconds.",
+  hover:
+    "hover(target, options?) => Promise<void>; move the trusted browser pointer to a selector, snapshot @ref/loc, or viewport point. options.timeout is seconds.",
+  fillInput:
+    "fillInput(selectorOrRef, value, options?) => Promise<void>; clear and fill a form control selected by CSS/XPath, snapshot @ref, or loc. options.timeout is seconds.",
+  storageState:
+    "storageState(options?) => Promise<{ cookies, origins }>; alias guidance for page.storageState(options). Captures all cookies in the selected UFO Profile and localStorage for the current page origin; options.path may save plaintext credential state to JSON.",
+  setStorageState:
+    "setStorageState(stateOrPath, options?) => Promise<object>; alias guidance for page.setStorageState(stateOrPath, options). Restores cookies and localStorage; options.clear removes existing restored state first.",
+  pageInfo:
+    "pageInfo() => Promise<{ url, title, w, h, sx, sy, pw, ph } | { dialog }>; returns CDP-backed page metadata without waiting for dynamic resources or executing renderer JavaScript on the normal fast path.",
+  gotoAndWait:
+    "gotoAndWait(url, options?) => Promise<object>; navigate and wait for DOMContentLoaded by default. options.timeout and options.settle are seconds on this flat Ego-compatible helper.",
+  captureScreenshot:
+    "captureScreenshot(pathOrOptions?) => Promise<string>; capture the current page and return the saved path. Accepts a path string or screenshot options.",
+  snapshotText:
+    "snapshotText(options?) => Promise<string>; return the semantic page tree with reusable @refs and loc= selectors.",
+  snapshotRaw:
+    "snapshotRaw(options?) => Promise<{ content, refs }>; return the structured semantic snapshot and ref metadata.",
+  waitForResponse:
+    "waitForResponse(urlOrPredicate, options?) => Promise<Response>; alias guidance for page.waitForResponse. The Response facade is returned when headers arrive; text(), json(), and body() await the buffered body on demand. page-style timeout is milliseconds.",
+  waitForRequest:
+    "waitForRequest(urlOrPredicate, options?) => Promise<Request>; alias guidance for page.waitForRequest. page-style timeout is milliseconds.",
+  sendCDPMessage:
+    "sendCDPMessage(payloadJson) => void; low-level host transport requiring JSON.stringify({ id, method, params, sessionId? }). A method-only string is rejected. Prefer await cdp(method, params) for normal Agent scripts.",
 };
 
 export function helperContext(extra: any = {}) {
@@ -1147,9 +1161,8 @@ export function helperContext(extra: any = {}) {
       if (names.length === 1 && FACADE_HELP[names[0]]) {
         return FACADE_HELP[names[0]];
       }
-      if (names.length === 1 && FLAT_HELP_ALIASES[names[0]]) {
-        const result = helpRuntime(all, FLAT_HELP_ALIASES[names[0]]);
-        return typeof result === "string" ? result : formatHelp(result);
+      if (names.length === 1 && FLAT_HELP[names[0]]) {
+        return FLAT_HELP[names[0]];
       }
       if (names.length === 0) {
         return Object.values(FACADE_HELP).join("\n\n");

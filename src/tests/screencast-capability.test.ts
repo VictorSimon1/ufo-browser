@@ -53,6 +53,10 @@ test("page screencast exposes an agent-friendly capability check", async () => {
     );
     assert.match(context.help("page"), /All page timeout values are milliseconds/);
     assert.match(context.help("timeouts"), /flat Ego-compatible helpers.*seconds/i);
+    assert.match(context.help("click"), /options\.timeout is seconds/);
+    assert.match(context.help("storageState"), /Captures all cookies/);
+    assert.match(context.help("sendCDPMessage"), /JSON\.stringify/);
+    assert.doesNotMatch(context.help("click"), /Unknown helper/);
   } finally {
     restore();
   }
