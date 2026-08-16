@@ -2099,15 +2099,24 @@ async function runNativeBrowserInteractionAudit(context: {
         document.documentElement.dataset.ready = "true";
       </script>
     `)}`;
-    const navigation = presentation.navigate(space.id, delayedNavigationUrl);
+    const navigationSubmitted =
+      nativeChrome.submitAddressForTest(delayedNavigationUrl);
     const navigationHandoffShown = await waitUntil(
       () => presentation.navigationHandoffVisible(),
       600,
     );
     await wait(80);
     const navigationHandoffHeld = presentation.navigationHandoffVisible();
-    await navigation;
+    const addressDuringNavigation = nativeChrome.inspect();
+    const navigationSettled = await waitUntil(() => {
+      const chrome = nativeChrome.inspect();
+      return (
+        chrome?.addressPending === false &&
+        !presentation.navigationHandoffVisible()
+      );
+    }, 2_500);
     const navigationHandoffRemoved = !presentation.navigationHandoffVisible();
+    const addressAfterNavigation = nativeChrome.inspect();
 
     const agentSpace = await manager.createSpace(
       "Native Agent titlebar drag audit",
@@ -2154,9 +2163,14 @@ async function runNativeBrowserInteractionAudit(context: {
       closeChromeLatencyMs < 180 &&
       afterClose?.tabCount === tabsBeforeNew &&
       contextToken === "kept-context" &&
+      navigationSubmitted &&
       navigationHandoffShown &&
       navigationHandoffHeld &&
+      addressDuringNavigation?.addressPending === true &&
+      addressDuringNavigation.addressValue === delayedNavigationUrl &&
+      navigationSettled &&
       navigationHandoffRemoved &&
+      addressAfterNavigation?.addressPending === false &&
       Boolean(chromePng && chromePng.byteLength > 1_000) &&
       agentControlled?.controlled === true &&
       agentControlled.controlledTabDraggable === true &&
@@ -2182,9 +2196,13 @@ async function runNativeBrowserInteractionAudit(context: {
           closeChromeCommitted,
           closeChromeLatencyMs,
           contextToken,
+          navigationSubmitted,
           navigationHandoffShown,
           navigationHandoffHeld,
+          addressDuringNavigation,
+          navigationSettled,
           navigationHandoffRemoved,
+          addressAfterNavigation,
           chromePngBytes: chromePng?.byteLength ?? 0,
           agentControlled,
           overview,

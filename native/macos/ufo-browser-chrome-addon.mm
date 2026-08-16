@@ -587,6 +587,11 @@ bool safeBool(id value) {
 @property(nonatomic, strong) NSPopover *tabSearchPopover;
 @property(nonatomic, strong) UFOTabSearchViewController *tabSearchController;
 @property(nonatomic) BOOL addressEditing;
+@property(nonatomic, copy) NSString *pendingAddressValue;
+@property(nonatomic, copy) NSString *pendingAddressTargetID;
+@property(nonatomic, copy) NSString *pendingAddressInitialURL;
+@property(nonatomic, copy) NSString *lastActiveURL;
+@property(nonatomic) BOOL pendingAddressObservedLoading;
 @property(nonatomic) BOOL controlled;
 @property(nonatomic) NSInteger spaceCount;
 - (void)updateState:(NSDictionary *)state;
@@ -602,6 +607,7 @@ bool safeBool(id value) {
 - (void)clearAddress:(id)sender;
 - (void)toggleTabSearch:(id)sender;
 - (void)showProfileMenu:(id)sender;
+- (void)submitAddressForTesting:(NSString *)value;
 @end
 
 @implementation UFOBrowserChromeView
@@ -911,13 +917,43 @@ bool safeBool(id value) {
       ? [NSColor colorWithRed:0.39 green:0.55 blue:0.94 alpha:0.42].CGColor
       : NSColor.clearColor.CGColor;
 
+  NSDictionary *activeTab = [state[@"activeTab"] isKindOfClass:NSDictionary.class]
+      ? state[@"activeTab"]
+      : @{};
+  NSString *url = safeString(activeTab[@"url"]);
+  self.lastActiveURL = url;
+  const BOOL loading = safeBool(state[@"loading"]);
+  const BOOL pendingTargetExists = self.pendingAddressTargetID.length > 0 &&
+      [tabs indexOfObjectPassingTest:^BOOL(id value, NSUInteger index, BOOL *stop) {
+        NSDictionary *tab = [value isKindOfClass:NSDictionary.class] ? value : @{};
+        return [safeString(tab[@"targetId"]) isEqualToString:self.pendingAddressTargetID];
+      }] != NSNotFound;
+  if (self.pendingAddressTargetID.length > 0 && !pendingTargetExists) {
+    self.pendingAddressValue = nil;
+    self.pendingAddressTargetID = nil;
+    self.pendingAddressInitialURL = nil;
+    self.pendingAddressObservedLoading = NO;
+  }
+  BOOL pendingForActiveTab = self.pendingAddressValue.length > 0 &&
+      [self.pendingAddressTargetID isEqualToString:activeTarget];
+  if (pendingForActiveTab && loading) {
+    self.pendingAddressObservedLoading = YES;
+  }
+  if (pendingForActiveTab && !loading &&
+      (self.pendingAddressObservedLoading ||
+       ![url isEqualToString:self.pendingAddressInitialURL ?: @""])) {
+    self.pendingAddressValue = nil;
+    self.pendingAddressTargetID = nil;
+    self.pendingAddressInitialURL = nil;
+    self.pendingAddressObservedLoading = NO;
+    pendingForActiveTab = NO;
+  }
+
   if (!self.addressEditing) {
-    NSDictionary *activeTab = [state[@"activeTab"] isKindOfClass:NSDictionary.class]
-        ? state[@"activeTab"]
-        : @{};
-    NSString *url = safeString(activeTab[@"url"]);
-    if ([url isEqualToString:@"https://www.google.com/"] ||
-        [url isEqualToString:@"https://google.com/"]) {
+    if (pendingForActiveTab) {
+      self.addressField.stringValue = self.pendingAddressValue;
+    } else if ([url isEqualToString:@"https://www.google.com/"] ||
+               [url isEqualToString:@"https://google.com/"]) {
       self.addressField.stringValue = @"";
     } else {
       self.addressField.stringValue = url;
@@ -963,6 +999,8 @@ bool safeBool(id value) {
     @"tabCount": @(self.tabItems.count),
     @"spacesCount": [NSString stringWithFormat:@"%ld", (long)self.spaceCount],
     @"addressValue": self.addressField.stringValue ?: @"",
+    @"addressPending": @(self.pendingAddressValue.length > 0 &&
+        [self.pendingAddressTargetID isEqualToString:self.activeTargetID]),
     @"addressFocused": @(self.addressField.currentEditor != nil),
     @"addressFrame": @{
       @"x": @(NSMinX(self.addressBackdrop.frame)),
@@ -1051,6 +1089,10 @@ bool safeBool(id value) {
 }
 - (void)clearAddress:(id)sender {
   if (!self.addressField.editable) return;
+  self.pendingAddressValue = nil;
+  self.pendingAddressTargetID = nil;
+  self.pendingAddressInitialURL = nil;
+  self.pendingAddressObservedLoading = NO;
   self.addressField.stringValue = @"";
   self.addressClearButton.hidden = YES;
   [self focusAddress];
@@ -1104,12 +1146,28 @@ bool safeBool(id value) {
   NSString *value = [self.addressField.stringValue
       stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   if (value.length == 0) return;
+  self.pendingAddressValue = value;
+  self.pendingAddressTargetID = self.activeTargetID ?: @"";
+  self.pendingAddressInitialURL = self.lastActiveURL ?: @"";
+  self.pendingAddressObservedLoading = NO;
   [self.window makeFirstResponder:nil];
   self.addressEditing = NO;
   [self emit:@"navigate" extra:@{ @"value": value }];
 }
 
+- (void)submitAddressForTesting:(NSString *)value {
+  if (!self.addressField.editable || value.length == 0) return;
+  self.addressField.stringValue = value;
+  [self submitAddress:nil];
+}
+
 - (void)controlTextDidBeginEditing:(NSNotification *)notification {
+  if ([self.pendingAddressTargetID isEqualToString:self.activeTargetID]) {
+    self.pendingAddressValue = nil;
+    self.pendingAddressTargetID = nil;
+    self.pendingAddressInitialURL = nil;
+    self.pendingAddressObservedLoading = NO;
+  }
   self.addressEditing = YES;
   [self alignAddressFieldEditor];
   self.addressClearButton.hidden = self.addressField.stringValue.length == 0;
@@ -1298,6 +1356,20 @@ napi_value focusChromeAddress(napi_env env, napi_callback_info info) {
   return booleanValue(env, true);
 }
 
+napi_value submitChromeAddressForTest(napi_env env, napi_callback_info info) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+  std::string value;
+  if (argc < 1 || !readString(env, argv[0], &value) || value.empty() ||
+      !chromeBridge.chromeView) {
+    return booleanValue(env, false);
+  }
+  [chromeBridge.chromeView submitAddressForTesting:
+      [NSString stringWithUTF8String:value.c_str()]];
+  return booleanValue(env, true);
+}
+
 napi_value captureChrome(napi_env env, napi_callback_info info) {
   if (!chromeBridge.chromeView || chromeBridge.chromeView.hidden ||
       !chromeBridge.chromeView.window.isVisible) {
@@ -1347,6 +1419,8 @@ napi_value initialize(napi_env env, napi_value exports) {
        napi_default, nullptr},
       {"focusChromeAddress", nullptr, focusChromeAddress, nullptr, nullptr, nullptr,
        napi_default, nullptr},
+      {"submitChromeAddressForTest", nullptr, submitChromeAddressForTest,
+       nullptr, nullptr, nullptr, napi_default, nullptr},
       {"captureChrome", nullptr, captureChrome, nullptr, nullptr, nullptr,
        napi_default, nullptr},
       {"inspectChrome", nullptr, inspectChrome, nullptr, nullptr, nullptr,

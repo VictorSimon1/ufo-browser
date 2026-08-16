@@ -19,6 +19,7 @@ type NativeBrowserChromeAddon = {
   updateChrome(stateJson: string): boolean;
   setChromeVisible(visible: boolean): boolean;
   focusChromeAddress(): boolean;
+  submitChromeAddressForTest(value: string): boolean;
   captureChrome(): Buffer | null;
   inspectChrome(): string | null;
 };
@@ -31,6 +32,7 @@ export type NativeBrowserChromeInspection = {
   tabCount: number;
   spacesCount: string;
   addressValue: string;
+  addressPending: boolean;
   addressFocused: boolean;
   titleHitClass: string;
   addressHitClass: string;
@@ -103,6 +105,15 @@ export class NativeBrowserChrome {
     if (!this.isAvailable()) return false;
     try {
       return Boolean(this.addon?.focusChromeAddress());
+    } catch {
+      return false;
+    }
+  }
+
+  submitAddressForTest(value: string) {
+    if (!this.isAvailable()) return false;
+    try {
+      return Boolean(this.addon?.submitChromeAddressForTest(value));
     } catch {
       return false;
     }
