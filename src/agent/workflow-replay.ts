@@ -524,7 +524,8 @@ async function failureRecovery(
       format: "structured",
       interactive: true,
       compact: true,
-      ...(Number.isSafeInteger(initialSnapshot?.revision)
+      ...(typeof initialSnapshot?.revision === "string" &&
+      initialSnapshot.revision.length > 0
         ? { sinceRevision: initialSnapshot.revision }
         : {}),
     })

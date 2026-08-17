@@ -121,6 +121,7 @@ test("Workflow replay follows the finite recovery chain and never guesses among 
   assert.equal(reports.at(-1)?.status, "success");
 
   actionLog.length = 0;
+  const snapshotOptions: any[] = [];
   const ambiguous = await executeWorkflowReplay(
     { runId: "run-2", startSequence: 0, recipe },
     {},
@@ -129,6 +130,7 @@ test("Workflow replay follows the finite recovery chain and never guesses among 
       locator: () => fakeLocator(2, () => actionLog.push("wrong-click")),
       getByRole: () => fakeLocator(2, () => actionLog.push("wrong-role")),
       reports,
+      snapshotOptions,
     }),
   );
   assert.equal(ambiguous.status, "failed");
@@ -142,6 +144,8 @@ test("Workflow replay follows the finite recovery chain and never guesses among 
       (candidate: any) => candidate.count === 2,
     ),
   );
+  assert.equal(snapshotOptions.length, 2);
+  assert.equal(snapshotOptions[1].sinceRevision, "fixture-revision-1");
 });
 
 test("high-risk Workflow steps wait for scoped caller approval and secrets stay wrapped", async () => {
@@ -554,6 +558,7 @@ function fakeRuntime(options: {
   locator: (selector: string) => any;
   getByRole?: (role: string, options: any) => any;
   reports: any[];
+  snapshotOptions?: any[];
 }) {
   return {
     page: {
@@ -561,7 +566,10 @@ function fakeRuntime(options: {
       getByRole: options.getByRole ?? options.locator,
       getByLabel: options.locator,
       url: async () => "https://fixture.local/register",
-      snapshot: async () => ({ revision: 1, kind: "full", content: "" }),
+      snapshot: async (snapshotOptions: any = {}) => {
+        options.snapshotOptions?.push(snapshotOptions);
+        return { revision: "fixture-revision-1", kind: "full", content: "" };
+      },
       screenshot: async () => "/tmp/workflow-failure.png",
       waitForEvent: async () => undefined,
       waitForURL: async () => undefined,
