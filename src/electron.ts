@@ -1062,8 +1062,12 @@ async function start() {
       .close()
       .catch(() => undefined)
       .then(() => profileSync.close().catch(() => undefined))
-      .then(() => eventJournal.flush().catch(() => undefined))
-      .then(() => workflows.flush().catch(() => undefined))
+      .then(() =>
+        settleWithin(
+          Promise.allSettled([eventJournal.flush(), workflows.flush()]),
+          1_500,
+        ),
+      )
       .then(() => manager.flushState().catch(() => undefined))
       .then(() => {
         if (!captureWindow.isDestroyed()) captureWindow.close();
@@ -2045,6 +2049,17 @@ function clippedCaptureRect(value: unknown, bounds: Rect): Rect {
 function finiteNumber(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
+}
+
+async function settleWithin(promise: Promise<unknown>, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise.catch(() => undefined),
+    new Promise<void>((resolvePromise) => {
+      timer = setTimeout(resolvePromise, timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
 }
 
 async function captureWebContentsPng(view: WebContentsView) {
