@@ -22,7 +22,7 @@ await build({
   outfile: "dist/main/electron.js",
   platform: "node",
   format: "esm",
-  external: ["electron"],
+  external: ["electron", "yazl"],
 });
 
 await build({
@@ -102,7 +102,7 @@ await build({
   outdir: "dist/tests",
   platform: "node",
   format: "esm",
-  external: ["electron"],
+  external: ["electron", "yazl"],
 });
 
 for (const name of ["agent-overlay", "chat", "overview", "browser"]) {

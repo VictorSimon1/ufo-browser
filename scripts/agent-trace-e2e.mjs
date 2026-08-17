@@ -59,7 +59,11 @@ const exported = await exportAgentTrace(task.id, {
   path: ${JSON.stringify(join(testRoot, "agent-trace.md"))},
   format: 'markdown'
 })
-cliLog(JSON.stringify({ taskId: task.id, trace, events, exported }))
+const zipped = await exportAgentTrace(task.id, {
+  path: ${JSON.stringify(join(testRoot, "agent-trace.zip"))},
+  format: 'zip'
+})
+cliLog(JSON.stringify({ taskId: task.id, trace, events, exported, zipped }))
 `),
   );
   taskId = first.taskId;
@@ -79,6 +83,13 @@ cliLog(JSON.stringify({ taskId: task.id, trace, events, exported }))
   );
   const lastSequence = first.events.latestSequence;
   assert.ok(lastSequence > 0);
+  assert.equal(first.zipped.format, "zip");
+  const zipEntries = await runProcess("/usr/bin/unzip", [
+    "-Z1",
+    join(testRoot, "agent-trace.zip"),
+  ]);
+  assert.match(zipEntries, /^trace\.json$/m);
+  assert.match(zipEntries, /^trace\.md$/m);
 
   await stopElectron();
   electron = await startElectron();

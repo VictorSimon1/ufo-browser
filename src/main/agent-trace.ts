@@ -1,6 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, extname, isAbsolute } from "node:path";
+import { constants, createWriteStream } from "node:fs";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { pipeline } from "node:stream/promises";
+import { ZipFile } from "yazl";
 import type { TaskSpaceManager } from "./manager.js";
 import {
   redactEventData,
@@ -23,6 +26,8 @@ export type AgentTraceSignal = {
 export type AgentTraceContext = {
   leaseGeneration?: number;
 };
+
+export type AgentTraceExportFormat = "markdown" | "json" | "zip";
 
 type PendingStep = {
   spaceId: number;
@@ -175,7 +180,7 @@ export class AgentTraceService {
 
   async export(
     spaceId: number,
-    options: { format?: "markdown" | "json"; path: string },
+    options: { format?: AgentTraceExportFormat; path: string },
   ) {
     if (!options || typeof options.path !== "string" || !options.path.trim()) {
       throw new TypeError("trace export requires an absolute path");
@@ -184,21 +189,26 @@ export class AgentTraceService {
       throw new TypeError("trace export requires an absolute path");
     }
     const format = options.format ?? inferFormat(options.path);
-    if (format !== "markdown" && format !== "json") {
-      throw new TypeError("trace export format must be markdown or json");
+    if (format !== "markdown" && format !== "json" && format !== "zip") {
+      throw new TypeError("trace export format must be markdown, json, or zip");
     }
     const events = this.journal.list(spaceId, {
       categories: ["action", "navigation", "network", "console", "dialog", "download", "lifecycle"],
       limit: 1_000,
     }).events;
     const space = this.manager.getSpace(spaceId);
-    const content =
-      format === "json"
-        ? `${JSON.stringify({ space, events }, null, 2)}\n`
-        : markdownTrace(space?.name ?? `Space ${spaceId}`, events);
+    const payload = { space, events };
+    const json = `${JSON.stringify(payload, null, 2)}\n`;
+    const markdown = markdownTrace(space?.name ?? `Space ${spaceId}`, events);
     await mkdir(dirname(options.path), { recursive: true, mode: 0o700 });
-    await writeFile(options.path, content, { mode: 0o600 });
-    return { path: options.path, format, events: events.length };
+    if (format === "zip") {
+      const screenshots = await writeTraceZip(options.path, json, markdown, events);
+      return { path: options.path, format, events: events.length, screenshots };
+    }
+    await writeFile(options.path, format === "json" ? json : markdown, {
+      mode: 0o600,
+    });
+    return { path: options.path, format, events: events.length, screenshots: 0 };
   }
 
   private relatedEvents(spaceId: number, pending: PendingStep) {
@@ -271,8 +281,11 @@ function finiteGeneration(value: unknown) {
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
-function inferFormat(path: string): "markdown" | "json" {
-  return extname(path).toLowerCase() === ".json" ? "json" : "markdown";
+function inferFormat(path: string): AgentTraceExportFormat {
+  const extension = extname(path).toLowerCase();
+  if (extension === ".json") return "json";
+  if (extension === ".zip") return "zip";
+  return "markdown";
 }
 
 function redactTraceTarget(action: string, target: unknown) {
@@ -391,4 +404,76 @@ function screenshotPath(error: unknown) {
   if (!error || typeof error !== "object") return undefined;
   const value = (error as Record<string, unknown>).screenshot;
   return typeof value === "string" && isAbsolute(value) ? value : undefined;
+}
+
+const MAX_ZIP_SCREENSHOTS = 20;
+const MAX_ZIP_SCREENSHOT_BYTES = 10 * 1024 * 1024;
+const SCREENSHOT_EXTENSION = /^\.(?:png|jpe?g|webp)$/i;
+
+async function writeTraceZip(
+  outputPath: string,
+  json: string,
+  markdown: string,
+  events: Array<Record<string, any>>,
+) {
+  const temporary = `${outputPath}.${process.pid}.${randomUUID()}.tmp`;
+  const zip = new ZipFile();
+  zip.addBuffer(Buffer.from(json), "trace.json");
+  zip.addBuffer(Buffer.from(markdown), "trace.md");
+  let screenshots = 0;
+  const seen = new Set<string>();
+  for (const event of events) {
+    if (screenshots >= MAX_ZIP_SCREENSHOTS) break;
+    const path = event.data?.screenshot;
+    if (typeof path !== "string" || seen.has(path)) continue;
+    seen.add(path);
+    const image = await readTraceScreenshot(path);
+    if (!image) continue;
+    const archiveName = `${String(event.sequence).padStart(8, "0")}-${safeArchiveName(
+      basename(path),
+    )}`;
+    zip.addBuffer(image, `screenshots/${archiveName}`);
+    screenshots += 1;
+  }
+  zip.end();
+  try {
+    await pipeline(
+      zip.outputStream as NodeJS.ReadableStream & AsyncIterable<Uint8Array>,
+      createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
+    );
+    await rename(temporary, outputPath);
+    return screenshots;
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readTraceScreenshot(path: string) {
+  if (!isAbsolute(path) || !SCREENSHOT_EXTENSION.test(extname(path))) {
+    return undefined;
+  }
+  let file;
+  try {
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = await file.stat();
+    if (
+      !stat.isFile() ||
+      stat.size <= 0 ||
+      stat.size > MAX_ZIP_SCREENSHOT_BYTES
+    ) {
+      return undefined;
+    }
+    const buffer = await file.readFile();
+    return buffer.length <= MAX_ZIP_SCREENSHOT_BYTES ? buffer : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await file?.close().catch(() => undefined);
+  }
+}
+
+function safeArchiveName(value: string) {
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(-120);
+  return sanitized || "failure.png";
 }

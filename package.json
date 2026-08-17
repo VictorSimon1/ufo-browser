@@ -58,6 +58,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.1.0",
+    "@types/yazl": "^3.3.1",
     "electron": "^43.2.0",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.25.8",
@@ -115,5 +116,8 @@
         }
       ]
     }
+  },
+  "dependencies": {
+    "yazl": "^3.3.1"
   }
 }

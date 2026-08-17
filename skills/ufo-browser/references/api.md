@@ -259,8 +259,8 @@ cliLog(result.events)
 lastSequence = result.nextSequence
 
 await taskSpaces.trace.export(task.id, {
-  path: '/absolute/path/agent-trace.md',
-  format: 'markdown',
+  path: '/absolute/path/agent-trace.zip',
+  format: 'zip', // 'markdown' | 'json' | 'zip'
 })
 ```
 
@@ -269,6 +269,9 @@ has already evicted the requested cursor, `cursorExpired` is true. The journal
 stores no response bodies and redacts passwords, OTPs, Cookies, Authorization,
 Tokens, credentials, and sensitive URL query parameters before memory or disk
 storage. Temporary Space history is removed when that Space closes.
+ZIP exports contain both redacted text formats and up to 20 referenced failure
+screenshots. Screenshot files must be regular PNG, JPEG, or WebP files no larger
+than 10 MB each; missing, symbolic-link, and oversized files are skipped.
 
 ```js
 page.on('console', message => cliLog(message.type() + ' ' + message.text()))

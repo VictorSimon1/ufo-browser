@@ -118,7 +118,7 @@ export function createEgoCompatibilityContext(
     call(host.listAgentTrace, spaceId, options);
   const exportAgentTrace = (
     spaceId: number,
-    options: { path: string; format?: "markdown" | "json" },
+    options: { path: string; format?: "markdown" | "json" | "zip" },
   ) => call(host.exportAgentTrace, spaceId, options);
   const workflows = {
     start: async (name: string) => {
@@ -433,7 +433,7 @@ const LEGACY_HELP: Record<string, string> = {
   listAgentTrace:
     "listAgentTrace(spaceId, { after?, limit? }) => Promise<{ events, nextSequence, cursorExpired }>",
   exportAgentTrace:
-    "exportAgentTrace(spaceId, { path, format? }) => Promise<{ path, format, events }>",
+    "exportAgentTrace(spaceId, { path, format?: 'markdown' | 'json' | 'zip' }) => Promise<{ path, format, events, screenshots }>",
   workflows:
     "workflows.start(name) records successful traced actions until recording.finish({ variables?, secrets? }); workflows.replay(name, inputs, options?) deterministically replays without an LLM; workflows.list() and workflows.get(name, version?) inspect saved versions and statistics",
   secret:

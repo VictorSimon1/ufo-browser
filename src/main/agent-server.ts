@@ -593,13 +593,14 @@ function traceExportOptions(value: unknown) {
   if (
     input.format !== undefined &&
     input.format !== "markdown" &&
-    input.format !== "json"
+    input.format !== "json" &&
+    input.format !== "zip"
   ) {
-    throw new TypeError("trace export format must be markdown or json");
+    throw new TypeError("trace export format must be markdown, json, or zip");
   }
   return {
     path: input.path,
-    format: input.format as "markdown" | "json" | undefined,
+    format: input.format as "markdown" | "json" | "zip" | undefined,
   };
 }
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentTraceService } from "../main/agent-trace.js";
@@ -150,13 +150,18 @@ test("AgentTraceService records structured failures and absolute screenshots", a
   }
 });
 
-test("AgentTraceService exports local Markdown and JSON traces", async () => {
+test("AgentTraceService exports local Markdown, JSON, and ZIP traces", async () => {
   const root = await mkdtemp(join(tmpdir(), "ufo-agent-trace-"));
   try {
     const journal = new SpaceEventJournal();
     await journal.initialize();
     const manager = {
-      getSpace: () => ({ id: 3, name: "Export Space", activeTabId: "tab-3" }),
+      getSpace: () => ({
+        id: 3,
+        name: "Export Space",
+        activeTabId: "tab-3",
+        tabs: [{ targetId: "tab-3", url: "https://example.test/export" }],
+      }),
     };
     const trace = new AgentTraceService(journal, manager as any);
     trace.receive("connection", 3, {
@@ -171,12 +176,47 @@ test("AgentTraceService exports local Markdown and JSON traces", async () => {
       action: "click",
       status: "success",
     });
+    const screenshotPath = join(root, "failure.png");
+    await writeFile(screenshotPath, Buffer.from("89504e470d0a1a0a", "hex"));
+    trace.receive("connection", 3, {
+      phase: "started",
+      stepId: "export-2",
+      action: "click",
+      target: "@22",
+    });
+    trace.receive("connection", 3, {
+      phase: "finished",
+      stepId: "export-2",
+      action: "click",
+      status: "failed",
+      error: {
+        name: "TimeoutError",
+        message: "timed out",
+        screenshot: screenshotPath,
+      },
+    });
     const markdownPath = join(root, "trace.md");
     const jsonPath = join(root, "trace.json");
+    const zipPath = join(root, "trace.zip");
     assert.equal((await trace.export(3, { path: markdownPath })).format, "markdown");
     assert.equal((await trace.export(3, { path: jsonPath })).format, "json");
+    assert.deepEqual(await trace.export(3, { path: zipPath }), {
+      path: zipPath,
+      format: "zip",
+      events: 4,
+      screenshots: 1,
+    });
     assert.match(await readFile(markdownPath, "utf8"), /Export Space Agent Trace/);
     assert.match(await readFile(jsonPath, "utf8"), /"action\.started"/);
+    const archive = await readFile(zipPath);
+    assert.equal(archive.subarray(0, 4).toString("hex"), "504b0304");
+    assert.ok(archive.includes(Buffer.from("trace.json")));
+    assert.ok(archive.includes(Buffer.from("trace.md")));
+    assert.ok(archive.includes(Buffer.from("screenshots/00000004-failure.png")));
+    await assert.rejects(
+      trace.export(3, { path: "relative-trace.zip" }),
+      /absolute path/i,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
