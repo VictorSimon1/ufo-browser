@@ -359,8 +359,10 @@ function tracedAction(
       phase: "started",
       stepId,
       action,
+      label: actionLabel(action, args),
       target,
     });
+    const browserStartedAt = performance.now();
     try {
       const result = await operation(...args);
       host.traceEvent({
@@ -369,6 +371,7 @@ function tracedAction(
         action,
         status: "success",
         durationMs: performance.now() - startedAt,
+        browserDurationMs: performance.now() - browserStartedAt,
       });
       return result;
     } catch (error: any) {
@@ -378,11 +381,52 @@ function tracedAction(
         action,
         status: "failed",
         durationMs: performance.now() - startedAt,
-        error: error?.message || String(error),
+        browserDurationMs: performance.now() - browserStartedAt,
+        error: summarizeTraceError(error),
       });
       throw error;
     }
   };
+}
+
+function actionLabel(action: string, args: any[]) {
+  if (action.startsWith("site.")) return undefined;
+  const options = args.at(-1);
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return undefined;
+  }
+  return typeof options.label === "string"
+    ? options.label.trim().slice(0, 256)
+    : undefined;
+}
+
+function summarizeTraceError(error: any) {
+  if (!error || typeof error !== "object") {
+    return { name: "Error", message: String(error) };
+  }
+  const output: Record<string, unknown> = {
+    name: typeof error.name === "string" ? error.name : "Error",
+    code:
+      typeof error.code === "string"
+        ? error.code
+        : typeof error.error_code === "string"
+          ? error.error_code
+          : undefined,
+    message:
+      typeof error.message === "string" ? error.message.slice(0, 4_096) : String(error),
+  };
+  for (const key of [
+    "locator",
+    "reason",
+    "interceptedBy",
+    "attempts",
+    "recovery",
+    "callLog",
+    "screenshot",
+  ]) {
+    if (error[key] !== undefined) output[key] = summarizeValue(error[key]);
+  }
+  return output;
 }
 
 function summarizeActionTarget(

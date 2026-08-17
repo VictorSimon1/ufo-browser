@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, extname } from "node:path";
+import { dirname, extname, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { TaskSpaceManager } from "./manager.js";
 import {
@@ -12,10 +12,16 @@ export type AgentTraceSignal = {
   phase: "started" | "finished";
   stepId?: string;
   action?: string;
+  label?: string;
   target?: unknown;
   status?: "success" | "failed";
   durationMs?: number;
+  browserDurationMs?: number;
   error?: unknown;
+};
+
+export type AgentTraceContext = {
+  leaseGeneration?: number;
 };
 
 type PendingStep = {
@@ -24,7 +30,12 @@ type PendingStep = {
   tabId?: string;
   stepId: string;
   action: string;
+  label?: string;
+  target?: unknown;
   startedAt: number;
+  startSequence: number;
+  beforeUrl?: string;
+  leaseGeneration?: number;
 };
 
 export class AgentTraceService {
@@ -39,24 +50,20 @@ export class AgentTraceService {
     connectionId: string,
     spaceId: number,
     signal: AgentTraceSignal,
+    context: AgentTraceContext = {},
   ) {
     const stepId = safeStepId(signal.stepId) ?? randomUUID();
     const key = `${connectionId}:${stepId}`;
     const action = safeAction(signal.action);
-    const tabId = this.manager.getSpace(spaceId)?.activeTabId;
+    const current = currentTab(this.manager, spaceId);
+    const tabId = current?.targetId;
     if (signal.phase === "started") {
       const startedAt = Date.now();
-      this.pending.set(key, {
+      const target = normalizeTraceTarget(action, signal.target);
+      const label = safeLabel(signal.label);
+      const event = this.journal.append({
         connectionId,
         spaceId,
-        tabId,
-        stepId,
-        action,
-        startedAt,
-      });
-      return this.journal.append({
-        spaceId,
-        connectionId,
         tabId,
         stepId,
         category: "action",
@@ -64,15 +71,36 @@ export class AgentTraceService {
         at: startedAt,
         data: {
           action,
-          target: redactTraceTarget(action, signal.target),
+          label,
+          target: redactTraceTarget(action, target),
+          beforeUrl: current?.url,
+          leaseGeneration: finiteGeneration(context.leaseGeneration),
         },
       });
+      this.pending.set(key, {
+        connectionId,
+        spaceId,
+        tabId,
+        stepId,
+        action,
+        label,
+        target,
+        startedAt,
+        startSequence: event.sequence,
+        beforeUrl: current?.url,
+        leaseGeneration: finiteGeneration(context.leaseGeneration),
+      });
+      return event;
     }
 
     const pending = this.pending.get(key);
     this.pending.delete(key);
     const finishedAt = Date.now();
     const status = signal.status === "failed" ? "failed" : "success";
+    const relatedEvents = pending
+      ? this.relatedEvents(spaceId, pending)
+      : [];
+    const error = status === "failed" ? redactEventData(signal.error) : undefined;
     return this.journal.append({
       spaceId,
       connectionId,
@@ -83,12 +111,24 @@ export class AgentTraceService {
       at: finishedAt,
       data: {
         action: pending?.action ?? action,
+        label: pending?.label ?? safeLabel(signal.label),
+        target: redactTraceTarget(
+          pending?.action ?? action,
+          pending?.target ?? normalizeTraceTarget(action, signal.target),
+        ),
+        leaseGeneration:
+          pending?.leaseGeneration ?? finiteGeneration(context.leaseGeneration),
+        beforeUrl: pending?.beforeUrl,
+        afterUrl: current?.url,
         status,
         durationMs:
           finiteDuration(signal.durationMs) ??
           (pending ? finishedAt - pending.startedAt : undefined),
-        error:
-          status === "failed" ? redactEventData(signal.error) : undefined,
+        browserDurationMs: finiteDuration(signal.browserDurationMs),
+        execution: executionSummary(status, error),
+        relatedEvents,
+        screenshot: screenshotPath(error),
+        error,
       },
     });
   }
@@ -108,9 +148,18 @@ export class AgentTraceService {
         at: finishedAt,
         data: {
           action: step.action,
+          label: step.label,
+          target: redactTraceTarget(step.action, step.target),
+          leaseGeneration: step.leaseGeneration,
+          beforeUrl: step.beforeUrl,
+          afterUrl: currentTab(this.manager, step.spaceId)?.url,
           status: "failed",
           durationMs: finishedAt - step.startedAt,
-          error: "Agent connection closed before the action completed",
+          execution: { outcome: "connection-closed" },
+          error: {
+            name: "AgentConnectionClosedError",
+            message: "Agent connection closed before the action completed",
+          },
         },
       });
     }
@@ -131,6 +180,9 @@ export class AgentTraceService {
     if (!options || typeof options.path !== "string" || !options.path.trim()) {
       throw new TypeError("trace export requires an absolute path");
     }
+    if (!isAbsolute(options.path)) {
+      throw new TypeError("trace export requires an absolute path");
+    }
     const format = options.format ?? inferFormat(options.path);
     if (format !== "markdown" && format !== "json") {
       throw new TypeError("trace export format must be markdown or json");
@@ -147,6 +199,33 @@ export class AgentTraceService {
     await mkdir(dirname(options.path), { recursive: true, mode: 0o700 });
     await writeFile(options.path, content, { mode: 0o600 });
     return { path: options.path, format, events: events.length };
+  }
+
+  private relatedEvents(spaceId: number, pending: PendingStep) {
+    return this.journal
+      .list(spaceId, {
+        after: pending.startSequence,
+        categories: [
+          "navigation",
+          "network",
+          "console",
+          "dialog",
+          "download",
+          "lifecycle",
+        ],
+        limit: 100,
+      })
+      .events.filter(
+        (event) =>
+          !event.tabId || !pending.tabId || event.tabId === pending.tabId,
+      )
+      .slice(-20)
+      .map((event) => ({
+        sequence: event.sequence,
+        category: event.category,
+        type: event.type,
+        data: event.data,
+      }));
   }
 }
 
@@ -176,9 +255,20 @@ function safeAction(value: unknown) {
   return trimmed && trimmed.length <= 128 ? trimmed : "unknown";
 }
 
+function safeLabel(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const label = value.trim();
+  return label ? label.slice(0, 256) : undefined;
+}
+
 function finiteDuration(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.round(number) : undefined;
+}
+
+function finiteGeneration(value: unknown) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
 function inferFormat(path: string): "markdown" | "json" {
@@ -198,4 +288,107 @@ function redactTraceTarget(action: string, target: unknown) {
     return output;
   }
   return redacted;
+}
+
+function normalizeTraceTarget(action: string, value: unknown) {
+  const input: Record<string, unknown> =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? { ...(value as Record<string, unknown>) }
+      : { target: value };
+  const selector =
+    typeof input.locator === "string"
+      ? input.locator
+      : typeof input.target === "string"
+        ? input.target
+        : undefined;
+  if (selector) {
+    input.locator = selector;
+    if (/^@\d+$/.test(selector)) input.ref = selector;
+    const semantics = traceSelectorSemantics(selector);
+    if (semantics.role && input.role === undefined) input.role = semantics.role;
+    if (semantics.name && input.name === undefined) input.name = semantics.name;
+    if (semantics.nth !== undefined && input.nth === undefined) {
+      input.nth = semantics.nth;
+    }
+  }
+  const semantics =
+    input.semantics && typeof input.semantics === "object"
+      ? (input.semantics as Record<string, unknown>)
+      : undefined;
+  if (semantics) {
+    for (const key of ["role", "name", "label", "parent", "adjacent", "nth"]) {
+      if (input[key] === undefined && semantics[key] !== undefined) {
+        input[key] = semantics[key];
+      }
+    }
+  }
+  if (/fill|type|insert|upload|secret/i.test(action) && input.value !== undefined) {
+    input.value = "[redacted]";
+  }
+  return input;
+}
+
+function traceSelectorSemantics(selector: string) {
+  let source = selector;
+  let nth: number | undefined;
+  const nthMatch = /^internal:nth=(\d+);([\s\S]+)$/.exec(source);
+  if (nthMatch) {
+    nth = Number(nthMatch[1]);
+    source = nthMatch[2];
+  }
+  const roleMatch = /(?:^|;)loc=role:([^\[;]+)(?:\[name=(.+)\])?$/.exec(
+    source,
+  );
+  return {
+    role: roleMatch?.[1],
+    name: parseTraceMatcher(roleMatch?.[2]),
+    nth,
+  };
+}
+
+function parseTraceMatcher(value: string | undefined) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "string" ? parsed : undefined;
+  } catch {
+    return value.replace(/^['"]|['"]$/g, "");
+  }
+}
+
+function currentTab(manager: TaskSpaceManager, spaceId: number) {
+  const space = manager.getSpace(spaceId);
+  if (!space) return undefined;
+  const tab = Array.isArray(space.tabs)
+    ? space.tabs.find((candidate) => candidate.targetId === space.activeTabId)
+    : undefined;
+  return tab ??
+    (space.activeTabId
+      ? { targetId: space.activeTabId, url: undefined }
+      : undefined);
+}
+
+function executionSummary(status: "success" | "failed", error: unknown) {
+  if (status === "success") return { outcome: "completed" };
+  const detail =
+    error && typeof error === "object"
+      ? (error as Record<string, unknown>)
+      : {};
+  return {
+    outcome:
+      detail.name === "TimeoutError" || /timeout/i.test(String(detail.message ?? ""))
+        ? "timeout"
+        : "failed",
+    reason: detail.reason,
+    locator: detail.locator,
+    interceptedBy: detail.interceptedBy,
+    attempts: detail.attempts,
+    recovery: detail.recovery,
+  };
+}
+
+function screenshotPath(error: unknown) {
+  if (!error || typeof error !== "object") return undefined;
+  const value = (error as Record<string, unknown>).screenshot;
+  return typeof value === "string" && isAbsolute(value) ? value : undefined;
 }

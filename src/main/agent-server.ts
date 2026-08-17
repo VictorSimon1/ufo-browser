@@ -130,6 +130,7 @@ export class AgentServer {
           connection.id,
           selected.spaceId,
           signal,
+          { leaseGeneration: selected.generation },
         );
         this.workflows?.captureTrace(
           connection.id,
@@ -529,12 +530,14 @@ function normalizeTraceSignal(value: unknown): AgentTraceSignal {
     phase: signal.phase,
     stepId: typeof signal.stepId === "string" ? signal.stepId : undefined,
     action: typeof signal.action === "string" ? signal.action : undefined,
+    label: typeof signal.label === "string" ? signal.label : undefined,
     target: signal.target,
     status:
       signal.status === "failed" || signal.status === "success"
         ? signal.status
         : undefined,
     durationMs: Number(signal.durationMs),
+    browserDurationMs: Number(signal.browserDurationMs),
     error: signal.error,
   };
 }
