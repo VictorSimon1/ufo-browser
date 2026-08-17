@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentTraceService } from "../main/agent-trace.js";
@@ -153,6 +153,56 @@ test("AgentTraceService records structured failures and absolute screenshots", a
     });
     assert.equal(await trace.screenshot(5, event.sequence + 1), undefined);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("AgentTraceService clears only UFO-owned Temporary Space screenshots", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ufo-agent-trace-cleanup-"));
+  const managedScreenshot = join(
+    tmpdir(),
+    `ego-browser-shot-${process.pid}-${Date.now()}.png`,
+  );
+  const explicitScreenshot = join(root, "user-selected.png");
+  try {
+    await writeFile(managedScreenshot, Buffer.from("managed"));
+    await writeFile(explicitScreenshot, Buffer.from("explicit"));
+    const journal = new SpaceEventJournal();
+    await journal.initialize();
+    const manager = {
+      getSpace: () => ({
+        id: 6,
+        name: "Temporary Trace",
+        activeTabId: "tab-6",
+        tabs: [{ targetId: "tab-6", url: "https://example.test" }],
+      }),
+    };
+    const trace = new AgentTraceService(journal, manager as any);
+    for (const [stepId, screenshot] of [
+      ["managed", managedScreenshot],
+      ["explicit", explicitScreenshot],
+    ]) {
+      trace.receive("connection", 6, {
+        phase: "started",
+        stepId,
+        action: "click",
+        target: "button",
+      });
+      trace.receive("connection", 6, {
+        phase: "finished",
+        stepId,
+        action: "click",
+        status: "failed",
+        error: { name: "ActionabilityError", message: "covered", screenshot },
+      });
+    }
+
+    assert.deepEqual(await trace.clearTemporary(6), { screenshots: 1 });
+    await assert.rejects(access(managedScreenshot));
+    await access(explicitScreenshot);
+    assert.deepEqual(trace.list(6).events, []);
+  } finally {
+    await rm(managedScreenshot, { force: true });
     await rm(root, { recursive: true, force: true });
   }
 });

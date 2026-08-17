@@ -2,6 +2,7 @@ import { constants, createWriteStream } from "node:fs";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { ZipFile } from "yazl";
 import type { TaskSpaceManager } from "./manager.js";
@@ -195,6 +196,32 @@ export class AgentTraceService {
       mimeType: image.mimeType,
       dataUrl: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`,
     };
+  }
+
+  async clearTemporary(spaceId: number) {
+    const paths = new Set<string>();
+    let after = 0;
+    while (true) {
+      const page = this.journal.list(spaceId, {
+        after,
+        categories: ["action"],
+        limit: 1_000,
+      });
+      for (const event of page.events) {
+        const path = event.data?.screenshot;
+        if (typeof path === "string" && isManagedTraceScreenshot(path)) {
+          paths.add(path);
+        }
+      }
+      if (!page.events.length || page.nextSequence <= after) break;
+      after = page.nextSequence;
+      if (after >= page.latestSequence) break;
+    }
+    await Promise.allSettled(
+      [...paths].map((path) => rm(path, { force: true })),
+    );
+    await this.journal.clear(spaceId);
+    return { screenshots: paths.size };
   }
 
   async export(
@@ -504,4 +531,12 @@ function screenshotMimeType(extension: string) {
 function safeArchiveName(value: string) {
   const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, "-").slice(-120);
   return sanitized || "failure.png";
+}
+
+function isManagedTraceScreenshot(path: string) {
+  return (
+    isAbsolute(path) &&
+    dirname(path) === tmpdir() &&
+    /^ego-browser-shot-\d+-\d+\.png$/.test(basename(path))
+  );
 }

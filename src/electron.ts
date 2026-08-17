@@ -541,7 +541,7 @@ async function start() {
           data: { lifecycle: closing.lifecycle, profileMode: closing.profileMode },
         });
         if (closing.profileMode === "temporary") {
-          setTimeout(() => void eventJournal.clear(spaceId), 0);
+          await agentTrace.clearTemporary(spaceId);
         }
       }
       const current = presentation.current();
