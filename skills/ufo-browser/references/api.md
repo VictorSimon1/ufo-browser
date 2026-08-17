@@ -258,6 +258,12 @@ const result = await taskSpaces.events.list(task.id, {
 cliLog(result.events)
 lastSequence = result.nextSequence
 
+const failures = await taskSpaces.trace.list(task.id, {
+  after: 0,
+  status: 'failed',
+  limit: 50,
+})
+
 await taskSpaces.trace.export(task.id, {
   path: '/absolute/path/agent-trace.zip',
   format: 'zip', // 'markdown' | 'json' | 'zip'

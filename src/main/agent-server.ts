@@ -280,7 +280,7 @@ export class AgentServer {
       case "listAgentTrace": {
         const { spaceId } = this.assertAgentControl(connection);
         assertRequestedSpace(spaceId, args[0], "listAgentTrace");
-        return this.trace?.list(spaceId, eventListOptions(args[1])) ?? {
+        return this.trace?.list(spaceId, traceListOptions(args[1])) ?? {
           events: [],
           nextSequence: 0,
           cursorExpired: false,
@@ -580,6 +580,16 @@ function eventListOptions(value: unknown) {
     limit: Number(input.limit),
     categories,
   };
+}
+
+function traceListOptions(value: unknown) {
+  const options = eventListOptions(value);
+  if (value === undefined || value === null) return options;
+  const status = (value as Record<string, unknown>).status;
+  if (status !== undefined && status !== "success" && status !== "failed") {
+    throw new TypeError("trace status must be success or failed");
+  }
+  return { ...options, status: status as "success" | "failed" | undefined };
 }
 
 function traceExportOptions(value: unknown) {

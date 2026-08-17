@@ -431,7 +431,7 @@ const LEGACY_HELP: Record<string, string> = {
   listSpaceEvents:
     "listSpaceEvents(spaceId, { after?, limit?, categories? }) => Promise<{ events, nextSequence, cursorExpired }>",
   listAgentTrace:
-    "listAgentTrace(spaceId, { after?, limit? }) => Promise<{ events, nextSequence, cursorExpired }>",
+    "listAgentTrace(spaceId, { after?, limit?, status?: 'success' | 'failed' }) => Promise<{ events, nextSequence, cursorExpired }>",
   exportAgentTrace:
     "exportAgentTrace(spaceId, { path, format?: 'markdown' | 'json' | 'zip' }) => Promise<{ path, format, events, screenshots }>",
   workflows:

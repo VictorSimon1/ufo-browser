@@ -83,6 +83,18 @@ test("AgentTraceService correlates action steps and closes pending steps on disc
   assert.deepEqual(events[3].data?.execution, {
     outcome: "connection-closed",
   });
+  const failures = trace.list(7, { status: "failed", limit: 20 });
+  assert.deepEqual(
+    failures.events.map((event) => event.stepId),
+    ["step-2"],
+  );
+  assert.equal(failures.nextSequence, events[3].sequence);
+  assert.deepEqual(
+    trace.list(7, { status: "success", limit: 20 }).events.map((event) =>
+      event.stepId,
+    ),
+    ["step-1"],
+  );
   assert.doesNotMatch(JSON.stringify(events), /top-secret/);
 });
 

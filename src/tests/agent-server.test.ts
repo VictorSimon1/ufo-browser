@@ -430,7 +430,23 @@ test("AgentServer exposes cursor-based Space events and one-way action trace", a
     );
     assert.equal(result.result.events[1].data.durationMs, 12);
 
-    const wrongSpace = await rpc(socket, 3, "listSpaceEvents", [99, {}]);
+    const successful = await rpc(socket, 3, "listAgentTrace", [
+      space.id,
+      { status: "success", limit: 20 },
+    ]);
+    assert.equal(successful.type, "rpc-result");
+    assert.deepEqual(
+      successful.result.events.map((event: any) => event.data.status),
+      ["success"],
+    );
+    const invalidStatus = await rpc(socket, 4, "listAgentTrace", [
+      space.id,
+      { status: "broken" },
+    ]);
+    assert.equal(invalidStatus.type, "rpc-error");
+    assert.match(invalidStatus.error, /status/i);
+
+    const wrongSpace = await rpc(socket, 5, "listSpaceEvents", [99, {}]);
     assert.equal(wrongSpace.type, "rpc-error");
     assert.equal(wrongSpace.error_code, "EGO_TASK_SPACE_UNAVAILABLE");
   } finally {

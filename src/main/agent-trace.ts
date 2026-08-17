@@ -29,6 +29,9 @@ export type AgentTraceContext = {
 };
 
 export type AgentTraceExportFormat = "markdown" | "json" | "zip";
+export type AgentTraceListOptions = SpaceEventListOptions & {
+  status?: "success" | "failed";
+};
 
 type PendingStep = {
   spaceId: number;
@@ -171,12 +174,57 @@ export class AgentTraceService {
     }
   }
 
-  list(spaceId: number, options: SpaceEventListOptions = {}) {
-    const result = this.journal.list(spaceId, {
-      ...options,
-      categories: ["action"],
-    });
-    return result;
+  list(spaceId: number, options: AgentTraceListOptions = {}) {
+    if (!options.status) {
+      return this.journal.list(spaceId, {
+        ...options,
+        categories: ["action"],
+      });
+    }
+    const limit = Math.min(1_000, positiveInteger(options.limit, 200));
+    let after = nonNegativeInteger(options.after, 0);
+    let cursorExpired = false;
+    let oldestSequence: number | undefined;
+    let latestSequence = 0;
+    const events = [];
+    while (events.length < limit) {
+      const page = this.journal.list(spaceId, {
+        after,
+        categories: ["action"],
+        limit: 1_000,
+      });
+      cursorExpired ||= page.cursorExpired;
+      oldestSequence ??= page.oldestSequence;
+      latestSequence = page.latestSequence;
+      if (!page.events.length) {
+        after = Math.max(after, page.latestSequence);
+        break;
+      }
+      let stoppedAtLimit = false;
+      for (const event of page.events) {
+        after = event.sequence;
+        if (
+          event.type === "action.finished" &&
+          event.data?.status === options.status
+        ) {
+          events.push(event);
+          if (events.length >= limit) {
+            stoppedAtLimit = true;
+            break;
+          }
+        }
+      }
+      if (stoppedAtLimit || page.nextSequence >= page.latestSequence) break;
+      if (page.nextSequence <= after) continue;
+      after = page.nextSequence;
+    }
+    return {
+      events,
+      nextSequence: after,
+      cursorExpired,
+      oldestSequence,
+      latestSequence,
+    };
   }
 
   async screenshot(spaceId: number, sequence: number) {
@@ -325,6 +373,16 @@ function finiteDuration(value: unknown) {
 function finiteGeneration(value: unknown) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+}
+
+function positiveInteger(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
+}
+
+function nonNegativeInteger(value: unknown, fallback: number) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : fallback;
 }
 
 function inferFormat(path: string): AgentTraceExportFormat {
