@@ -50,6 +50,13 @@
           <button id="trace-dialog-close" class="dialog-icon-button" title="关闭" aria-label="关闭">×</button>
         </header>
         <div id="trace-dialog-content" class="trace-dialog-content"></div>
+        <section id="trace-screenshot-viewer" class="trace-screenshot-viewer" hidden aria-label="Agent 失败截图">
+          <header>
+            <strong id="trace-screenshot-title">失败现场</strong>
+            <button id="trace-screenshot-close" class="dialog-icon-button" title="返回执行记录" aria-label="返回执行记录">×</button>
+          </header>
+          <div><img id="trace-screenshot-image" alt="Agent 操作失败时的页面截图"></div>
+        </section>
       </section>
     </div>
     <div id="profile-dialog-backdrop" class="profile-dialog-backdrop" hidden>

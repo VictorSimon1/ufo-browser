@@ -258,9 +258,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .trace-dialog-header span { color: #7e8b87; font-size: 11px; line-height: 1.35; }
 .trace-dialog-content { min-height: 280px; overflow: auto; padding: 12px 18px 20px; }
 .trace-event-list { margin: 0; padding: 0; list-style: none; }
-.trace-event-row { min-height: 54px; display: grid; grid-template-columns: 10px 1fr; gap: 11px; padding: 9px 5px; border-bottom: 1px solid rgba(43,61,55,.08); }
+.trace-event-row { min-height: 54px; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: start; gap: 11px; padding: 9px 5px; border-bottom: 1px solid rgba(43,61,55,.08); }
 .trace-event-row > i { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: #93a39e; box-shadow: 0 0 0 3px rgba(147,163,158,.13); }
 .trace-event-row[data-category="action"] > i { background: #18836a; box-shadow: 0 0 0 3px rgba(24,131,106,.13); }
+.trace-event-row[data-status="failed"] > i { background: #c05f48; box-shadow: 0 0 0 3px rgba(192,95,72,.13); }
 .trace-event-row[data-category="network"] > i,
 .trace-event-row[data-category="console"] > i { background: #c05f48; box-shadow: 0 0 0 3px rgba(192,95,72,.13); }
 .trace-event-row > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -268,6 +269,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .trace-event-row strong { min-width: 0; overflow: hidden; color: #263b34; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .trace-event-row time { flex: 0 0 auto; color: #9aa5a1; font-size: 9px; }
 .trace-event-row small { overflow: hidden; color: #7b8984; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.trace-screenshot-button { align-self: center; min-width: 44px; height: 28px; padding: 0 10px; border: 1px solid rgba(43,61,55,.13); border-radius: 7px; background: #fff; color: #52645d; font: inherit; font-size: 10px; font-weight: 650; cursor: pointer; }
+.trace-screenshot-button:hover { border-color: rgba(24,131,106,.28); background: #f3f8f6; color: #176f5b; }
+.trace-screenshot-button:disabled { cursor: default; opacity: .5; }
+.trace-screenshot-viewer { min-height: 280px; display: flex; flex: 1 1 auto; flex-direction: column; overflow: hidden; background: #eef1f0; }
+.trace-screenshot-viewer[hidden] { display: none; }
+.trace-screenshot-viewer > header { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 14px 8px 20px; border-bottom: 1px solid rgba(43,61,55,.1); background: #fff; }
+.trace-screenshot-viewer > header strong { min-width: 0; overflow: hidden; color: #263b34; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.trace-screenshot-viewer > div { min-height: 0; display: grid; flex: 1 1 auto; place-items: center; overflow: auto; padding: 18px; }
+.trace-screenshot-viewer img { display: block; max-width: 100%; height: auto; border: 1px solid rgba(33,45,42,.14); border-radius: 6px; background: #fff; box-shadow: 0 10px 30px rgba(13,23,20,.12); }
 .trace-empty { min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #788681; text-align: center; }
 .trace-empty strong { color: #394c45; font-size: 13px; }
 .trace-empty span { font-size: 10px; }

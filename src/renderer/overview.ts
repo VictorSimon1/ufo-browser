@@ -16,6 +16,15 @@ const traceDialogTitle = document.querySelector<HTMLElement>(
 const traceDialogSubtitle = document.querySelector<HTMLElement>(
   "#trace-dialog-subtitle",
 )!;
+const traceScreenshotViewer = document.querySelector<HTMLElement>(
+  "#trace-screenshot-viewer",
+)!;
+const traceScreenshotImage = document.querySelector<HTMLImageElement>(
+  "#trace-screenshot-image",
+)!;
+const traceScreenshotTitle = document.querySelector<HTMLElement>(
+  "#trace-screenshot-title",
+)!;
 const profileDialogBackdrop = document.querySelector<HTMLElement>(
   "#profile-dialog-backdrop",
 )!;
@@ -51,6 +60,7 @@ let createSpacePending = false;
 let createProfileMenuGeneration = 0;
 let openingSpaceId: number | undefined;
 let spaceTransitionSequence = 0;
+let currentTraceSpaceId: number | undefined;
 
 void api.app.info().then((info: any) => {
   const version = String(info?.version || "").trim();
@@ -80,6 +90,9 @@ document.querySelector("#profile-dialog-close")!.addEventListener("click", () =>
 document.querySelector("#trace-dialog-close")!.addEventListener("click", () =>
   closeTraceDialog(),
 );
+document.querySelector("#trace-screenshot-close")!.addEventListener("click", () =>
+  closeTraceScreenshot(),
+);
 traceDialogBackdrop.addEventListener("pointerdown", (event) => {
   if (event.target === traceDialogBackdrop) closeTraceDialog();
 });
@@ -107,7 +120,8 @@ document.addEventListener("focusin", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!traceDialogBackdrop.hidden) {
-    closeTraceDialog();
+    if (!traceScreenshotViewer.hidden) closeTraceScreenshot();
+    else closeTraceDialog();
     return;
   }
   if (!profileDialogBackdrop.hidden) {
@@ -376,6 +390,8 @@ function spaceCard(spaceId: number) {
 
 async function openTraceDialog(spaceId: number) {
   const space = spaces.find((candidate) => Number(candidate.id) === spaceId);
+  currentTraceSpaceId = spaceId;
+  closeTraceScreenshot();
   traceDialogBackdrop.hidden = false;
   document.body.classList.add("dialog-open");
   traceDialogTitle.textContent = space?.name
@@ -396,6 +412,8 @@ async function openTraceDialog(spaceId: number) {
 
 function closeTraceDialog() {
   if (traceDialogBackdrop.hidden) return;
+  closeTraceScreenshot();
+  currentTraceSpaceId = undefined;
   traceDialogBackdrop.hidden = true;
   document.body.classList.remove("dialog-open");
   traceDialogContent.replaceChildren();
@@ -414,6 +432,7 @@ function renderTraceEvents(events: any[]) {
     const row = document.createElement("li");
     row.className = "trace-event-row";
     row.dataset.category = String(event.category || "trace");
+    row.dataset.status = String(event?.data?.status || "");
     const marker = document.createElement("i");
     const copy = document.createElement("div");
     const heading = document.createElement("span");
@@ -430,6 +449,17 @@ function renderTraceEvents(events: any[]) {
     detail.textContent = traceEventDetail(event);
     copy.append(heading, detail);
     row.append(marker, copy);
+    if (typeof event?.data?.screenshot === "string") {
+      const screenshot = document.createElement("button");
+      screenshot.type = "button";
+      screenshot.className = "trace-screenshot-button";
+      screenshot.textContent = "截图";
+      screenshot.title = "查看失败截图";
+      screenshot.addEventListener("click", () => {
+        void showTraceScreenshot(Number(event.sequence), traceEventTitle(event), screenshot);
+      });
+      row.append(screenshot);
+    }
     list.append(row);
   }
   traceDialogContent.append(list);
@@ -437,9 +467,10 @@ function renderTraceEvents(events: any[]) {
 
 function traceEventTitle(event: any) {
   const data = event?.data || {};
-  if (event.type === "action.started") return `开始 ${data.action || "Agent 操作"}`;
+  const action = [data.action || "Agent 操作", data.label].filter(Boolean).join(" · ");
+  if (event.type === "action.started") return `开始 ${action}`;
   if (event.type === "action.finished") {
-    return `${data.status === "failed" ? "失败" : "完成"} ${data.action || "Agent 操作"}`;
+    return `${data.status === "failed" ? "失败" : "完成"} ${action}`;
   }
   if (event.type === "Network.loadingFailed") return "网络请求失败";
   if (event.type === "Network.responseReceived") return `HTTP ${data.status || "错误"}`;
@@ -452,13 +483,57 @@ function traceEventTitle(event: any) {
 function traceEventDetail(event: any) {
   const data = event?.data || {};
   const parts = [
-    data.target?.target,
+    data.target?.name || data.target?.locator || data.target?.target,
     data.url,
+    data.beforeUrl && data.afterUrl && data.beforeUrl !== data.afterUrl
+      ? `${data.beforeUrl} → ${data.afterUrl}`
+      : data.afterUrl || data.beforeUrl,
     data.errorText,
-    data.error,
+    traceErrorText(data.error),
     Number.isFinite(Number(data.durationMs)) ? `${Math.round(Number(data.durationMs))} ms` : "",
   ].filter(Boolean);
   return parts.join(" · ") || String(event.category || "trace");
+}
+
+function traceErrorText(error: unknown) {
+  if (!error) return "";
+  if (typeof error === "string") return error;
+  if (typeof error !== "object") return String(error);
+  const input = error as Record<string, unknown>;
+  const code = typeof input.code === "string" ? input.code : "";
+  const message = typeof input.message === "string" ? input.message : "";
+  return [code, message].filter(Boolean).join(": ");
+}
+
+async function showTraceScreenshot(
+  sequence: number,
+  title: string,
+  trigger: HTMLButtonElement,
+) {
+  if (!currentTraceSpaceId || !Number.isSafeInteger(sequence)) return;
+  trigger.disabled = true;
+  try {
+    const result = await api.overview.traceScreenshot(currentTraceSpaceId, sequence);
+    if (typeof result?.dataUrl !== "string" || !result.dataUrl.startsWith("data:image/")) {
+      trigger.title = "截图不可用";
+      return;
+    }
+    traceScreenshotImage.src = result.dataUrl;
+    traceScreenshotTitle.textContent = title;
+    traceDialogContent.hidden = true;
+    traceScreenshotViewer.hidden = false;
+    document.querySelector<HTMLButtonElement>("#trace-screenshot-close")?.focus();
+  } catch {
+    trigger.title = "截图不可用";
+  } finally {
+    trigger.disabled = false;
+  }
+}
+
+function closeTraceScreenshot() {
+  traceScreenshotViewer.hidden = true;
+  traceDialogContent.hidden = false;
+  traceScreenshotImage.removeAttribute("src");
 }
 
 function toggleCardMenu(card: HTMLElement) {

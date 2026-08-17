@@ -178,6 +178,25 @@ export class AgentTraceService {
     return result;
   }
 
+  async screenshot(spaceId: number, sequence: number) {
+    if (!Number.isSafeInteger(sequence) || sequence <= 0) return undefined;
+    const event = this.journal.list(spaceId, {
+      after: sequence - 1,
+      categories: ["action"],
+      limit: 1,
+    }).events[0];
+    if (event?.sequence !== sequence) return undefined;
+    const path = event.data?.screenshot;
+    if (typeof path !== "string") return undefined;
+    const image = await readTraceScreenshot(path);
+    if (!image) return undefined;
+    return {
+      sequence,
+      mimeType: image.mimeType,
+      dataUrl: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`,
+    };
+  }
+
   async export(
     spaceId: number,
     options: { format?: AgentTraceExportFormat; path: string },
@@ -432,7 +451,7 @@ async function writeTraceZip(
     const archiveName = `${String(event.sequence).padStart(8, "0")}-${safeArchiveName(
       basename(path),
     )}`;
-    zip.addBuffer(image, `screenshots/${archiveName}`);
+    zip.addBuffer(image.buffer, `screenshots/${archiveName}`);
     screenshots += 1;
   }
   zip.end();
@@ -450,7 +469,8 @@ async function writeTraceZip(
 }
 
 async function readTraceScreenshot(path: string) {
-  if (!isAbsolute(path) || !SCREENSHOT_EXTENSION.test(extname(path))) {
+  const extension = extname(path).toLowerCase();
+  if (!isAbsolute(path) || !SCREENSHOT_EXTENSION.test(extension)) {
     return undefined;
   }
   let file;
@@ -465,12 +485,20 @@ async function readTraceScreenshot(path: string) {
       return undefined;
     }
     const buffer = await file.readFile();
-    return buffer.length <= MAX_ZIP_SCREENSHOT_BYTES ? buffer : undefined;
+    return buffer.length <= MAX_ZIP_SCREENSHOT_BYTES
+      ? { buffer, mimeType: screenshotMimeType(extension) }
+      : undefined;
   } catch {
     return undefined;
   } finally {
     await file?.close().catch(() => undefined);
   }
+}
+
+function screenshotMimeType(extension: string) {
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  return "image/png";
 }
 
 function safeArchiveName(value: string) {

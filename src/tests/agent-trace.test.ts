@@ -100,6 +100,7 @@ test("AgentTraceService records structured failures and absolute screenshots", a
       }),
     };
     const screenshot = join(root, "failure.png");
+    await writeFile(screenshot, Buffer.from("89504e470d0a1a0a", "hex"));
     const trace = new AgentTraceService(journal, manager as any);
     trace.receive("connection", 5, {
       phase: "started",
@@ -145,6 +146,12 @@ test("AgentTraceService records structured failures and absolute screenshots", a
       attempts: 3,
       screenshot,
     });
+    assert.deepEqual(await trace.screenshot(5, event.sequence), {
+      sequence: event.sequence,
+      mimeType: "image/png",
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+    });
+    assert.equal(await trace.screenshot(5, event.sequence + 1), undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

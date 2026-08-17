@@ -852,6 +852,7 @@ async function start() {
         profiles,
         presentation,
         overviewView,
+        eventJournal,
       }).catch(
         async (error) => {
           await writeFile(
@@ -1661,6 +1662,15 @@ function registerIpc(context: IpcContext) {
     const id = assertSpaceId(spaceId);
     manager.getSpaceOrThrow(id);
     return agentTrace.list(id, overviewTraceOptions(options));
+  });
+  shell("x-browser:overview:trace-screenshot", async (
+    _event,
+    spaceId: number,
+    sequence: number,
+  ) => {
+    const id = assertSpaceId(spaceId);
+    manager.getSpaceOrThrow(id);
+    return agentTrace.screenshot(id, Number(sequence));
   });
   shell("x-browser:overview:events", (_event, spaceId: number, options?: unknown) => {
     const id = assertSpaceId(spaceId);
@@ -3003,6 +3013,7 @@ async function runSpaceUiAudit(context: {
   profiles: BrowserProfileRegistry;
   presentation: PresentationCoordinator;
   overviewView: WebContentsView;
+  eventJournal: SpaceEventJournal;
 }) {
   const {
     testRoot,
@@ -3010,6 +3021,7 @@ async function runSpaceUiAudit(context: {
     profiles,
     presentation,
     overviewView,
+    eventJournal,
   } = context;
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   const initial = manager.listSpaces()[0];
@@ -3045,10 +3057,28 @@ async function runSpaceUiAudit(context: {
     true,
   );
   await wait(80);
-  await writeFile(
-    join(testRoot, "space-menu.png"),
-    await captureWebContentsPng(overviewView),
-  );
+  const traceScreenshotPath = join(testRoot, "space-trace-failure.png");
+  const menuPng = await captureWebContentsPng(overviewView);
+  await writeFile(join(testRoot, "space-menu.png"), menuPng);
+  await writeFile(traceScreenshotPath, menuPng);
+  const traceFixture = eventJournal.append({
+    spaceId: initial.id,
+    tabId: initial.activeTabId,
+    category: "action",
+    type: "action.finished",
+    data: {
+      action: "click",
+      target: { role: "button", name: "提交" },
+      status: "failed",
+      durationMs: 420,
+      error: {
+        name: "TimeoutError",
+        code: "EGO_ACTIONABILITY_FAILED",
+        message: "按钮被遮挡",
+      },
+      screenshot: traceScreenshotPath,
+    },
+  });
 
   await overviewView.webContents.executeJavaScript(
     `document.querySelector('[data-space-id="${initial.id}"] .card-menu-item:nth-child(2)')?.click()`,
@@ -3063,6 +3093,25 @@ async function runSpaceUiAudit(context: {
       visible: !document.querySelector('#trace-dialog-backdrop')?.hidden,
       title: document.querySelector('#trace-dialog-title')?.textContent || '',
       empty: document.querySelector('#trace-dialog-content .trace-empty strong')?.textContent || '',
+      rows: document.querySelectorAll('.trace-event-row').length,
+      detail: document.querySelector('.trace-event-row small')?.textContent || '',
+      screenshotButton: document.querySelector('.trace-screenshot-button')?.textContent || '',
+    }))()`,
+    true,
+  );
+  await overviewView.webContents.executeJavaScript(
+    `document.querySelector('.trace-screenshot-button')?.click()`,
+    true,
+  );
+  await waitForRenderer(
+    overviewView,
+    `!document.querySelector('#trace-screenshot-viewer')?.hidden && document.querySelector('#trace-screenshot-image')?.getAttribute('src')?.startsWith('data:image/png;base64,')`,
+  );
+  const traceScreenshot = await overviewView.webContents.executeJavaScript(
+    `(() => ({
+      visible: !document.querySelector('#trace-screenshot-viewer')?.hidden,
+      title: document.querySelector('#trace-screenshot-title')?.textContent || '',
+      imageReady: Boolean(document.querySelector('#trace-screenshot-image')?.getAttribute('src')?.startsWith('data:image/png;base64,')),
     }))()`,
     true,
   );
@@ -3072,6 +3121,7 @@ async function runSpaceUiAudit(context: {
   );
   await overviewView.webContents.executeJavaScript(
     `(() => {
+      document.querySelector('#trace-screenshot-close')?.click();
       document.querySelector('#trace-dialog-close')?.click();
       document.querySelector('[data-space-id="${initial.id}"] .card-menu-trigger')?.click();
     })()`,
@@ -3364,7 +3414,14 @@ async function runSpaceUiAudit(context: {
     menu.items === 3 &&
     traceDialog.visible === true &&
     /Agent 执行记录/.test(traceDialog.title) &&
-    traceDialog.empty === "还没有 Agent 记录" &&
+    traceDialog.empty === "" &&
+    traceDialog.rows === 1 &&
+    traceDialog.detail.includes("EGO_ACTIONABILITY_FAILED: 按钮被遮挡") &&
+    traceDialog.screenshotButton === "截图" &&
+    traceScreenshot.visible === true &&
+    traceScreenshot.imageReady === true &&
+    traceScreenshot.title.includes("失败 click") &&
+    traceFixture.sequence > 0 &&
     renameStarted.renaming === true &&
     renameStarted.focused === true &&
     renameStarted.value === initial.name &&
@@ -3436,6 +3493,7 @@ async function runSpaceUiAudit(context: {
         ok,
         menu,
         traceDialog,
+        traceScreenshot,
         renameStarted,
         storedName,
         finalDom,
