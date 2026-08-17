@@ -6,6 +6,7 @@
 - [Task Space lifecycle](#task-space-lifecycle)
 - [Host bindings](#host-bindings)
 - [Snapshot V2](#snapshot-v2)
+- [Workflow recorder and replay](#workflow-recorder-and-replay)
 - [Assertions and events](#assertions-and-events)
 - [Actionability and timeout errors](#actionability-and-timeout-errors)
 - [Request routing](#request-routing)
@@ -36,6 +37,11 @@ It also provides:
 `taskSpaces` provides `list`, `bootstrap`, `use`, `claim`, `complete`, `handOff`, `takeOver`, and `waitForAgentControl`. `bootstrap({ name, profileId?, url? })` always creates and verifies a fresh Space. `use(id)` accepts only an existing numeric Space ID and never creates, guesses by name, or changes Profile/Session. UFO extensions `taskSpaces.events.list`, `taskSpaces.trace.list`, and `taskSpaces.trace.export` expose the selected Space's bounded local diagnostic timeline.
 
 `site` provides optional learned site tools. `fetch.server` issues Node-side requests; `fetch.browser` issues requests from the active browser page. `cdp` sends a raw protocol command.
+
+`workflows` records successful traced actions as versioned local Recipes and
+replays them deterministically without an embedded LLM. `secret(value)` creates
+an in-memory value for a Recipe secret slot; its value is never written to the
+Workflow store.
 
 The global `expect(target)` helper provides auto-retrying locator/page assertions.
 
@@ -83,6 +89,10 @@ completeTaskSpace           markTaskSpaceError
 setAgentTaskState           getBrowserVersion
 listSpaceEvents             listAgentTrace
 exportAgentTrace
+startWorkflowRecording      finishWorkflowRecording
+cancelWorkflowRecording     listWorkflows
+getWorkflow                 prepareWorkflowReplay
+finishWorkflowReplay
 sendCDPMessage
 onCDPMessage                onSendCDPMessageError
 ```
@@ -155,6 +165,70 @@ cleared with the WebContents/App lifecycle. Selector roots and box lookups each
 have an explicit 2,000-node limit rather than silently doing unbounded work.
 Sensitive URL credentials/query parameters are redacted, and Snapshot delta
 text applies the same password/OTP/Token pattern redaction as Agent diagnostics.
+
+## Workflow recorder and replay
+
+Recording is explicit. Start it immediately before the reusable part of a
+successful flow, use normal flat helpers or `page` locators, then finish in the
+same heredoc:
+
+```js
+const recording = await workflows.start('register-account')
+
+await page.getByLabel('Email').fill('recording@example.com')
+await page.getByLabel('Password').fill('recording-only-secret')
+await page.getByRole('button', { name: 'Continue' }).click()
+
+const recipe = await recording.finish({
+  variables: ['email'],
+  secrets: ['password'],
+})
+```
+
+The compiler correlates successful Trace steps, records stable locator and
+role/name/label/parent semantics, explicit `nth` metadata, URL preconditions,
+post-step assertions, and observed navigation, Popup, Dialog, and Download
+waits. Form values become variables or secret slots before persistence. It
+does not save a coordinate macro and rejects unsupported or ambiguous actions.
+Recipes are independent of the source Space, retain bounded versions, and
+store per-version success/failure statistics. Learned `site.runTool` and
+`site.runBrowserTool` calls can be Recipe steps; they remain owned by the
+existing learned-site-tool subsystem.
+
+Replay requires every variable and requires `secret(...)` for every secret:
+
+```js
+const result = await workflows.replay('register-account', {
+  email: 'new@example.com',
+  password: secret('new-password'),
+})
+```
+
+Target recovery is finite: original locator, unique role/name, unique
+label/parent semantics, then the existing unique locator self-heal. A missing
+or multiple target stops replay; UFO never chooses the first candidate. The
+returned failure package contains the failed step, expected target, candidate
+counts, Snapshot delta, relevant journal events, and a screenshot path when
+capture succeeds.
+
+Payment, send, publish, delete, booking, account mutation, and other high-risk
+final actions return `waitingApproval` by default. Authorization must be
+explicitly scoped to both domain and action:
+
+```js
+await workflows.replay('publish-post', inputs, {
+  approval: {
+    highRisk: true,
+    domains: ['example.com'],
+    actions: ['click'],
+  },
+})
+```
+
+Inspect saved definitions with `await workflows.list()` and
+`await workflows.get(name, version?)`. Active recording data is memory-only and
+is discarded when its CLI connection closes; saved Recipes survive App and
+Space restarts.
 
 ## Assertions and events
 

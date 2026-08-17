@@ -1,4 +1,8 @@
 import { inspect } from "node:util";
+import {
+  executeWorkflowReplay,
+  secret as workflowSecret,
+} from "./workflow-replay.js";
 
 type AsyncHelper = (...args: any[]) => any;
 type HelperContext = Record<string, any>;
@@ -116,6 +120,41 @@ export function createEgoCompatibilityContext(
     spaceId: number,
     options: { path: string; format?: "markdown" | "json" },
   ) => call(host.exportAgentTrace, spaceId, options);
+  const workflows = {
+    start: async (name: string) => {
+      const recording = await call(host.startWorkflowRecording, name);
+      return Object.freeze({
+        ...recording,
+        finish: (options: Record<string, any> = {}) =>
+          call(host.finishWorkflowRecording, recording.id, options),
+        cancel: () => call(host.cancelWorkflowRecording, recording.id),
+      });
+    },
+    list: () => call(host.listWorkflows),
+    get: (name: string, version?: number) =>
+      call(host.getWorkflow, name, version),
+    replay: async (
+      name: string,
+      inputs: Record<string, any>,
+      options: Record<string, any> = {},
+    ) => {
+      const prepared = await call(host.prepareWorkflowReplay, name, {
+        version: options.version,
+      });
+      return executeWorkflowReplay(prepared, inputs, options, {
+        page: modern.page,
+        site: modern.site,
+        trace: (signal) => host.traceEvent?.(signal),
+        listEvents: (after, eventOptions = {}) =>
+          call(host.listSpaceEvents, prepared.spaceId, {
+            ...eventOptions,
+            after,
+          }),
+        report: (result) =>
+          call(host.finishWorkflowReplay, prepared.runId, result),
+      });
+    },
+  };
   const egoGlobals = Object.fromEntries(
     EGO_GLOBAL_HELPER_NAMES.flatMap((name) =>
       typeof harness[name] === "function" ? [[name, harness[name]]] : [],
@@ -223,6 +262,8 @@ export function createEgoCompatibilityContext(
       events: { list: listSpaceEvents },
       trace: { list: listAgentTrace, export: exportAgentTrace },
     },
+    workflows,
+    secret: workflowSecret,
     // Preserve Ego's complete raw global helper contract. The documented
     // aliases below intentionally override a few names where UFO-Browser must
     // convert Skill timeout values from seconds to milliseconds.
@@ -393,6 +434,10 @@ const LEGACY_HELP: Record<string, string> = {
     "listAgentTrace(spaceId, { after?, limit? }) => Promise<{ events, nextSequence, cursorExpired }>",
   exportAgentTrace:
     "exportAgentTrace(spaceId, { path, format? }) => Promise<{ path, format, events }>",
+  workflows:
+    "workflows.start(name) records successful traced actions until recording.finish({ variables?, secrets? }); workflows.replay(name, inputs, options?) deterministically replays without an LLM; workflows.list() and workflows.get(name, version?) inspect saved versions and statistics",
+  secret:
+    "secret(value) wraps an in-memory Workflow secret. Secret values are required for Workflow secret slots and are never persisted in a Recipe",
   elementCenter:
     "elementCenter(selectorOrRef) => Promise<{ x, y }>",
   js: "js(expression) => Promise<any>",

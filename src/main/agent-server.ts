@@ -11,6 +11,10 @@ import {
   SpaceEventJournal,
   type SpaceEventCategory,
 } from "./space-event-journal.js";
+import {
+  WorkflowService,
+  type WorkflowFinishOptions,
+} from "./workflow-service.js";
 
 type Connection = {
   id: string;
@@ -35,6 +39,7 @@ export class AgentServer {
     private readonly browserVersion = "0.1.6",
     private readonly journal?: SpaceEventJournal,
     private readonly trace?: AgentTraceService,
+    private readonly workflows?: WorkflowService,
   ) {}
 
   async listen() {
@@ -120,10 +125,17 @@ export class AgentServer {
     if (message.type === "trace-event") {
       try {
         const selected = this.assertAgentControl(connection);
-        this.trace?.receive(
+        const signal = normalizeTraceSignal(message.payload);
+        const event = this.trace?.receive(
           connection.id,
           selected.spaceId,
-          normalizeTraceSignal(message.payload),
+          signal,
+        );
+        this.workflows?.captureTrace(
+          connection.id,
+          selected.spaceId,
+          signal,
+          event,
         );
       } catch {
         // Trace is diagnostic and must never delay or fail the real action.
@@ -280,6 +292,67 @@ export class AgentServer {
         if (!this.trace) throw new Error("EGO_OPERATION_FAILED: trace unavailable");
         return this.trace.export(spaceId, traceExportOptions(args[1]));
       }
+      case "startWorkflowRecording": {
+        const { spaceId } = this.assertAgentControl(connection);
+        if (!this.workflows) {
+          throw new Error("EGO_OPERATION_FAILED: workflows unavailable");
+        }
+        return this.workflows.start(connection.id, spaceId, args[0]);
+      }
+      case "finishWorkflowRecording": {
+        const { spaceId } = this.assertAgentControl(connection);
+        if (!this.workflows) {
+          throw new Error("EGO_OPERATION_FAILED: workflows unavailable");
+        }
+        return this.workflows.finish(
+          connection.id,
+          spaceId,
+          args[0],
+          workflowFinishOptions(args[1]),
+        );
+      }
+      case "cancelWorkflowRecording": {
+        const { spaceId } = this.assertAgentControl(connection);
+        if (!this.workflows) {
+          throw new Error("EGO_OPERATION_FAILED: workflows unavailable");
+        }
+        return this.workflows.cancel(connection.id, spaceId, args[0]);
+      }
+      case "listWorkflows": {
+        this.assertAgentControl(connection);
+        return this.workflows?.list() ?? { workflows: [], limit: 0 };
+      }
+      case "getWorkflow": {
+        this.assertAgentControl(connection);
+        if (!this.workflows) {
+          throw new Error("EGO_OPERATION_FAILED: workflows unavailable");
+        }
+        return this.workflows.get(args[0], args[1]);
+      }
+      case "prepareWorkflowReplay": {
+        const { spaceId } = this.assertAgentControl(connection);
+        if (!this.workflows) {
+          throw new Error("EGO_OPERATION_FAILED: workflows unavailable");
+        }
+        return this.workflows.prepareReplay(
+          connection.id,
+          spaceId,
+          args[0],
+          workflowReplayOptions(args[1]),
+        );
+      }
+      case "finishWorkflowReplay": {
+        const { spaceId } = this.assertAgentControl(connection);
+        if (!this.workflows) {
+          throw new Error("EGO_OPERATION_FAILED: workflows unavailable");
+        }
+        return this.workflows.finishReplay(
+          connection.id,
+          spaceId,
+          args[0],
+          workflowReplayResult(args[1]),
+        );
+      }
       case "snapshot": {
         const { spaceId } = this.assertAgentControl(connection);
         return this.snapshotService.snapshot(spaceId, args[0]);
@@ -406,6 +479,7 @@ export class AgentServer {
   private disconnect(connection: Connection) {
     if (!this.connections.delete(connection.id)) return;
     this.trace?.disconnect(connection.id);
+    this.workflows?.disconnect(connection.id);
     this.release(connection);
     this.leases.releaseConnection(connection.id);
     this.broker.removeConnection(connection.id);
@@ -416,6 +490,31 @@ export class AgentServer {
       connection.socket.write(`${JSON.stringify(message)}\n`);
     }
   }
+}
+
+function workflowFinishOptions(value: unknown): WorkflowFinishOptions {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("workflow finish options must be an object");
+  }
+  const input = value as Record<string, unknown>;
+  return { variables: input.variables as any, secrets: input.secrets as any };
+}
+
+function workflowReplayOptions(value: unknown) {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("workflow replay options must be an object");
+  }
+  return { version: (value as Record<string, unknown>).version };
+}
+
+function workflowReplayResult(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("workflow replay result must be an object");
+  }
+  const input = value as Record<string, unknown>;
+  return { status: input.status, durationMs: input.durationMs };
 }
 
 function normalizeTraceSignal(value: unknown): AgentTraceSignal {

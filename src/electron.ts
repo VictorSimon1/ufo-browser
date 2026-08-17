@@ -20,6 +20,7 @@ import {
 import { SnapshotService } from "./main/snapshot.js";
 import { AgentTraceService } from "./main/agent-trace.js";
 import { SpaceEventJournal } from "./main/space-event-journal.js";
+import { WorkflowService } from "./main/workflow-service.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
 import {
@@ -450,6 +451,10 @@ async function start() {
   });
   await eventJournal.initialize();
   const agentTrace = new AgentTraceService(eventJournal, manager);
+  const workflows = new WorkflowService(eventJournal, {
+    directory: join(app.getPath("userData"), "Agent Workflows"),
+  });
+  await workflows.initialize();
   const broker = new CdpBroker(manager, leases, eventJournal);
   const socketPath = isTestApp
     ? join(testRoot, "x-browser.sock")
@@ -463,6 +468,7 @@ async function start() {
     app.getVersion(),
     eventJournal,
     agentTrace,
+    workflows,
   );
   const assistantWorkspace = join(app.getPath("userData"), "Assistant Workspace");
   const skillSource = app.isPackaged
@@ -1056,6 +1062,7 @@ async function start() {
       .catch(() => undefined)
       .then(() => profileSync.close().catch(() => undefined))
       .then(() => eventJournal.flush().catch(() => undefined))
+      .then(() => workflows.flush().catch(() => undefined))
       .then(() => manager.flushState().catch(() => undefined))
       .then(() => {
         if (!captureWindow.isDestroyed()) captureWindow.close();

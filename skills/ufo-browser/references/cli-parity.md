@@ -35,6 +35,8 @@ operation timings in
 | Request routing | Raw CDP available | `page.route`, `unroute`, `unrouteAll` | Glob/RegExp/predicate matching with continue/fulfill/abort. |
 | Storage state | Profile login state reused implicitly | `page.storageState`, `setStorageState` | Explicit Cookie/current-origin localStorage export and restore; not Chrome profile decryption. |
 | Performance tracing | Raw CDP available | `page.tracing.start`, `stop` | Writes Chrome Trace/Perfetto-compatible JSON. |
+| Persistent action diagnostics | Current-process events | `taskSpaces.events` and `taskSpaces.trace` | Deliberate UFO extension with bounded, redacted, restart-safe cursors. |
+| Deterministic Workflow replay | Not exposed by the audited runtime | `workflows.start/replay/list/get` | Deliberate UFO extension; versioned local Recipes, finite locator recovery, secret slots, and high-risk approval. |
 | Flat download/screencast aliases | Not injected in either audited runtime | Structured UFO facades remain available | Not part of the shared installed contract. |
 
 ## Latest measured workflow
@@ -64,3 +66,6 @@ GPU parking, and live-preview tests remain separate hard gates.
   restored after restart.
 - UFO adds bounded Overview rendering, preview caching, and adaptive GPU
   cadence outside the shared CLI contract.
+- UFO adds Snapshot V2 deltas, persistent Agent diagnostics, and local
+  deterministic Workflow replay. These are additive facades; they do not
+  rename or change the shared Ego-compatible helper surface.

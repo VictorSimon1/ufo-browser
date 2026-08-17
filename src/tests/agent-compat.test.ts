@@ -38,6 +38,9 @@ test("the complete Ego global helper contract is exposed unchanged", () => {
   assert.equal(context.createTab("https://example.com"), "createTab");
   assert.equal(context.getBrowserVersion(), "getBrowserVersion");
   assert.equal(context.iframeTarget(), "iframeTarget");
+  assert.equal(typeof context.workflows.start, "function");
+  assert.equal(typeof context.workflows.replay, "function");
+  assert.equal(typeof context.secret, "function");
   assert.throws(
     () => context.createTab(),
     /ego\.createTab\(url\) expects a string URL/,
@@ -175,6 +178,8 @@ test("legacy ego Skill helper names map to the facade harness", async () => {
   ]);
   assert.match(context.help("snapshotText"), /semantic page tree/);
   assert.match(context.help("snapshotRaw"), /structured semantic snapshot/);
+  assert.match(context.help("workflows"), /deterministically replays/);
+  assert.match(context.help("secret"), /never persisted/);
   assert.match(String(output[0][0]), /ok: true/);
 });
 

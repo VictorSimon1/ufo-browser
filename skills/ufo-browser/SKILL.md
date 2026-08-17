@@ -29,7 +29,7 @@ EOF
 
 The heredoc body runs as a Node.js script that controls the selected ufo-browser task space. All ufo-browser helpers are preloaded into that script.
 
-The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and Ego Skill 1.2.3. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, and `fetch` facades plus selected forward-compatible helpers. Read [references/cli-parity.md](references/cli-parity.md) for the measured capability matrix and [references/api.md](references/api.md) for host protocol details.
+The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and Ego Skill 1.2.3. UFO-Browser also exposes the structured `page`, `browser`, `taskSpaces`, `site`, `workflows`, and `fetch` facades plus selected forward-compatible helpers. Read [references/cli-parity.md](references/cli-parity.md) for the measured capability matrix and [references/api.md](references/api.md) for host protocol details.
 
 ## Common helpers
 
@@ -43,6 +43,7 @@ The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and E
 - Fetch: `serverFetch`, `browserFetch`
 - CDP / evaluate: `js`, `cdp`
 - Output: `cliLog`, `help`
+- Reusable workflows: `workflows.start`, `workflows.replay`, `workflows.list`, `workflows.get`, `secret`
 
 Notes:
 - `cliLog(value)` — prints to the terminal; it is the only output mechanism inside a heredoc, and all final results must go through it.
@@ -65,6 +66,7 @@ For Playwright-style automation, use the structured `page` facade:
 - Events: `page.on/off/once` and `page.waitForEvent` support `console`, `pageerror`, `request`, and `requestfailed`; popup/download waits remain supported.
 - Persistent diagnostics: `await taskSpaces.events.list(spaceId, { after, categories, limit })` reads the App-owned bounded event journal across separate heredoc rounds. `await taskSpaces.trace.list(spaceId, options)` returns Agent action steps, and `await taskSpaces.trace.export(spaceId, { path, format: 'markdown' | 'json' })` writes a redacted local report. Flat aliases `listSpaceEvents`, `listAgentTrace`, and `exportAgentTrace` are also available.
 - Snapshot V2: use `await snapshotRaw({ interactive: true, compact: true, selector, depth, urls, boxes })` when structured metadata is useful. Save its `revision`, then pass `sinceRevision` with the same view options to receive a small `kind: 'delta'` result. Navigation, an expired baseline, an oversized change set, or incomplete iframe coverage safely returns `kind: 'full'` with `fallbackReason`. `snapshotText(options)` accepts the same options but returns only `content` for Ego compatibility.
+- Deterministic Workflow replay: explicitly start `const recording = await workflows.start(name)`, complete a successful flow with normal helpers, then call `await recording.finish({ variables, secrets })` in the same heredoc. Later use `await workflows.replay(name, inputs)` and wrap every secret value with `secret(value)`. Replay contains no LLM, never guesses among multiple elements, and returns a recovery package on failure. High-risk final actions return `waitingApproval` unless the caller explicitly allows both the current domain and action through `options.approval`.
 - Actionability: locator clicks wait for visibility, enabled state, stability, and an unobstructed hit target. `click({ trial: true })` checks without clicking. Use `force: true` only when intentionally bypassing normal page hit-testing. If an action is intercepted, inspect the reported overlay/dialog before retrying.
 
 
@@ -236,6 +238,13 @@ Before writing substantial content into a rich editor, perform a tiny write prob
 
 These workflows can be combined. A task may take multiple heredoc rounds when the next step depends on fresh page state or user handoff. In each round, write a coherent script that advances the task: observe, act or extract, verify, and report with `cliLog(...)`. Avoid tiny probe scripts, but don't force the whole task into one oversized script.
 
+When the same stable flow will run again with different inputs, record only the
+reusable segment after it succeeds once. Do not record exploratory failures.
+Workflow recording is tied to the current CLI connection and must be finished
+in that heredoc; the compiled Recipe and statistics are App-owned and survive
+Space closure. A Recipe can invoke existing learned site tools, but does not
+copy or replace their manifests.
+
 
 ## Caveats
 
@@ -251,3 +260,4 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 - Code in the heredoc body runs in Node.js; code inside `js(...)` runs in the browser page. Navigation, waits, and `cliLog(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `js(...)`.
 - Always call `completeTaskSpace(name, { keep })` when the task is done — do not leave the space hanging. Default to `{ keep: false }`; use `{ keep: true }` only for the concrete live-page cases described in Task spaces.
 - When diagnosing a failure that happened in a prior CLI round, prefer `taskSpaces.events.list(spaceId, { after })` over repeating the action. Event records are bounded and redact credentials; they intentionally do not contain response bodies, passwords, Cookies, Authorization headers, or OTP values.
+- Workflow secret slots accept only `secret(value)`. Never place passwords, OTPs, Tokens, Cookie values, card data, or credentials in variable slots. A replay that reaches `waitingApproval` has not executed the risky step; review `requiredApproval` and pass a domain-and-action-scoped policy only after the user has authorized that external side effect.

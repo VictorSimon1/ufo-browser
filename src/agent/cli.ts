@@ -23,6 +23,7 @@ class AgentHost {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private buffer = "";
+  private activeWorkflowRecordingId?: string;
 
   constructor(private readonly socket: Socket) {
     socket.setEncoding("utf8");
@@ -57,6 +58,36 @@ class AgentHost {
     this.rpc("listAgentTrace", spaceId, options);
   exportAgentTrace = (spaceId: number, options: unknown) =>
     this.rpc("exportAgentTrace", spaceId, options);
+  startWorkflowRecording = async (name: string) => {
+    const recording: any = await this.rpc("startWorkflowRecording", name);
+    this.activeWorkflowRecordingId = recording.id;
+    return recording;
+  };
+  finishWorkflowRecording = async (recordingId: string, options?: unknown) => {
+    const recipe = await this.rpc(
+      "finishWorkflowRecording",
+      recordingId,
+      options,
+    );
+    if (this.activeWorkflowRecordingId === recordingId) {
+      this.activeWorkflowRecordingId = undefined;
+    }
+    return recipe;
+  };
+  cancelWorkflowRecording = async (recordingId: string) => {
+    const result = await this.rpc("cancelWorkflowRecording", recordingId);
+    if (this.activeWorkflowRecordingId === recordingId) {
+      this.activeWorkflowRecordingId = undefined;
+    }
+    return result;
+  };
+  listWorkflows = () => this.rpc("listWorkflows");
+  getWorkflow = (name: string, version?: number) =>
+    this.rpc("getWorkflow", name, version);
+  prepareWorkflowReplay = (name: string, options?: unknown) =>
+    this.rpc("prepareWorkflowReplay", name, options);
+  finishWorkflowReplay = (runId: string, result: unknown) =>
+    this.rpc("finishWorkflowReplay", runId, result);
   snapshot = (options?: unknown) => this.rpc("snapshot", options);
   resolveRef = (refId: number) => this.rpc("resolveRef", refId);
   handOffTaskSpace = () => this.rpc("handOffTaskSpace");
@@ -67,6 +98,10 @@ class AgentHost {
   animationHighlightMouseToPosition = (...args: unknown[]) =>
     this.rpc("animationHighlightMouseToPosition", ...args);
   getBrowserVersion = () => this.rpc("getBrowserVersion");
+
+  isWorkflowRecordingActive() {
+    return Boolean(this.activeWorkflowRecordingId);
+  }
 
   traceEvent = (payload: unknown) => {
     this.write({ type: "trace-event", payload });
@@ -198,35 +233,133 @@ function instrumentAgentActions(context: Record<string, any>, host: AgentHost) {
   ];
   for (const action of actions) {
     if (typeof context[action] !== "function") continue;
-    context[action] = tracedAction(host, action, context[action]);
+    context[action] = tracedAction(host, action, context[action], (...args) =>
+      summarizeTopLevelActionTarget(
+        context,
+        host,
+        action,
+        args,
+      ),
+    );
   }
   if (context.page && typeof context.page === "object") {
-    for (const action of ["goto", "reload", "snapshot", "snapshotRaw", "screenshot"]) {
+    for (const action of [
+      "goto",
+      "reload",
+      "snapshot",
+      "snapshotRaw",
+      "screenshot",
+      "waitForEvent",
+      "waitForURL",
+      "waitForLoadState",
+    ]) {
       if (typeof context.page[action] !== "function") continue;
+      const original = context.page[action].bind(context.page);
+      const operation =
+        action === "waitForEvent"
+          ? async (...args: any[]) => {
+              const result = await original(...args);
+              if (args[0] === "popup" && result && typeof result === "object") {
+                instrumentPageLocators(result, host, "popup");
+              }
+              return result;
+            }
+          : original;
       context.page[action] = tracedAction(
         host,
         `page.${action}`,
-        context.page[action],
+        operation,
+        (...args) =>
+          summarizeActionTarget(
+            `page.${action}`,
+            args,
+            host.isWorkflowRecordingActive(),
+          ),
+      );
+    }
+    instrumentPageLocators(context.page, host);
+  }
+  if (context.site && typeof context.site === "object") {
+    for (const action of ["runTool", "runBrowserTool"]) {
+      if (typeof context.site[action] !== "function") continue;
+      context.site[action] = tracedAction(
+        host,
+        `site.${action}`,
+        context.site[action],
+        (...args) => ({
+          siteId: summarizeValue(args[0]),
+          toolName: summarizeValue(args[1]),
+          args: host.isWorkflowRecordingActive() ? args[2] : "[redacted]",
+        }),
       );
     }
   }
+}
+
+function summarizeTopLevelActionTarget(
+  context: Record<string, any>,
+  host: AgentHost,
+  action: string,
+  args: any[],
+) {
+  const details: any = summarizeActionTarget(
+    action,
+    args,
+    host.isWorkflowRecordingActive(),
+  );
+  if (
+    !host.isWorkflowRecordingActive() ||
+    typeof args[0] !== "string" ||
+    ![
+      "click",
+      "doubleClick",
+      "fillInput",
+    ].includes(action) ||
+    typeof context.page?.locator !== "function"
+  ) {
+    return details;
+  }
+  return inspectLocatorSemantics(context.page.locator(args[0])).then(
+    (semantics) => ({ ...details, semantics }),
+  );
 }
 
 function tracedAction(
   host: AgentHost,
   action: string,
   operation: (...args: any[]) => any,
+  targetFactory: (...args: any[]) => unknown = (...args) =>
+    summarizeActionTarget(action, args, host.isWorkflowRecordingActive()),
 ) {
   return async (...args: any[]) => {
     const stepId = `${process.pid}-${Date.now().toString(36)}-${Math.random()
       .toString(36)
       .slice(2, 9)}`;
     const startedAt = performance.now();
+    let target: unknown;
+    try {
+      const candidate = targetFactory(...args);
+      target = isPromiseLike(candidate)
+        ? await candidate.catch(() =>
+            summarizeActionTarget(
+              action,
+              args,
+              host.isWorkflowRecordingActive(),
+            ),
+          )
+        : candidate;
+    } catch {
+      target = summarizeActionTarget(
+        action,
+        args,
+        host.isWorkflowRecordingActive(),
+      );
+    }
     host.traceEvent({
       phase: "started",
       stepId,
       action,
-      target: summarizeActionTarget(action, args),
+      target,
     });
     try {
       const result = await operation(...args);
@@ -252,16 +385,226 @@ function tracedAction(
   };
 }
 
-function summarizeActionTarget(action: string, args: any[]) {
-  if (action === "fillInput" || action === "typeText") {
-    return { target: summarizeValue(args[0]), value: "[redacted]" };
+function summarizeActionTarget(
+  action: string,
+  args: any[],
+  includeRecordedValue = false,
+) {
+  if (
+    action === "fillInput" ||
+    action === "typeText" ||
+    action === "locator.fill"
+  ) {
+    return {
+      target: summarizeValue(args[0]),
+      value: includeRecordedValue ? args[1] : "[redacted]",
+    };
   }
   if (action === "uploadFile") {
     return { target: summarizeValue(args[0]), path: "[redacted]" };
   }
   if (action === "pressKey") return { key: summarizeValue(args[0]) };
+  if (action === "gotoAndWait" || action === "page.goto") {
+    return { url: summarizeValue(args[0]) };
+  }
+  if (action === "page.waitForEvent") {
+    return { eventName: summarizeValue(args[0]) };
+  }
   if (action.includes("snapshot") || action.includes("Screenshot")) return {};
   return { target: summarizeValue(args[0]) };
+}
+
+function instrumentPageLocators(
+  page: Record<string, any>,
+  host: AgentHost,
+  pageContext: "page" | "popup" = "page",
+) {
+  const locatorCache = new WeakMap<object, any>();
+  const frameCache = new WeakMap<object, any>();
+  const locatorBuilders = [
+    "locator",
+    "getByRole",
+    "getByText",
+    "getByLabel",
+    "getByPlaceholder",
+    "getByAltText",
+    "getByTitle",
+    "getByTestId",
+    "filter",
+    "all",
+    "first",
+    "last",
+    "nth",
+  ];
+  const locatorActions: Record<string, string> = {
+    click: "locator.click",
+    dblclick: "locator.dblclick",
+    fill: "locator.fill",
+    clear: "locator.fill",
+    press: "locator.press",
+    check: "locator.check",
+    uncheck: "locator.uncheck",
+    setChecked: "locator.check",
+    selectOption: "locator.selectOption",
+    setInputFiles: "locator.setInputFiles",
+    dragTo: "locator.dragTo",
+  };
+
+  const wrapLocator = (value: any): any => {
+    if (!value || typeof value !== "object") return value;
+    const cached = locatorCache.get(value);
+    if (cached) return cached;
+    locatorCache.set(value, value);
+    for (const name of locatorBuilders) {
+      if (typeof value[name] !== "function") continue;
+      const original = value[name].bind(value);
+      value[name] = (...args: any[]) => {
+        const result = original(...args);
+        if (name === "all" && result && typeof result.then === "function") {
+          return result.then((items: any[]) => items.map(wrapLocator));
+        }
+        return wrapLocator(result);
+      };
+    }
+    for (const [name, action] of Object.entries(locatorActions)) {
+      if (typeof value[name] !== "function") continue;
+      const original = value[name].bind(value);
+      value[name] = tracedAction(host, action, original, (...args) => {
+        const details: Record<string, unknown> = {
+          locator: String(value.selector ?? ""),
+          pageContext,
+        };
+        if (action === "locator.fill") {
+          details.value = host.isWorkflowRecordingActive()
+            ? name === "clear"
+              ? ""
+              : args[0]
+            : "[redacted]";
+        } else if (action === "locator.press") {
+          details.key = args[0];
+        } else if (action === "locator.selectOption") {
+          details.value = host.isWorkflowRecordingActive()
+            ? args[0]
+            : "[redacted]";
+        } else if (action === "locator.check" && name === "setChecked") {
+          details.checked = Boolean(args[0]);
+        }
+        if (host.isWorkflowRecordingActive()) {
+          return inspectLocatorSemantics(value).then((semantics) => ({
+            ...details,
+            semantics,
+          }));
+        }
+        return details;
+      });
+    }
+    return value;
+  };
+
+  const wrapFrame = (value: any): any => {
+    if (!value || typeof value !== "object") return value;
+    const cached = frameCache.get(value);
+    if (cached) return cached;
+    frameCache.set(value, value);
+    for (const name of locatorBuilders) {
+      if (typeof value[name] !== "function") continue;
+      const original = value[name].bind(value);
+      value[name] = (...args: any[]) => {
+        const result = original(...args);
+        return name === "first" || name === "last" || name === "nth"
+          ? wrapFrame(result)
+          : wrapLocator(result);
+      };
+    }
+    if (typeof value.frameLocator === "function") {
+      const original = value.frameLocator.bind(value);
+      value.frameLocator = (...args: any[]) => wrapFrame(original(...args));
+    }
+    return value;
+  };
+
+  for (const name of locatorBuilders.filter((item) => item !== "filter")) {
+    if (typeof page[name] !== "function") continue;
+    const original = page[name].bind(page);
+    page[name] = (...args: any[]) => wrapLocator(original(...args));
+  }
+  if (typeof page.frameLocator === "function") {
+    const original = page.frameLocator.bind(page);
+    page.frameLocator = (...args: any[]) => wrapFrame(original(...args));
+  }
+}
+
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return Boolean(
+    value &&
+      (typeof value === "object" || typeof value === "function") &&
+      typeof (value as Promise<unknown>).then === "function",
+  );
+}
+
+async function inspectLocatorSemantics(locator: Record<string, any>) {
+  if (typeof locator.evaluate !== "function") return undefined;
+  return locator.evaluate((element: Element) => {
+    const text = (value: unknown, max = 256) =>
+      String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max) || undefined;
+    const roleOf = (node: Element | null) => {
+      if (!node) return undefined;
+      const explicit = node.getAttribute("role");
+      if (explicit) return explicit;
+      const tag = node.tagName.toLowerCase();
+      if (tag === "button") return "button";
+      if (tag === "a" && node.hasAttribute("href")) return "link";
+      if (tag === "textarea") return "textbox";
+      if (tag === "select") return "combobox";
+      if (tag === "form") return "form";
+      if (tag === "fieldset") return "group";
+      if (tag === "input") {
+        const type = (node.getAttribute("type") || "text").toLowerCase();
+        if (type === "checkbox") return "checkbox";
+        if (type === "radio") return "radio";
+        if (["button", "submit", "reset"].includes(type)) return "button";
+        return "textbox";
+      }
+      return undefined;
+    };
+    const label =
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLSelectElement
+        ? text(Array.from(element.labels || []).map((item) => item.innerText).join(" "))
+        : undefined;
+    const name = text(
+      element.getAttribute("aria-label") ||
+        element.getAttribute("title") ||
+        label ||
+        (element instanceof HTMLInputElement ? element.placeholder : "") ||
+        element.textContent,
+    );
+    const parentNode = element.closest(
+      "[role], fieldset, form, section, article, nav, main, aside",
+    );
+    const parent =
+      parentNode && parentNode !== element
+        ? {
+            role: roleOf(parentNode),
+            name: text(
+              parentNode.getAttribute("aria-label") ||
+                parentNode.querySelector("legend, h1, h2, h3, h4")?.textContent,
+            ),
+          }
+        : undefined;
+    return {
+      role: roleOf(element),
+      name,
+      label,
+      parent,
+      pageUrl: location.href,
+      adjacent: {
+        before: text(element.previousElementSibling?.textContent),
+        after: text(element.nextElementSibling?.textContent),
+      },
+    };
+  });
 }
 
 function summarizeValue(value: unknown): unknown {

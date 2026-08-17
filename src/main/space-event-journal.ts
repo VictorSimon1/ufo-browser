@@ -53,6 +53,7 @@ const SENSITIVE_TEXT =
 export class SpaceEventJournal {
   private readonly events = new Map<number, SpaceEvent[]>();
   private readonly writeQueues = new Map<number, Promise<void>>();
+  private readonly dirtySpaces = new Set<number>();
   private readonly maxEventsPerSpace: number;
   private readonly maxAgeMs: number;
   private readonly now: () => number;
@@ -151,7 +152,10 @@ export class SpaceEventJournal {
   }
 
   async flush() {
-    await Promise.allSettled(this.writeQueues.values());
+    while (this.writeQueues.size || this.dirtySpaces.size) {
+      for (const spaceId of this.dirtySpaces) this.schedulePersist(spaceId);
+      await Promise.allSettled([...this.writeQueues.values()]);
+    }
   }
 
   private bound(events: SpaceEvent[]) {
@@ -164,16 +168,27 @@ export class SpaceEventJournal {
 
   private schedulePersist(spaceId: number) {
     if (!this.options.directory) return;
-    const previous = this.writeQueues.get(spaceId) ?? Promise.resolve();
-    const queued = previous
-      .catch(() => undefined)
-      .then(() => this.persist(spaceId));
+    this.dirtySpaces.add(spaceId);
+    if (this.writeQueues.has(spaceId)) return;
+    // Action start/finish and their CDP diagnostics arrive in tight bursts.
+    // Coalesce them so tracing never turns one browser action into several
+    // whole-file rewrites on the event loop's I/O completion path.
+    const queued = new Promise<void>((resolve) => setTimeout(resolve, 12)).then(
+      async () => {
+        while (this.dirtySpaces.delete(spaceId)) {
+          await this.persist(spaceId);
+        }
+      },
+    );
     this.writeQueues.set(spaceId, queued);
-    void queued.finally(() => {
-      if (this.writeQueues.get(spaceId) === queued) {
-        this.writeQueues.delete(spaceId);
-      }
-    });
+    void queued
+      .finally(() => {
+        if (this.writeQueues.get(spaceId) === queued) {
+          this.writeQueues.delete(spaceId);
+        }
+        if (this.dirtySpaces.has(spaceId)) this.schedulePersist(spaceId);
+      })
+      .catch(() => undefined);
   }
 
   private async persist(spaceId: number) {

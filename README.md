@@ -101,6 +101,7 @@ Common helpers include:
 - Input: `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `typeText`, `pressKey`, `scroll`
 - Browser access: `js`, `cdp`, `browserFetch`, `serverFetch`
 - Diagnostics: `listSpaceEvents`, `listAgentTrace`, `exportAgentTrace`, `taskSpaces.events.list`, `taskSpaces.trace.list/export`
+- Deterministic local Recipes: `workflows.start/replay/list/get` with version history, finite locator recovery, failure evidence, and non-persistent `secret(...)` values
 
 See [skills/ufo-browser/SKILL.md](skills/ufo-browser/SKILL.md) for the complete workflow and [skills/ufo-browser/references/cli-parity.md](skills/ufo-browser/references/cli-parity.md) for the Ego compatibility matrix.
 
