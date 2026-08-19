@@ -166,6 +166,55 @@ have an explicit 2,000-node limit rather than silently doing unbounded work.
 Sensitive URL credentials/query parameters are redacted, and Snapshot delta
 text applies the same password/OTP/Token pattern redaction as Agent diagnostics.
 
+## Profile-aware Browser Request
+
+Use `page.request(url, options?)` or its identical alias
+`fetch.profile(url, options?)` when a direct API request must share the selected
+Space/Profile network identity:
+
+```js
+const response = await page.request('/api/me', {
+  method: 'GET',
+  timeoutMs: 20_000,
+})
+
+cliLog({
+  status: response.status,
+  user: await response.json(),
+})
+```
+
+The App main process calls Electron `Session.fetch()` on the exact Chromium
+Session owned by the selected Space. Profile Cookies are included by default,
+`Set-Cookie` updates the same Session, and the configured proxy, User-Agent,
+Accept-Language, and Client Hints are reused. This does not create or wake a
+page renderer and page CORS does not apply. Relative URLs resolve against the
+active tab URL. Temporary Spaces remain isolated because every Temporary Space
+owns a unique memory-only Session.
+
+Options are `method`, string-valued `headers`, `body` (string,
+`URLSearchParams`, Buffer, ArrayBuffer, or typed array), `json`, `timeoutMs`,
+`maxResponseBytes`, `redirect` (`follow` or `error`), and
+`credentials` (`include`, `same-origin`, or `omit`). The default timeout is 20
+seconds. Request bodies are capped at 1 MiB; response bodies default to and are
+hard-capped at 4 MiB. Only HTTP(S) URLs are accepted. URL credentials and the
+`CONNECT`, `TRACE`, and `TRACK` methods are rejected.
+
+The response exposes `status`, `statusText`, `ok`, `url`, `redirected`, `bytes`,
+`headers()`, `header(name)`, `text()`, `json()`, and `body()`. Response
+`Set-Cookie` is deliberately hidden from the facade because Chromium already
+applies it to the Session. `Cookie`, `Host`, `Content-Length`, `Connection`,
+`Proxy-*`, `Sec-*`, `User-Agent`, and `Accept-Language` request headers cannot
+be overridden; they remain owned by the Profile. `Authorization` and custom
+CSRF headers are allowed but their values, all request bodies, and all response
+bodies are excluded from the persistent event journal. Events contain only
+method, origin, redacted path, status, duration, redirect flag, and byte count.
+
+Profile Request uses the same ownership and generation lease gate as page/CDP
+operations. A user-owned or handed-off Space returns
+`EGO_TASK_SPACE_USER_IN_CONTROL`; it never silently takes control or switches
+to another Profile.
+
 ## Workflow recorder and replay
 
 Recording is explicit. Start it immediately before the reusable part of a

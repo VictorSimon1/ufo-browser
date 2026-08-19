@@ -15,6 +15,7 @@ import {
   WorkflowService,
   type WorkflowFinishOptions,
 } from "./workflow-service.js";
+import { ProfileRequestService } from "./profile-request.js";
 
 type Connection = {
   id: string;
@@ -40,6 +41,7 @@ export class AgentServer {
     private readonly journal?: SpaceEventJournal,
     private readonly trace?: AgentTraceService,
     private readonly workflows?: WorkflowService,
+    private readonly profileRequests?: ProfileRequestService,
   ) {}
 
   async listen() {
@@ -357,6 +359,18 @@ export class AgentServer {
       case "snapshot": {
         const { spaceId } = this.assertAgentControl(connection);
         return this.snapshotService.snapshot(spaceId, args[0]);
+      }
+      case "profileRequest": {
+        const { spaceId } = this.assertAgentControl(connection);
+        if (!this.profileRequests) {
+          throw new Error("EGO_OPERATION_FAILED: Profile Request unavailable");
+        }
+        return this.profileRequests.request(
+          spaceId,
+          connection.id,
+          args[0],
+          args[1],
+        );
       }
       case "resolveRef": {
         const { spaceId } = this.assertAgentControl(connection);

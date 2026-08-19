@@ -40,7 +40,7 @@ The shared flat helper contract matches the installed Ego 0.4.6.12 runtime and E
 - Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
 - File: `uploadFile`
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
-- Fetch: `serverFetch`, `browserFetch`
+- Fetch: `serverFetch`, `browserFetch`, `page.request`, `fetch.profile`
 - CDP / evaluate: `js`, `cdp`
 - Output: `cliLog`, `help`
 - Reusable workflows: `workflows.start`, `workflows.replay`, `workflows.list`, `workflows.get`, `secret`
@@ -54,12 +54,14 @@ Notes:
 - `await drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
 - `await serverFetch(url, options)` — issues a request from Node and returns the response body.
 - `await browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
+- `await page.request(url, options)` / `await fetch.profile(url, options)` — issues a request from the App main process through the selected Space/Profile Chromium Session. It includes Profile Cookies by default, writes `Set-Cookie` back to that Session, reuses proxy/UA/language/Client Hints, does not require a loaded page renderer, and is not subject to page CORS. The structured response exposes `status`, `ok`, `url`, `headers()`, `header(name)`, `text()`, `json()`, and `body()`. Timeouts use `timeoutMs`; request bodies are capped at 1 MiB and responses at 4 MiB. Do not use it after handing the Space to the user.
 - `help(name)` — prints usage for a given helper, e.g. `cliLog(help('click'))`.
 
 For Playwright-style automation, use the structured `page` facade:
 
 - Frames and popups: `page.frameLocator(...)` supports nested same-process and cross-origin iframes; arm `page.waitForEvent('popup')` before the click that opens a new tab.
 - Network interception: `page.route(matcher, handler, { times })`, `page.unroute(...)`, and `page.unrouteAll()` support glob, RegExp, and predicate matchers plus `route.continue()`, `route.fulfill()`, and `route.abort()`.
+- Profile-aware requests: prefer `page.request('/api/me')` or `fetch.profile(...)` when an API call must reuse the selected Profile login state but should not depend on renderer availability or CORS. Relative URLs use the active tab only as a base URL; no page JavaScript runs. `Cookie`, `Host`, `Content-Length`, `Connection`, `Proxy-*`, `Sec-*`, `User-Agent`, and `Accept-Language` cannot be overridden. Request headers/body and response `Set-Cookie` values are never written to Agent events.
 - Session state: `page.storageState({ path })` captures all cookies in the selected UFO profile and localStorage for the current page origin. `page.setStorageState(stateOrPath, { clear })` restores them. State files contain live credentials in plaintext; protect them and delete them when no longer needed. This does not unlock or import an encrypted Chrome profile.
 - Performance traces: `page.tracing.start(...)` and `page.tracing.stop({ path })` write Chrome Trace/Perfetto-compatible JSON.
 - Assertions: `await expect(locator).toHaveText(...)`, `toBeVisible`, `toBeEnabled`, `toHaveCount`, `toHaveValue`, and `await expect(page).toHaveURL(...)` retry until success or throw `TimeoutError`. Add `.not` for negated assertions.

@@ -300,7 +300,17 @@ steps:
 
 支付、发送、发布、删除、预约、修改账号或其他难撤销动作默认不能自动越过最终提交。Recipe 必须标记风险步骤，并在重放时返回 `waitingApproval`。强制自动提交必须由调用方显式配置并受域名/动作策略约束，不能由录制结果自行推断授权。
 
-## 8. 典型场景
+### 7.6 Action Cache
+
+每个有目标元素的 Recipe step 持久化最近一次成功且唯一的定位策略。Replay 先尝试 Action Cache；缓存目标缺失、多匹配或不可见时，在动作发出前失效并进入原有有限语义恢复链。回退成功后原子替换缓存。Recipe 统计 `hits`、`misses`、`fallbacks`、`updates`，输入值、密码、OTP、Token 和 Cookie 永不进入缓存。`{ actionCache: false }` 只用于诊断，既不读取也不更新缓存。
+
+## 8. P0-E：Profile-aware Browser Request
+
+`page.request` / `fetch.profile` 由 App 主进程使用当前 Space 的 Electron `Session.fetch()` 发起请求，不经过 renderer，不受页面 CORS 影响。它默认携带并写回该 Profile Cookie，同时复用 Chromium Session 已配置的代理、UA、语言和 Client Hints。Temporary Space 继续使用一 Space 一内存 Session，不能跨 Space 观察 Cookie。
+
+请求必须通过现有 ownership/generation lease。只允许 HTTP(S)，限制 URL、Header、请求体、响应体和超时；Chromium 身份与传输 Header 不能覆盖，重定向使用已验证的原生 `follow/error` 模式。事件只保存 method、origin、脱敏 path、status、duration 和 bytes，不保存 Header 值、Authorization、Cookie、请求体、响应体或 `Set-Cookie`。
+
+## 9. 典型场景
 
 以 Janitor 注册为例：
 
@@ -313,7 +323,7 @@ steps:
 7. 下次传入新变量直接重放；页面未变化时不再调用 LLM 重新理解每一步。
 8. 若按钮改名，Workflow 在该步骤停止并返回候选和页面差异，不继续盲点。
 
-## 9. 实现阶段
+## 10. 实现阶段
 
 ### Phase 1：事件与 Trace 底座
 
@@ -336,7 +346,7 @@ steps:
 - 实现 replay、有限 self-heal、失败恢复包和高风险确认。
 - 对接现有 learned site tools，但不替换或复制它们。
 
-## 10. 验收门禁
+## 11. 验收门禁
 
 ### 正确性
 
@@ -375,7 +385,7 @@ npm run verify:agent-efficiency
 
 `verify:agent-efficiency` 应使用固定动态页面 Fixture 对比 full snapshot 与 delta 的字节数、耗时、动作轮数和 Workflow 第二次运行是否零 LLM。
 
-## 11. 非目标
+## 12. 非目标
 
 - 不切换 CEF、Chromium fork 或无头浏览器内核。
 - 不内置另一套 LLM Agent planner。
@@ -383,4 +393,3 @@ npm run verify:agent-efficiency
 - 不默认持续录制视频。
 - 不在本阶段实现云端代理池、CAPTCHA 服务、Memory、周期任务或完整 Skill Gallery。
 - 不为了时间线新增第二份 Space/Presentation 状态。
-

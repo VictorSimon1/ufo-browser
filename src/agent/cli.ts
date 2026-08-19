@@ -88,6 +88,8 @@ class AgentHost {
     this.rpc("prepareWorkflowReplay", name, options);
   finishWorkflowReplay = (runId: string, result: unknown) =>
     this.rpc("finishWorkflowReplay", runId, result);
+  profileRequest = (url: string, options?: unknown) =>
+    this.rpc("profileRequest", url, options);
   snapshot = (options?: unknown) => this.rpc("snapshot", options);
   resolveRef = (refId: number) => this.rpc("resolveRef", refId);
   handOffTaskSpace = () => this.rpc("handOffTaskSpace");

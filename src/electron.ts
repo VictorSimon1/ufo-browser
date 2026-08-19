@@ -21,6 +21,7 @@ import { SnapshotService } from "./main/snapshot.js";
 import { AgentTraceService } from "./main/agent-trace.js";
 import { SpaceEventJournal } from "./main/space-event-journal.js";
 import { WorkflowService } from "./main/workflow-service.js";
+import { ProfileRequestService } from "./main/profile-request.js";
 import { SpaceLeaseRegistry } from "./main/space-lease.js";
 import { BrowserStateStore } from "./main/state-store.js";
 import {
@@ -455,6 +456,7 @@ async function start() {
     directory: join(app.getPath("userData"), "Agent Workflows"),
   });
   await workflows.initialize();
+  const profileRequests = new ProfileRequestService(manager, eventJournal);
   const broker = new CdpBroker(manager, leases, eventJournal);
   const socketPath = isTestApp
     ? join(testRoot, "x-browser.sock")
@@ -469,6 +471,7 @@ async function start() {
     eventJournal,
     agentTrace,
     workflows,
+    profileRequests,
   );
   const assistantWorkspace = join(app.getPath("userData"), "Assistant Workspace");
   const skillSource = app.isPackaged

@@ -523,6 +523,15 @@ export class TaskSpaceManager {
     return this.ensureTabRuntime(spaceId, space.activeTabId);
   }
 
+  async profileSessionForSpace(spaceId: number) {
+    const space = this.getSpaceOrThrow(spaceId);
+    const partition = await this.ensureSpaceSessionSetup(space);
+    // ensureSpaceSessionSetup owns the first fromPartition call, including the
+    // memory-only cache setting for Temporary Spaces. Looking it up here reuses
+    // that exact Chromium Session without creating a renderer or page runtime.
+    return session.fromPartition(partition);
+  }
+
   flushState() {
     return this.options.store.flush();
   }

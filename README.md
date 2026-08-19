@@ -16,6 +16,7 @@ The project is designed around one idea: an Agent browser should feel like a rea
 - **Real Chromium input** — clicks, typing, wheel events, drag operations, screenshots, and OOPIF interaction flow through Chromium's DevTools Protocol.
 - **Human/Agent control isolation** — an App-level control layer blocks human input while an Agent is active without being injected into the website DOM or appearing in page screenshots.
 - **Reusable login state** — Agents can work with the browser's existing authenticated session while remaining separated from the user's current page flow.
+- **Profile-aware HTTP requests** — `page.request()` and `fetch.profile()` use the selected Space's Chromium Session directly, reusing its Cookies, proxy, User-Agent, language, and Client Hints without waking the page renderer or being blocked by CORS.
 - **One-time Spaces** — the built-in Temporary Profile creates a fresh memory-backed Chromium Session for every human or Agent Space; Cookie, LocalStorage, IndexedDB, Service Worker, cache, and permission state are never shared, closing clears the Session, and App restart never restores it.
 - **One-click Chrome login import and opt-in sync** — copy a selected local Chrome Profile's Cookies, CHIPS, Local Storage, IndexedDB, WebStorage, and OPFS into a new isolated UFO Profile, then incrementally follow that Profile without modifying Chrome or reviving a UFO logout.
 - **No visible automation cursor** — Agent input never moves the macOS pointer and does not rely on OS-level keyboard or mouse automation.
@@ -100,6 +101,7 @@ Common helpers include:
 - Observation: `snapshotText`, `snapshotRaw`, `pageInfo`, `captureScreenshot`, `drainEvents`; Snapshot V2 supports compact/interactive/selector/depth views and revision deltas
 - Input: `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `typeText`, `pressKey`, `scroll`
 - Browser access: `js`, `cdp`, `browserFetch`, `serverFetch`
+- Profile network access: `page.request`, `fetch.profile` with structured responses, Cookie writeback, bounded bodies, redirect modes, and Chromium-owned identity headers
 - Diagnostics: `listSpaceEvents`, `listAgentTrace`, `exportAgentTrace`, `taskSpaces.events.list`, `taskSpaces.trace.list/export`
 - Deterministic local Recipes: `workflows.start/replay/list/get` with a persistent Action Cache, hit/miss/fallback statistics, finite locator recovery, failure evidence, and non-persistent `secret(...)` values
 

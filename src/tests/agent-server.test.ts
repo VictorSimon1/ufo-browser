@@ -78,6 +78,18 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
     new SpaceLeaseRegistry(),
     snapshot as any,
     broker as any,
+    "0.1.6",
+    undefined,
+    undefined,
+    undefined,
+    {
+      request: async (spaceId: number, connectionId: string, url: string) => ({
+        spaceId,
+        connectionId: typeof connectionId,
+        url,
+        status: 200,
+      }),
+    } as any,
   );
   let socket: Socket | undefined;
   try {
@@ -148,9 +160,26 @@ test("selection does not claim a handed-off Space and explicit takeover can resu
       ],
     });
 
+    const requested = await rpc(socket, 101, "profileRequest", [
+      "https://example.com/api/me",
+      {},
+    ]);
+    assert.deepEqual(requested.result, {
+      spaceId: 7,
+      connectionId: "string",
+      url: "https://example.com/api/me",
+      status: 200,
+    });
+
     const handedOff = await rpc(socket, 11, "handOffTaskSpace", []);
     assert.deepEqual(handedOff.result, { done: true });
     assert.deepEqual(agentConnectionStates, [true, false]);
+    const blockedRequest = await rpc(socket, 12, "profileRequest", [
+      "https://example.com/api/me",
+      {},
+    ]);
+    assert.equal(blockedRequest.type, "rpc-error");
+    assert.equal(blockedRequest.error_code, "EGO_TASK_SPACE_USER_IN_CONTROL");
   } finally {
     socket?.destroy();
     await server.close();

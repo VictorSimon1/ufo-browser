@@ -19,7 +19,7 @@ operation timings in
 | Heredoc execution | `ego-browser nodejs` | `ufo-browser nodejs` | Same async global-helper model and legal local name shadowing. |
 | Host aliases | `createTab`, `getBrowserVersion`, `listProfiles`, `markTaskSpaceError`, `sendCDPMessage`, `setAgentTaskState`, `animationHighlightMouseToPosition` | Same | Installed as writable, configurable, non-enumerable globals. |
 | Runtime iframe lookup | `iframeTarget` | Same | Flat global and `browser.iframeTarget(...)` are available. |
-| Native fetch | Callable, enumerable global | Same | UFO additionally exposes `fetch.server` and `fetch.browser`. |
+| Native fetch | Callable, enumerable global | Same | UFO additionally exposes `fetch.server`, renderer `fetch.browser`, and Profile-aware `fetch.profile` / `page.request`. |
 | Version result | `{ currentVersion, updateAvailable }` | Same shape | UFO reports its own version and never claims to be Ego. |
 | Profile result | `{ profiles: [{ id, isDefault, name }] }` | Same shape plus built-in `Temporary` entry | Default profile id is `Default`; `Temporary` selects a fresh one-time Session without changing the persistent default. |
 | `createTab(url)` | Requires a string and returns `{ targetId }` | Same | Missing arguments throw the same `TypeError` text before RPC. |
@@ -32,6 +32,7 @@ operation timings in
 | Frame locators | Iframe target lookup | `page.frameLocator` | Same-process, nested, and OOPIF actions use one locator surface. |
 | Popup waits | Tab helpers | `page.waitForEvent('popup')` | Returns a popup facade while preserving tab isolation. |
 | Request/response waits | Not injected as flat globals in Ego 0.4.6.12 | `waitForRequest`, `waitForResponse` | Deliberate forward-compatible UFO extension. |
+| Profile-aware direct request | Not exposed by the audited runtime | `page.request`, `fetch.profile` | Main-process Chromium Session request with Profile Cookies/proxy/identity, Cookie writeback, no renderer/CORS dependency, bounded bodies, lease enforcement, and redacted events. |
 | Request routing | Raw CDP available | `page.route`, `unroute`, `unrouteAll` | Glob/RegExp/predicate matching with continue/fulfill/abort. |
 | Storage state | Profile login state reused implicitly | `page.storageState`, `setStorageState` | Explicit Cookie/current-origin localStorage export and restore; not Chrome profile decryption. |
 | Performance tracing | Raw CDP available | `page.tracing.start`, `stop` | Writes Chrome Trace/Perfetto-compatible JSON. |

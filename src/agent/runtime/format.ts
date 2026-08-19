@@ -389,6 +389,30 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example:
       "const res = await page.waitForResponse(r => r.url().includes('/api') && r.status() === 200)",
   },
+  "page.request": {
+    signature: "page.request(url, options?) => Promise<ProfileResponse>",
+    description:
+      "Issue an HTTP(S) request through the selected Space/Profile Chromium Session without using the page renderer or CORS. Cookies are included and Set-Cookie is written back by default.",
+    params: [
+      {
+        name: "url",
+        type: "string",
+        required: true,
+        description:
+          "Absolute HTTP(S) URL or a relative URL resolved against the active tab.",
+      },
+      {
+        name: "options",
+        type: "object",
+        description:
+          "method, headers, body or json, timeoutMs, maxResponseBytes, redirect, and credentials.",
+      },
+    ],
+    returns:
+      "Promise<{ status, statusText, ok, url, redirected, bytes, headers(), header(name), text(), json(), body() }>",
+    example:
+      "const response = await page.request('/api/me'); console.log(await response.json())",
+  },
   "page.route": {
     signature: "page.route(matcher, handler, options?) => Promise<void>",
     description:
@@ -1137,6 +1161,30 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     ],
     returns: "Promise<string>",
     example: "const body = await fetch.browser('/api/data')",
+  },
+  "fetch.profile": {
+    signature: "fetch.profile(url, options?) => Promise<ProfileResponse>",
+    description:
+      "Fetch through the selected Space's Chromium Session, reusing its Profile cookies, proxy, User-Agent, language, and Client Hints without using the page renderer or CORS.",
+    params: [
+      {
+        name: "url",
+        type: "string",
+        required: true,
+        description:
+          "HTTP(S) URL. Relative URLs resolve against the selected Space's active tab.",
+      },
+      {
+        name: "options",
+        type: "object",
+        description:
+          "method, headers, body or json, timeoutMs, maxResponseBytes, redirect ('follow' or 'error'), and credentials. Chromium-owned identity headers cannot be overridden.",
+      },
+    ],
+    returns:
+      "Promise<{ status, statusText, ok, url, redirected, bytes, headers(), header(name), text(), json(), body() }>",
+    example:
+      "const response = await fetch.profile('/api/me'); console.log(response.status, await response.json())",
   },
   cdp: {
     signature: "cdp(method, params?) => Promise<any>",

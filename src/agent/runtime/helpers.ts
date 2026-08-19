@@ -26,7 +26,7 @@ import {
   frameLocatorSelector,
   parseFrameLocatorSelector,
 } from "./driver/element-ops.js";
-import { browserFetch, serverFetch } from "./http.js";
+import { browserFetch, profileFetch, serverFetch } from "./http.js";
 import {
   loadBrowserToolSource,
   loadLearnedContext,
@@ -112,7 +112,7 @@ export { route, unroute, unrouteAll } from "./driver/routing.js";
 export { storageState, setStorageState } from "./driver/storage-state.js";
 export { startTracing, stopTracing } from "./driver/tracing.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
-export { browserFetch, serverFetch } from "./http.js";
+export { browserFetch, profileFetch, serverFetch } from "./http.js";
 export const expect = expectTarget;
 
 /**
@@ -853,6 +853,7 @@ function createPageFacade() {
     waitForURL: waits.waitForURL,
     waitForRequest: waits.waitForRequest,
     waitForResponse: waits.waitForResponse,
+    request: profileFetch,
     route: routing.route,
     unroute: routing.unroute,
     unrouteAll: routing.unrouteAll,
@@ -1109,7 +1110,7 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. All page timeout values are milliseconds; flat Ego-compatible helpers use seconds. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.on/off/once("console" | "pageerror" | "request" | "requestfailed"), page.waitForEvent("download" | "popup" | "console" | "pageerror" | "request" | "requestfailed"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.isAvailable(), page.screencast.availability(), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). Use expect(locator/page) for auto-retrying assertions. waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. All page timeout values are milliseconds; flat Ego-compatible helpers use seconds. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.request(url, options), page.locator(selector), page.frameLocator(selector), page.getByRole(role, options), page.route(matcher, handler), page.unroute(matcher), page.unrouteAll(), page.storageState(options), page.setStorageState(stateOrPath, options), page.on/off/once("console" | "pageerror" | "request" | "requestfailed"), page.waitForEvent("download" | "popup" | "console" | "pageerror" | "request" | "requestfailed"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.isAvailable(), page.screencast.availability(), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.tracing.start(options), page.tracing.stop(options), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). Use expect(locator/page) for auto-retrying assertions. waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
     "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), all(), click({ trial?, force? }), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), inputValue(), isVisible(), isEnabled(), isEditable(), getAttribute(name), screenshot(), count(), allInnerTexts(), allTextContents(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Actions retry while elements become visible, enabled, stable, and able to receive events. Failed actions throw ActionabilityError with a call log, interceptor, retry count, recovery suggestions, and final screenshot when available. Snapshot refs automatically recover after navigation, DOM replacement, and a new heredoc within the same App run when a unique stable locator is available. Narrow multiple matches; use all()/first()/nth() only for confirmed legitimate duplicates.",
   browser:
@@ -1120,7 +1121,11 @@ const FACADE_HELP: Record<string, string> = {
     "Timeout units: flat Ego-compatible helpers such as gotoAndWait(), wait(), and waitForAgentControl() use seconds. Playwright-style page.* methods and page.setDefaultTimeout() use milliseconds. Parameters explicitly ending in Ms are always milliseconds.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
-    "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
+    "fetch: network facade. Use fetch.profile(url, options) for the selected Space/Profile Chromium Session, fetch.server(url, options) for Node-side fetch, and fetch.browser(url, options) for renderer-origin fetch.",
+  "page.request":
+    "page.request(url, options?) => Promise<ProfileResponse>; uses the selected Space/Profile Chromium Session, includes and writes back Profile Cookies by default, bypasses renderer CORS, and returns status/ok/url/headers()/text()/json()/body(). Options use timeoutMs and support method, headers, body or json, maxResponseBytes, redirect, and credentials.",
+  "fetch.profile":
+    "fetch.profile(url, options?) => Promise<ProfileResponse>; identical to page.request(). It reuses the selected Profile Chromium Session, proxy, User-Agent, language, Client Hints, and Cookies without requiring a renderer.",
   workflows:
     "workflows: deterministic local Recipes. Replay uses the persisted Action Cache first, falls back through the finite unique semantic locator chain when it is missing, ambiguous, or hidden, then updates cache statistics. Pass { actionCache: false } only for diagnostics.",
 };
@@ -1165,6 +1170,7 @@ export function helperContext(extra: any = {}) {
     fetch: {
       server: serverFetch,
       browser: browserFetch,
+      profile: profileFetch,
     },
     expect: expectTarget,
     cdp,
