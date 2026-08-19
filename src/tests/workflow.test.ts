@@ -148,6 +148,137 @@ test("Workflow replay follows the finite recovery chain and never guesses among 
   assert.equal(snapshotOptions[1].sinceRevision, "fixture-revision-1");
 });
 
+test("Workflow Action Cache learns a successful fallback and uses it first on the next replay", async () => {
+  const journal = new SpaceEventJournal();
+  await journal.initialize();
+  const service = new WorkflowService(journal, { now: () => 10_000 });
+  await service.initialize();
+  const recording = service.start("cache-connection", 17, "cached-flow");
+  capture(
+    service,
+    journal,
+    "cache-connection",
+    17,
+    "cache-click",
+    "locator.click",
+    {
+      locator: "#old-proceed",
+      semantics: { role: "button", name: "Proceed" },
+    },
+  );
+  const recorded = await service.finish(
+    "cache-connection",
+    17,
+    recording.id,
+  );
+  assert.equal(recorded.steps[0].actionCache?.strategy, "original-locator");
+
+  const firstCalls: string[] = [];
+  const firstPrepared = service.prepareReplay(
+    "cache-connection",
+    17,
+    "cached-flow",
+  );
+  const firstRuntime: any = fakeRuntime({
+    locator: () => {
+      firstCalls.push("original");
+      return fakeLocator(0);
+    },
+    getByRole: () => {
+      firstCalls.push("role-name");
+      return fakeLocator(1);
+    },
+    reports: [],
+  });
+  firstRuntime.report = (result: any) =>
+    service.finishReplay(
+      "cache-connection",
+      17,
+      firstPrepared.runId,
+      result,
+    );
+  const first = await executeWorkflowReplay(firstPrepared, {}, {}, firstRuntime);
+  assert.equal(first.status, "success");
+  assert.deepEqual(firstCalls, ["original", "role-name"]);
+  assert.deepEqual((first as any).actionCache, {
+    hits: 0,
+    misses: 1,
+    fallbacks: 1,
+    updates: 1,
+  });
+  const learned = service.get("cached-flow");
+  assert.equal(learned.steps[0].actionCache?.strategy, "role-name");
+  assert.equal(learned.stats.actionCache?.misses, 1);
+  assert.equal(learned.stats.actionCache?.fallbacks, 1);
+  assert.equal(learned.stats.actionCache?.updates, 1);
+
+  const secondCalls: string[] = [];
+  const secondPrepared = service.prepareReplay(
+    "cache-connection",
+    17,
+    "cached-flow",
+  );
+  const secondRuntime: any = fakeRuntime({
+    locator: () => {
+      secondCalls.push("original");
+      return fakeLocator(0);
+    },
+    getByRole: () => {
+      secondCalls.push("role-name");
+      return fakeLocator(1);
+    },
+    reports: [],
+  });
+  secondRuntime.report = (result: any) =>
+    service.finishReplay(
+      "cache-connection",
+      17,
+      secondPrepared.runId,
+      result,
+    );
+  const second = await executeWorkflowReplay(secondPrepared, {}, {}, secondRuntime);
+  assert.equal(second.status, "success");
+  assert.deepEqual(secondCalls, ["role-name"]);
+  assert.equal((second as any).actionCache.hits, 1);
+  assert.equal(service.get("cached-flow").stats.actionCache?.hits, 1);
+
+  const beforeDiagnostic = service.get("cached-flow");
+  const diagnosticPrepared = service.prepareReplay(
+    "cache-connection",
+    17,
+    "cached-flow",
+  );
+  const diagnosticRuntime: any = fakeRuntime({
+    locator: () => fakeLocator(0),
+    getByRole: () => fakeLocator(1),
+    reports: [],
+  });
+  diagnosticRuntime.report = (result: any) =>
+    service.finishReplay(
+      "cache-connection",
+      17,
+      diagnosticPrepared.runId,
+      result,
+    );
+  const diagnostic = await executeWorkflowReplay(
+    diagnosticPrepared,
+    {},
+    { actionCache: false },
+    diagnosticRuntime,
+  );
+  assert.equal(diagnostic.status, "success");
+  assert.deepEqual((diagnostic as any).actionCache, {
+    hits: 0,
+    misses: 0,
+    fallbacks: 0,
+    updates: 0,
+  });
+  assert.deepEqual(
+    service.get("cached-flow").steps[0].actionCache,
+    beforeDiagnostic.steps[0].actionCache,
+  );
+});
+
 test("high-risk Workflow steps wait for scoped caller approval and secrets stay wrapped", async () => {
   let clicks = 0;
   const reports: any[] = [];

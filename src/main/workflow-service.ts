@@ -25,6 +25,14 @@ export type WorkflowTarget = {
   selfHealLocator?: string;
 };
 
+export type WorkflowActionCache = {
+  strategy: string;
+  locator: string;
+  validatedAt: number;
+  hits: number;
+  misses: number;
+};
+
 export type WorkflowWait = {
   kind: "navigation" | "popup" | "dialog" | "download";
   timeoutMs: number;
@@ -73,6 +81,7 @@ export type WorkflowStep = {
   preconditions: WorkflowCondition[];
   assertions: WorkflowCondition[];
   waits: WorkflowWait[];
+  actionCache?: WorkflowActionCache;
   risk?: {
     level: "high";
     reason: string;
@@ -108,6 +117,19 @@ export type WorkflowStats = {
   lastRunAt?: number;
   lastStatus?: "success" | "failed";
   lastDurationMs?: number;
+  actionCache?: {
+    hits: number;
+    misses: number;
+    fallbacks: number;
+    updates: number;
+  };
+};
+
+export type WorkflowActionCacheObservation = {
+  stepId: string;
+  outcome: "hit" | "miss" | "fallback" | "seed";
+  strategy?: string;
+  locator?: string;
 };
 
 export type WorkflowFinishOptions = {
@@ -334,6 +356,7 @@ export class WorkflowService {
     return {
       workflows: this.store.workflows.map((workflow) => {
         const latest = workflow.versions.at(-1)!;
+        ensureActionCacheStats(latest.stats);
         return {
           name: workflow.name,
           latestVersion: latest.version,
@@ -351,6 +374,7 @@ export class WorkflowService {
 
   get(nameValue: unknown, versionValue?: unknown) {
     const recipe = this.findRecipe(nameValue, versionValue);
+    ensureActionCacheStats(recipe.stats);
     return structuredClone(recipe);
   }
 
@@ -361,6 +385,7 @@ export class WorkflowService {
     options: { version?: unknown } = {},
   ) {
     const recipe = this.findRecipe(nameValue, options?.version);
+    ensureActionCacheStats(recipe.stats);
     const runId = randomUUID();
     const startSequence = this.journal.list(spaceId, { limit: 1 }).latestSequence;
     this.activeReplays.set(runId, {
@@ -384,7 +409,11 @@ export class WorkflowService {
     connectionId: string,
     spaceId: number,
     runIdValue: unknown,
-    result: { status?: unknown; durationMs?: unknown } = {},
+    result: {
+      status?: unknown;
+      durationMs?: unknown;
+      actionCache?: unknown;
+    } = {},
   ) {
     const runId = requiredId(runIdValue, "workflow replay runId");
     const run = this.activeReplays.get(runId);
@@ -407,6 +436,64 @@ export class WorkflowService {
     recipe.stats.lastRunAt = this.now();
     recipe.stats.lastStatus = status;
     recipe.stats.lastDurationMs = finiteDuration(result.durationMs);
+    const actionCache = ensureActionCacheStats(recipe.stats);
+    for (const observation of actionCacheObservations(result.actionCache)) {
+      const step = recipe.steps.find((candidate) => candidate.id === observation.stepId);
+      if (!step?.target) continue;
+      if (observation.outcome === "hit") {
+        if (
+          !step.actionCache ||
+          step.actionCache.strategy !== observation.strategy ||
+          step.actionCache.locator !== observation.locator
+        ) {
+          continue;
+        }
+        actionCache.hits += 1;
+        step.actionCache.hits += 1;
+        continue;
+      }
+      if (
+        (observation.outcome === "miss" ||
+          observation.outcome === "fallback") &&
+        !step.actionCache
+      ) {
+        continue;
+      }
+      if (observation.outcome === "seed" && step.actionCache) continue;
+      const allowed =
+        observation.outcome === "fallback" || observation.outcome === "seed"
+          ? actionCacheCandidates(step.target).find(
+              (candidate) =>
+                candidate.strategy === observation.strategy &&
+                candidate.locator === observation.locator,
+            )
+          : undefined;
+      if (
+        (observation.outcome === "fallback" ||
+          observation.outcome === "seed") &&
+        !allowed
+      ) {
+        continue;
+      }
+      if (observation.outcome === "miss" || observation.outcome === "fallback") {
+        actionCache.misses += 1;
+        if (step.actionCache) step.actionCache.misses += 1;
+      }
+      if (observation.outcome === "fallback") actionCache.fallbacks += 1;
+      if (
+        observation.outcome === "fallback" ||
+        observation.outcome === "seed"
+      ) {
+        step.actionCache = {
+          strategy: allowed!.strategy,
+          locator: allowed!.locator,
+          validatedAt: this.now(),
+          hits: 0,
+          misses: 0,
+        };
+        actionCache.updates += 1;
+      }
+    }
     await this.persist();
     return { recorded: true, status, stats: structuredClone(recipe.stats) };
   }
@@ -557,7 +644,12 @@ function compileWorkflow(
     integrations: {
       learnedSiteTools: steps.some((step) => step.action.startsWith("site.")),
     },
-    stats: { runs: 0, successes: 0, failures: 0 },
+    stats: {
+      runs: 0,
+      successes: 0,
+      failures: 0,
+      actionCache: { hits: 0, misses: 0, fallbacks: 0, updates: 0 },
+    },
   };
 }
 
@@ -611,6 +703,15 @@ function compileStep(
     ],
     assertions: [],
     waits: eventWaits,
+    actionCache: target
+      ? {
+          strategy: "original-locator",
+          locator: target.locator,
+          validatedAt: recorded.finishedAt ?? recorded.startedAt,
+          hits: 0,
+          misses: 0,
+        }
+      : undefined,
     risk,
   };
 
@@ -882,6 +983,67 @@ function workflowTarget(selector: string, semanticsValue: unknown): WorkflowTarg
       2_048,
     ),
   }) as WorkflowTarget;
+}
+
+function actionCacheCandidates(target: WorkflowTarget) {
+  const candidates = [
+    { strategy: "original-locator", locator: target.locator },
+    ...(target.role && target.name
+      ? [
+          {
+            strategy: "role-name",
+            locator: `role:${target.role}[name=${JSON.stringify(target.name)}]`,
+          },
+        ]
+      : []),
+    ...(target.label
+      ? [
+          {
+            strategy: "label",
+            locator: `label:${JSON.stringify(target.label)}`,
+          },
+        ]
+      : []),
+    ...(target.parent?.role && target.parent.name && target.role
+      ? [
+          {
+            strategy: "parent-semantics",
+            locator: `role:${target.parent.role}[name=${JSON.stringify(target.parent.name)}] >> role:${target.role}[name=${JSON.stringify(target.name ?? "")}]`,
+          },
+        ]
+      : []),
+    ...(target.adjacent?.before
+      ? [
+          {
+            strategy: "adjacent-before",
+            locator: `text:${JSON.stringify(target.adjacent.before)} >> following-sibling::*[1]`,
+          },
+        ]
+      : []),
+    ...(target.adjacent?.after
+      ? [
+          {
+            strategy: "adjacent-after",
+            locator: `text:${JSON.stringify(target.adjacent.after)} >> preceding-sibling::*[1]`,
+          },
+        ]
+      : []),
+    ...(target.selfHealLocator && target.selfHealLocator !== target.locator
+      ? [
+          {
+            strategy: "unique-self-heal",
+            locator: target.selfHealLocator,
+          },
+        ]
+      : []),
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.strategy}:${candidate.locator}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function selectorSemantics(selector: string): Partial<WorkflowTarget> {
@@ -1225,9 +1387,61 @@ function boundStore(
     schemaVersion: 1,
     workflows: store.workflows.slice(-maxWorkflows).map((workflow) => ({
       name: workflow.name,
-      versions: workflow.versions.slice(-maxVersions),
+      versions: workflow.versions.slice(-maxVersions).map(normalizeRecipe),
     })),
   };
+}
+
+function normalizeRecipe(recipe: WorkflowRecipe) {
+  ensureActionCacheStats(recipe.stats);
+  for (const step of recipe.steps ?? []) {
+    if (!step.actionCache) continue;
+    const allowed = step.target
+      ? actionCacheCandidates(step.target).some(
+          (candidate) =>
+            candidate.strategy === step.actionCache?.strategy &&
+            candidate.locator === step.actionCache?.locator,
+        )
+      : false;
+    if (!allowed) delete step.actionCache;
+  }
+  return recipe;
+}
+
+function ensureActionCacheStats(stats: WorkflowStats) {
+  stats.actionCache ??= { hits: 0, misses: 0, fallbacks: 0, updates: 0 };
+  return stats.actionCache;
+}
+
+function actionCacheObservations(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const observations: WorkflowActionCacheObservation[] = [];
+  const seenSteps = new Set<string>();
+  for (const item of value.slice(0, DEFAULT_MAX_RECORDED_STEPS)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const input = item as Record<string, unknown>;
+    if (
+      typeof input.stepId !== "string" ||
+      seenSteps.has(input.stepId) ||
+      !["hit", "miss", "fallback", "seed"].includes(String(input.outcome))
+    ) {
+      continue;
+    }
+    seenSteps.add(input.stepId);
+    observations.push({
+      stepId: input.stepId.slice(0, 128),
+      outcome: input.outcome as WorkflowActionCacheObservation["outcome"],
+      strategy:
+        typeof input.strategy === "string"
+          ? input.strategy.slice(0, 128)
+          : undefined,
+      locator:
+        typeof input.locator === "string"
+          ? input.locator.slice(0, 2_048)
+          : undefined,
+    });
+  }
+  return observations;
 }
 
 function validStore(value: unknown): value is WorkflowStore {

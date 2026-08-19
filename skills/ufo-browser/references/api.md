@@ -211,6 +211,15 @@ returned failure package contains the failed step, expected target, candidate
 counts, Snapshot delta, relevant journal events, and a screenshot path when
 capture succeeds.
 
+Each target step also stores a bounded Action Cache entry containing only the
+last successful locator strategy and locator already permitted by the Recipe.
+Replay tries that entry first. Missing, non-unique, or hidden cached targets are
+invalidated before any action is dispatched, then the normal finite recovery
+chain runs once. A successful fallback replaces the entry atomically. Replay
+results and Recipe statistics expose `hits`, `misses`, `fallbacks`, and
+`updates`; input values and secrets are never cached. Pass
+`{ actionCache: false }` only when comparing the uncached diagnostic path.
+
 Payment, send, publish, delete, booking, account mutation, and other high-risk
 final actions return `waitingApproval` by default. Authorization must be
 explicitly scoped to both domain and action:

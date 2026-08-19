@@ -36,7 +36,7 @@ operation timings in
 | Storage state | Profile login state reused implicitly | `page.storageState`, `setStorageState` | Explicit Cookie/current-origin localStorage export and restore; not Chrome profile decryption. |
 | Performance tracing | Raw CDP available | `page.tracing.start`, `stop` | Writes Chrome Trace/Perfetto-compatible JSON. |
 | Persistent action diagnostics | Current-process events | `taskSpaces.events` and `taskSpaces.trace` | Deliberate UFO extension with bounded, redacted, restart-safe cursors. |
-| Deterministic Workflow replay | Not exposed by the audited runtime | `workflows.start/replay/list/get` | Deliberate UFO extension; versioned local Recipes, finite locator recovery, secret slots, and high-risk approval. |
+| Deterministic Workflow replay | Not exposed by the audited runtime | `workflows.start/replay/list/get` | Deliberate UFO extension; versioned local Recipes, persistent Action Cache with hit/miss/fallback statistics, finite locator recovery, secret slots, and high-risk approval. |
 | Flat download/screencast aliases | Not injected in either audited runtime | Structured UFO facades remain available | Not part of the shared installed contract. |
 
 ## Latest measured workflow

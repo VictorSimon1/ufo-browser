@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
   WorkflowCondition,
+  WorkflowActionCache,
+  WorkflowActionCacheObservation,
   WorkflowRecipe,
   WorkflowStep,
   WorkflowTarget,
@@ -16,6 +18,7 @@ type PreparedWorkflow = {
 type WorkflowReplayOptions = {
   version?: number;
   timeoutMs?: number;
+  actionCache?: boolean;
   approval?: {
     highRisk?: boolean;
     domains?: string[];
@@ -31,6 +34,7 @@ type WorkflowReplayRuntime = {
   report: (result: {
     status: "success" | "failed" | "waitingApproval";
     durationMs: number;
+    actionCache?: WorkflowActionCacheObservation[];
   }) => Promise<unknown>;
 };
 
@@ -46,8 +50,10 @@ type ResolvedTarget = {
     strategy: string;
     locator: string;
     count?: number;
+    visible?: boolean;
     error?: string;
   }>;
+  cache?: WorkflowActionCacheObservation;
 };
 
 export function secret(value: unknown): SecretValue {
@@ -61,6 +67,7 @@ export async function executeWorkflowReplay(
   runtime: WorkflowReplayRuntime,
 ) {
   const startedAt = performance.now();
+  const actionCache: WorkflowActionCacheObservation[] = [];
   let initialSnapshot: any;
   try {
     const inputs = resolveInputs(prepared.recipe, inputsValue);
@@ -89,7 +96,7 @@ export async function executeWorkflowReplay(
           runtime,
         );
         const durationMs = performance.now() - startedAt;
-        await runtime.report({ status: "failed", durationMs });
+        await runtime.report({ status: "failed", durationMs, actionCache });
         return {
           status: "failed" as const,
           workflow: prepared.recipe.name,
@@ -119,8 +126,10 @@ export async function executeWorkflowReplay(
         inputs,
         stepRuntime,
         options.timeoutMs,
+        options.actionCache !== false,
       );
       if (!result.ok) {
+        if (result.cache) actionCache.push(result.cache);
         const recovery = await failureRecovery(
           prepared,
           step,
@@ -130,7 +139,7 @@ export async function executeWorkflowReplay(
           runtime,
         );
         const durationMs = performance.now() - startedAt;
-        await runtime.report({ status: "failed", durationMs });
+        await runtime.report({ status: "failed", durationMs, actionCache });
         return {
           status: "failed" as const,
           workflow: prepared.recipe.name,
@@ -138,10 +147,15 @@ export async function executeWorkflowReplay(
           recovery,
         };
       }
+      if (result.cache) actionCache.push(result.cache);
       if (result.popupPage) popupPage = result.popupPage;
     }
     const durationMs = performance.now() - startedAt;
-    const report = await runtime.report({ status: "success", durationMs });
+    const report = await runtime.report({
+      status: "success",
+      durationMs,
+      actionCache,
+    });
     return {
       status: "success" as const,
       workflow: prepared.recipe.name,
@@ -149,11 +163,14 @@ export async function executeWorkflowReplay(
       steps: prepared.recipe.steps.length,
       zeroLlm: true,
       durationMs: Math.round(durationMs),
+      actionCache: summarizeActionCache(actionCache),
       stats: (report as any)?.stats,
     };
   } catch (error) {
     const durationMs = performance.now() - startedAt;
-    await runtime.report({ status: "failed", durationMs }).catch(() => undefined);
+    await runtime
+      .report({ status: "failed", durationMs, actionCache })
+      .catch(() => undefined);
     return {
       status: "failed" as const,
       workflow: prepared.recipe.name,
@@ -175,12 +192,18 @@ async function executeStep(
   inputs: Record<string, unknown>,
   runtime: WorkflowReplayRuntime,
   defaultTimeoutMs = 20_000,
+  actionCacheEnabled = true,
 ): Promise<
-  | { ok: true; popupPage?: any }
+  | {
+      ok: true;
+      popupPage?: any;
+      cache?: WorkflowActionCacheObservation;
+    }
   | {
       ok: false;
       error: unknown;
       candidates?: ResolvedTarget["candidates"];
+      cache?: WorkflowActionCacheObservation;
     }
 > {
   const traceId = `workflow-${randomUUID()}`;
@@ -196,11 +219,15 @@ async function executeStep(
   });
   try {
     if (step.target) {
-      resolved = await resolveTarget(step.target, runtime.page);
-      if (!resolved) {
-        throw new WorkflowTargetError("No unique workflow target", []);
-      }
-      await assertPreconditions(step.preconditions, resolved.locator, runtime.page);
+      resolved = await resolveTarget(
+        step.target,
+        runtime.page,
+        actionCacheEnabled ? step.actionCache : undefined,
+        step.preconditions.some((condition) => condition.kind === "targetVisible"),
+        actionCacheEnabled,
+      );
+      if (resolved.cache) resolved.cache.stepId = step.id;
+      await assertPreconditions(step.preconditions, runtime.page);
     }
     const waiters = startWaiters(
       step.waits,
@@ -226,6 +253,7 @@ async function executeStep(
     return {
       ok: true,
       popupPage: popupIndex >= 0 ? waitResults[popupIndex] : undefined,
+      cache: resolved?.cache,
     };
   } catch (error) {
     runtime.trace?.({
@@ -243,6 +271,10 @@ async function executeStep(
         error instanceof WorkflowTargetError
           ? error.candidates
           : resolved?.candidates,
+      cache:
+        error instanceof WorkflowTargetError && error.cacheMiss && step.actionCache
+          ? { stepId: step.id, outcome: "miss" }
+          : undefined,
     };
   }
 }
@@ -250,6 +282,9 @@ async function executeStep(
 async function resolveTarget(
   target: WorkflowTarget,
   page: any,
+  actionCache?: WorkflowActionCache,
+  requireVisible = false,
+  actionCacheEnabled = true,
 ): Promise<ResolvedTarget> {
   const candidates: ResolvedTarget["candidates"] = [];
   const attempts: Array<{ strategy: string; locator: string; create: () => any }> = [
@@ -319,23 +354,63 @@ async function resolveTarget(
     });
   }
 
+  const cachedIndex = actionCache
+    ? attempts.findIndex(
+        (attempt) =>
+          attempt.strategy === actionCache.strategy &&
+          attempt.locator === actionCache.locator,
+      )
+    : -1;
+  const ordered =
+    cachedIndex > 0
+      ? [attempts[cachedIndex], ...attempts.slice(0, cachedIndex), ...attempts.slice(cachedIndex + 1)]
+      : attempts;
+  let cacheMiss = actionCache !== undefined && cachedIndex < 0;
   const seen = new Set<string>();
-  for (const attempt of attempts) {
+  for (const attempt of ordered) {
     const key = `${attempt.strategy}:${attempt.locator}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const cached =
+      cachedIndex >= 0 &&
+      attempt.strategy === actionCache?.strategy &&
+      attempt.locator === actionCache.locator;
     try {
       const locator = attempt.create();
       const count = await locator.count();
-      candidates.push({
+      const visible =
+        count === 1 && requireVisible
+          ? Boolean(await locator.isVisible())
+          : undefined;
+      const candidate = {
         strategy: attempt.strategy,
         locator: attempt.locator,
         count,
-      });
-      if (count === 1) {
-        return { locator, strategy: attempt.strategy, candidates };
+        ...(visible !== undefined ? { visible } : {}),
+      };
+      candidates.push(candidate);
+      if (cached && (count !== 1 || visible === false)) cacheMiss = true;
+      if (count === 1 && visible !== false) {
+        return {
+          locator,
+          strategy: attempt.strategy,
+          candidates,
+          cache: actionCacheEnabled
+            ? {
+                stepId: "",
+                outcome: actionCache
+                  ? cached
+                    ? "hit"
+                    : "fallback"
+                  : "seed",
+                strategy: attempt.strategy,
+                locator: attempt.locator,
+              }
+            : undefined,
+        };
       }
     } catch (error) {
+      if (cached) cacheMiss = true;
       candidates.push({
         strategy: attempt.strategy,
         locator: attempt.locator,
@@ -348,6 +423,7 @@ async function resolveTarget(
       ? "Workflow target is ambiguous; replay stopped without guessing"
       : "Workflow target was not found",
     candidates,
+    cacheMiss,
   );
 }
 
@@ -430,17 +506,17 @@ async function waitForDialog(page: any, wait: WorkflowWait, timeout: number) {
 
 async function assertPreconditions(
   conditions: WorkflowCondition[],
-  locator: any,
   page: any,
 ) {
   for (const condition of conditions) {
     if (condition.kind === "targetUnique") {
-      const count = await locator.count();
-      if (count !== 1) throw new Error(`expected one target, found ${count}`);
+      // resolveTarget already admitted exactly one candidate. Re-querying here
+      // doubled the dominant selector work on every Action Cache hit.
+      continue;
     } else if (condition.kind === "targetVisible") {
-      if (!(await locator.isVisible())) {
-        throw new Error("workflow target is not visible");
-      }
+      // Visibility is checked before resolveTarget accepts a candidate, so a
+      // hidden cached selector can fall through without executing the action.
+      continue;
     } else if (condition.kind === "urlContains") {
       const url = await page.url();
       if (!String(url).includes(condition.value ?? "")) {
@@ -668,10 +744,25 @@ function safeError(error: unknown) {
     .slice(0, 2_048);
 }
 
+function summarizeActionCache(observations: WorkflowActionCacheObservation[]) {
+  return {
+    hits: observations.filter((entry) => entry.outcome === "hit").length,
+    misses: observations.filter(
+      (entry) => entry.outcome === "miss" || entry.outcome === "fallback",
+    ).length,
+    fallbacks: observations.filter((entry) => entry.outcome === "fallback")
+      .length,
+    updates: observations.filter(
+      (entry) => entry.outcome === "fallback" || entry.outcome === "seed",
+    ).length,
+  };
+}
+
 class WorkflowTargetError extends Error {
   constructor(
     message: string,
     readonly candidates: ResolvedTarget["candidates"],
+    readonly cacheMiss = false,
   ) {
     super(message);
     this.name = "WorkflowTargetError";

@@ -18,6 +18,7 @@ process.env.X_BROWSER_TEST_NAMESPACE = testNamespace;
 process.env.UFO_BROWSER_SOCKET = join(testRoot, "x-browser.sock");
 let electron;
 let taskId;
+let cachedTaskId;
 let sourceTaskId;
 const submissions = [];
 
@@ -120,11 +121,49 @@ cliLog(JSON.stringify({ taskId: task.id, result, recipe }))
   assert.equal(replay.result.steps, 3);
   assert.equal(replay.recipe.stats.runs, 1);
   assert.equal(replay.recipe.stats.successes, 1);
+  assert.deepEqual(replay.result.actionCache, {
+    hits: 0,
+    misses: 3,
+    fallbacks: 3,
+    updates: 3,
+  });
+  assert.equal(replay.recipe.stats.actionCache.fallbacks, 3);
   assert.equal(submissions.length, 2);
   assert.deepEqual(submissions[1], {
     email: replayEmail,
     password: replayPassword,
   });
+
+  const cached = JSON.parse(
+    await runCli(`
+const task = await bootstrapTaskSpace({
+  name: 'workflow action cache destination',
+  profileId: 'Temporary',
+  url: 'http://127.0.0.1:${port}/form?variant=2'
+})
+const result = await workflows.replay('fixture-register', {
+  email: 'cached-run@example.com',
+  password: secret('cached-run-password')
+})
+const recipe = await workflows.get('fixture-register')
+cliLog(JSON.stringify({ taskId: task.id, result, recipe }))
+`),
+  );
+  cachedTaskId = cached.taskId;
+  assert.equal(cached.result.status, "success");
+  assert.deepEqual(cached.result.actionCache, {
+    hits: 3,
+    misses: 0,
+    fallbacks: 0,
+    updates: 0,
+  });
+  assert.equal(cached.recipe.stats.runs, 2);
+  assert.equal(cached.recipe.stats.successes, 2);
+  assert.equal(cached.recipe.stats.actionCache.hits, 3);
+  assert.equal(cached.recipe.stats.actionCache.misses, 3);
+  assert.equal(cached.recipe.stats.actionCache.fallbacks, 3);
+  assert.equal(cached.recipe.stats.actionCache.updates, 3);
+  assert.equal(submissions.length, 3);
 
   const persisted = await readFile(workflowPath, "utf8");
   for (const sensitive of [
@@ -132,6 +171,8 @@ cliLog(JSON.stringify({ taskId: task.id, result, recipe }))
     recordedPassword,
     replayEmail,
     replayPassword,
+    "cached-run@example.com",
+    "cached-run-password",
   ]) {
     assert.equal(persisted.includes(sensitive), false);
   }
@@ -148,6 +189,8 @@ cliLog(JSON.stringify({ taskId: task.id, result, recipe }))
         steps: replay.result.steps,
         zeroLlmSecondRun: replay.result.zeroLlm,
         recoveredByRoleName: true,
+        actionCacheFallbacks: replay.result.actionCache.fallbacks,
+        actionCacheHits: cached.result.actionCache.hits,
         persistedSecrets: false,
         stats: replay.recipe.stats,
       },
@@ -160,6 +203,12 @@ cliLog(JSON.stringify({ taskId: task.id, result, recipe }))
     await runCli(`
 await useTaskSpace(${Number(taskId)})
 await completeTaskSpace(${Number(taskId)}, { keep: false })
+    `).catch(() => undefined);
+  }
+  if (cachedTaskId && electron) {
+    await runCli(`
+await useTaskSpace(${Number(cachedTaskId)})
+await completeTaskSpace(${Number(cachedTaskId)}, { keep: false })
 `).catch(() => undefined);
   }
   await stopElectron().catch(() => undefined);

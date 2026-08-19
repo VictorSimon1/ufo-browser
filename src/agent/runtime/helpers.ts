@@ -1121,6 +1121,8 @@ const FACADE_HELP: Record<string, string> = {
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
+  workflows:
+    "workflows: deterministic local Recipes. Replay uses the persisted Action Cache first, falls back through the finite unique semantic locator chain when it is missing, ambiguous, or hidden, then updates cache statistics. Pass { actionCache: false } only for diagnostics.",
 };
 
 const FLAT_HELP: Record<string, string> = {

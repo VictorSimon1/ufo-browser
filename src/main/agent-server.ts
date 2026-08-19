@@ -515,7 +515,11 @@ function workflowReplayResult(value: unknown) {
     throw new TypeError("workflow replay result must be an object");
   }
   const input = value as Record<string, unknown>;
-  return { status: input.status, durationMs: input.durationMs };
+  return {
+    status: input.status,
+    durationMs: input.durationMs,
+    actionCache: input.actionCache,
+  };
 }
 
 function normalizeTraceSignal(value: unknown): AgentTraceSignal {

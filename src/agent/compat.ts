@@ -435,7 +435,7 @@ const LEGACY_HELP: Record<string, string> = {
   exportAgentTrace:
     "exportAgentTrace(spaceId, { path, format?: 'markdown' | 'json' | 'zip' }) => Promise<{ path, format, events, screenshots }>",
   workflows:
-    "workflows.start(name) records successful traced actions until recording.finish({ variables?, secrets? }); workflows.replay(name, inputs, options?) deterministically replays without an LLM; workflows.list() and workflows.get(name, version?) inspect saved versions and statistics",
+    "workflows.start(name) records successful traced actions until recording.finish({ variables?, secrets? }); workflows.replay(name, inputs, { actionCache?: boolean, ...options }) deterministically replays without an LLM, learns the last successful unique locator strategy, and reports Action Cache hits/misses/fallbacks/updates; workflows.list() and workflows.get(name, version?) inspect saved versions and statistics",
   secret:
     "secret(value) wraps an in-memory Workflow secret. Secret values are required for Workflow secret slots and are never persisted in a Recipe",
   elementCenter:
